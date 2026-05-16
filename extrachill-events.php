@@ -48,6 +48,14 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 
 	require_once __DIR__ . '/inc/Cli/RequalifyPendingCommand.php';
 	\WP_CLI::add_command( 'extrachill venues requalify-pending', \ExtraChillEvents\Cli\RequalifyPendingCommand::class );
+
+	require_once __DIR__ . '/inc/Cli/FlowHelpers.php';
+
+	require_once __DIR__ . '/inc/Cli/RequalifyFlowCommand.php';
+	\WP_CLI::add_command( 'extrachill venues requalify-flow', \ExtraChillEvents\Cli\RequalifyFlowCommand::class );
+
+	require_once __DIR__ . '/inc/Cli/UnqualifiableFlowsCommand.php';
+	\WP_CLI::add_command( 'extrachill venues unqualifiable-flows', \ExtraChillEvents\Cli\UnqualifiableFlowsCommand::class );
 }
 
 /**

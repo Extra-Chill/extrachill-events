@@ -71,6 +71,7 @@ class ExtraChillEvents {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'init', array( $this, 'init_data_machine_handlers' ), 20 );
 		add_action( 'init', array( $this, 'init_abilities' ), 25 );
+		add_action( 'plugins_loaded', array( $this, 'maybe_install_schema' ), 20 );
 		register_activation_hook( __FILE__, array( $this, 'activate' ) );
 		register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
 	}
@@ -94,6 +95,10 @@ class ExtraChillEvents {
 		if ( file_exists( $autoload_file ) ) {
 			require_once $autoload_file;
 		}
+
+		// Qualify v2 — verdict taxonomy + persistent verdict log.
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdict.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdictsTable.php';
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/data-machine-events/init.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/nav.php';
@@ -206,11 +211,27 @@ class ExtraChillEvents {
 	}
 
 	public function activate() {
+		// Create/upgrade the qualify verdicts table at activation. Safe to
+		// call repeatedly — dbDelta handles idempotency.
+		\ExtraChillEvents\Core\QualifyVerdictsTable::create_table();
 		flush_rewrite_rules();
 	}
 
 	public function deactivate() {
 		flush_rewrite_rules();
+	}
+
+	/**
+	 * Idempotent schema installer for the qualify verdicts table.
+	 *
+	 * Runs on plugins_loaded so the table is available even when the plugin
+	 * was already active when the new schema shipped (i.e. without a fresh
+	 * activation). Cheap when up to date — short-circuits on a stored option.
+	 */
+	public function maybe_install_schema() {
+		if ( class_exists( '\\ExtraChillEvents\\Core\\QualifyVerdictsTable' ) ) {
+			\ExtraChillEvents\Core\QualifyVerdictsTable::maybe_install();
+		}
 	}
 
 	public function get_integrations() {

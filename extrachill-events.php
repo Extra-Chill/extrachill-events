@@ -45,6 +45,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 
 	require_once __DIR__ . '/inc/Cli/QualifyStatsCommand.php';
 	\WP_CLI::add_command( 'extrachill venues qualify-stats', \ExtraChillEvents\Cli\QualifyStatsCommand::class );
+
+	require_once __DIR__ . '/inc/Cli/RequalifyPendingCommand.php';
+	\WP_CLI::add_command( 'extrachill venues requalify-pending', \ExtraChillEvents\Cli\RequalifyPendingCommand::class );
 }
 
 /**

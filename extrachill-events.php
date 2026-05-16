@@ -33,6 +33,18 @@ define( 'EXTRACHILL_EVENTS_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCommand.php' ) ) {
 	require_once __DIR__ . '/inc/Cli/AddCityCommand.php';
 	\WP_CLI::add_command( 'extrachill-events add-city', \ExtraChillEvents\Cli\AddCityCommand::class );
+
+	// Qualify v2 — verdict-log subcommands hung off the existing
+	// `wp extrachill venues` parent (registered by extrachill-cli).
+	// Core classes need to load before the CLI commands instantiate them.
+	require_once __DIR__ . '/inc/Core/QualifyVerdict.php';
+	require_once __DIR__ . '/inc/Core/QualifyVerdictsTable.php';
+	require_once __DIR__ . '/inc/Core/QualifyVerdictResolver.php';
+	require_once __DIR__ . '/inc/Core/PlatformDetector.php';
+	require_once __DIR__ . '/inc/Core/QualifyFingerprinter.php';
+
+	require_once __DIR__ . '/inc/Cli/QualifyStatsCommand.php';
+	\WP_CLI::add_command( 'extrachill venues qualify-stats', \ExtraChillEvents\Cli\QualifyStatsCommand::class );
 }
 
 /**

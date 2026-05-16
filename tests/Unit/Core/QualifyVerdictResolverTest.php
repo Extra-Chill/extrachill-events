@@ -271,4 +271,18 @@ class QualifyVerdictResolverTest extends TestCase {
 		$this->assertFalse( QualifyVerdict::is_requalifiable( QualifyVerdict::RESERVATION_ONLY ) );
 		$this->assertFalse( QualifyVerdict::is_requalifiable( QualifyVerdict::QUALIFIED_STRUCTURED ) );
 	}
+
+	public function test_min_events_thresholds_are_distinct(): void {
+		// Listing-page threshold MUST stay at 2 — the existing guard against
+		// stray-snippet false positives. Detail-page threshold relaxes to 1
+		// because legitimate /schedule/<slug> pages emit exactly 1 Event.
+		$this->assertSame( 2, QualifyVerdict::MIN_EVENTS_FOR_STRUCTURED_QUALIFICATION );
+		$this->assertSame( 1, QualifyVerdict::MIN_EVENTS_FOR_DETAIL_PAGE );
+	}
+
+	public function test_event_page_shape_enum_values(): void {
+		$this->assertSame( 'detail', QualifyVerdict::EVENT_PAGE_SHAPE_DETAIL );
+		$this->assertSame( 'listing', QualifyVerdict::EVENT_PAGE_SHAPE_LISTING );
+		$this->assertSame( 'unknown', QualifyVerdict::EVENT_PAGE_SHAPE_UNKNOWN );
+	}
 }

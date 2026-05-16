@@ -96,9 +96,10 @@ class ExtraChillEvents {
 			require_once $autoload_file;
 		}
 
-		// Qualify v2 — verdict taxonomy + persistent verdict log.
+		// Qualify v2 — verdict taxonomy + persistent verdict log + resolver.
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdict.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdictsTable.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdictResolver.php';
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/data-machine-events/init.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/nav.php';

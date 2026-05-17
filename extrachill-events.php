@@ -69,6 +69,60 @@ require_once __DIR__ . '/inc/Core/QualifyRecheckHandler.php';
 \ExtraChillEvents\Core\QualifyRecheckHandler::register();
 
 /**
+ * Register the weekly qualify digest task with Data Machine's system-task
+ * surface. Loaded on plugins_loaded so the DM SystemTask base class is
+ * available; gated on its existence so this plugin remains compatible
+ * with installs that don't have data-machine activated.
+ */
+add_action(
+	'plugins_loaded',
+	function () {
+		if ( ! class_exists( '\\DataMachine\\Engine\\AI\\System\\Tasks\\SystemTask' ) ) {
+			return;
+		}
+		require_once __DIR__ . '/inc/Steps/QualifyDigest/QualifyDigestSystemTask.php';
+
+		add_filter(
+			'datamachine_tasks',
+			function ( array $tasks ): array {
+				$tasks[ \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::TASK_TYPE ] = \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::class;
+				return $tasks;
+			}
+		);
+
+		add_filter(
+			'datamachine_recurring_schedules',
+			function ( array $schedules ): array {
+				/**
+				 * Filter the qualify digest schedule definition. Allows
+				 * operators to flip interval, change the first-run anchor,
+				 * etc. without forking the plugin.
+				 */
+				$schedules['extrachill_qualify_digest'] = apply_filters(
+					'dme_qualify_digest_schedule',
+					array(
+						'task_type'          => \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::TASK_TYPE,
+						'interval'           => 'weekly',
+						'enabled_setting'    => 'dme_qualify_digest_enabled',
+						'default_enabled'    => true,
+						'label'              => 'Weekly — Mondays 09:00 UTC',
+						'first_run_callback' => 'strtotime',
+						'first_run_arg'      => 'next monday 09:00 UTC',
+						'task_params'        => array(
+							'since'   => '1 week ago',
+							'format'  => 'html',
+							'dry_run' => false,
+						),
+					)
+				);
+				return $schedules;
+			}
+		);
+	},
+	20
+);
+
+/**
  * ExtraChillEvents
  *
  * Singleton class managing data-machine-events integration with homepage/archive template

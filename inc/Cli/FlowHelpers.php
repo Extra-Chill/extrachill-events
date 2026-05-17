@@ -185,11 +185,14 @@ trait FlowHelpers {
 	 * Idempotent — re-pausing an already-paused flow is a no-op except for
 	 * refreshing paused_reason.
 	 *
-	 * @param int    $flow_id Flow ID.
-	 * @param string $verdict Verdict that triggered the pause.
+	 * @param int    $flow_id    Flow ID.
+	 * @param string $verdict    Verdict that triggered the pause.
+	 * @param string $source_url Optional source URL — used by the recheck
+	 *                           scheduler so the rechecker can re-qualify
+	 *                           the URL without re-reading the flow.
 	 * @return bool True on success.
 	 */
-	protected function pause_flow_by_verdict( int $flow_id, string $verdict ): bool {
+	protected function pause_flow_by_verdict( int $flow_id, string $verdict, string $source_url = '' ): bool {
 		global $wpdb;
 		$table = $wpdb->prefix . 'datamachine_flows';
 

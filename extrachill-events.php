@@ -49,6 +49,7 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 	require_once __DIR__ . '/inc/Cli/RequalifyPendingCommand.php';
 	\WP_CLI::add_command( 'extrachill venues requalify-pending', \ExtraChillEvents\Cli\RequalifyPendingCommand::class );
 
+	require_once __DIR__ . '/inc/Cli/FlowOps.php';
 	require_once __DIR__ . '/inc/Cli/FlowHelpers.php';
 
 	require_once __DIR__ . '/inc/Cli/RequalifyFlowCommand.php';
@@ -57,6 +58,15 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 	require_once __DIR__ . '/inc/Cli/UnqualifiableFlowsCommand.php';
 	\WP_CLI::add_command( 'extrachill venues unqualifiable-flows', \ExtraChillEvents\Cli\UnqualifiableFlowsCommand::class );
 }
+
+// Recheck handler must be loaded outside the WP_CLI guard so the Action
+// Scheduler hook fires whether the action runs via web request, cron, or
+// CLI runner.
+require_once __DIR__ . '/inc/Core/QualifyVerdict.php';
+require_once __DIR__ . '/inc/Core/QualifyVerdictsTable.php';
+require_once __DIR__ . '/inc/Cli/FlowOps.php';
+require_once __DIR__ . '/inc/Core/QualifyRecheckHandler.php';
+\ExtraChillEvents\Core\QualifyRecheckHandler::register();
 
 /**
  * ExtraChillEvents

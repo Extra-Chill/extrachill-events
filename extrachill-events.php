@@ -68,6 +68,9 @@ require_once __DIR__ . '/inc/Cli/FlowOps.php';
 require_once __DIR__ . '/inc/Core/QualifyRecheckHandler.php';
 \ExtraChillEvents\Core\QualifyRecheckHandler::register();
 
+require_once __DIR__ . '/inc/admin/network-settings.php';
+\ExtraChillEvents\Admin\NetworkSettings::register();
+
 /**
  * Register the weekly qualify digest task with Data Machine's system-task
  * surface. Loaded on plugins_loaded so the DM SystemTask base class is

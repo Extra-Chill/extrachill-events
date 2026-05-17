@@ -228,6 +228,9 @@ class ExtraChillEvents {
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/EventTimeAuditAbilities.php';
 		new \ExtraChillEvents\Abilities\EventTimeAuditAbilities();
+
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/QualifyDigestAbilities.php';
+		new \ExtraChillEvents\Abilities\QualifyDigestAbilities();
 	}
 
 	/**

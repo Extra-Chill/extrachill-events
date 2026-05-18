@@ -42,51 +42,51 @@ class EventSubmissionAbilities {
 						'type'       => 'object',
 						'required'   => array( 'event_title', 'event_date' ),
 						'properties' => array(
-							'event_title'        => array(
+							'event_title'   => array(
 								'type'        => 'string',
 								'description' => 'Event title.',
 							),
-							'event_date'         => array(
+							'event_date'    => array(
 								'type'        => 'string',
 								'description' => 'Event date (YYYY-MM-DD).',
 							),
-							'event_time'         => array(
+							'event_time'    => array(
 								'type'        => 'string',
 								'description' => 'Event start time (HH:MM). Optional.',
 							),
-							'venue_name'         => array(
+							'venue_name'    => array(
 								'type'        => 'string',
 								'description' => 'Venue name. Optional.',
 							),
-							'event_city'         => array(
+							'event_city'    => array(
 								'type'        => 'string',
 								'description' => 'City or region. Optional.',
 							),
-							'event_lineup'       => array(
+							'event_lineup'  => array(
 								'type'        => 'string',
 								'description' => 'Lineup or headliners. Optional.',
 							),
-							'event_link'         => array(
+							'event_link'    => array(
 								'type'        => 'string',
 								'description' => 'Ticket or info URL. Optional.',
 							),
-							'notes'              => array(
+							'notes'         => array(
 								'type'        => 'string',
 								'description' => 'Additional details. Optional.',
 							),
-							'contact_name'       => array(
+							'contact_name'  => array(
 								'type'        => 'string',
 								'description' => 'Submitter name. Required for anonymous submissions.',
 							),
-							'contact_email'      => array(
+							'contact_email' => array(
 								'type'        => 'string',
 								'description' => 'Submitter email. Required for anonymous submissions.',
 							),
-							'system_prompt'      => array(
+							'system_prompt' => array(
 								'type'        => 'string',
 								'description' => 'Custom system prompt for AI processing step. Optional.',
 							),
-							'flyer'              => array(
+							'flyer'         => array(
 								'type'        => 'object',
 								'description' => 'Uploaded flyer file data from $_FILES. Optional.',
 							),
@@ -301,7 +301,7 @@ class EventSubmissionAbilities {
 		return array(
 			'filename'    => sanitize_file_name( $flyer['name'] ),
 			'stored_path' => $stored,
-			'mime_type'   => $file_info['type'] ?: 'application/octet-stream',
+			'mime_type'   => $file_info['type'] ? $file_info['type'] : 'application/octet-stream',
 		);
 	}
 
@@ -367,7 +367,7 @@ class EventSubmissionAbilities {
 			'type'          => 'ai',
 			'provider'      => $provider,
 			'model'         => $model,
-			'system_prompt' => $system_prompt ?: $default_prompt,
+			'system_prompt' => $system_prompt ? $system_prompt : $default_prompt,
 			'user_message'  => $user_message,
 			'enabled_tools' => array( 'upsert_event' ),
 		);
@@ -534,10 +534,10 @@ class EventSubmissionAbilities {
 
 		$this->dispatchEmail(
 			array(
-				'to'        => $to,
-				'subject'   => $subject,
-				'template'  => 'extrachill/minimal',
-				'context'   => array_merge(
+				'to'       => $to,
+				'subject'  => $subject,
+				'template' => 'extrachill/minimal',
+				'context'  => array_merge(
 					$context,
 					array(
 						'cta_url'   => $pending_url,

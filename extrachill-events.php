@@ -57,6 +57,16 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 
 	require_once __DIR__ . '/inc/Cli/UnqualifiableFlowsCommand.php';
 	\WP_CLI::add_command( 'extrachill venues unqualifiable-flows', \ExtraChillEvents\Cli\UnqualifiableFlowsCommand::class );
+
+	// Location / flow_config hygiene (extrachill-events#98).
+	// Issue #98 — Both commands operate against the events subsite (blog 7).
+	// Always invoke with `--url=events.extrachill.com` so $wpdb->prefix is c8c_7_.
+	require_once __DIR__ . '/inc/Core/FlowLocationGuard.php';
+	require_once __DIR__ . '/inc/Cli/RepairFlowLocationsCommand.php';
+	\WP_CLI::add_command( 'extrachill events flows repair-locations', \ExtraChillEvents\Cli\RepairFlowLocationsCommand::class );
+
+	require_once __DIR__ . '/inc/Cli/PruneOrphanLocationsCommand.php';
+	\WP_CLI::add_command( 'extrachill events locations prune-orphans', \ExtraChillEvents\Cli\PruneOrphanLocationsCommand::class );
 }
 
 // Recheck handler must be loaded outside the WP_CLI guard so the Action

@@ -58,6 +58,12 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 	require_once __DIR__ . '/inc/Cli/UnqualifiableFlowsCommand.php';
 	\WP_CLI::add_command( 'extrachill venues unqualifiable-flows', \ExtraChillEvents\Cli\UnqualifiableFlowsCommand::class );
 
+	// Pipeline assignment audit (issue #99). Lives under
+	// `wp extrachill events flows` so it's grouped with the other
+	// events-domain operator tooling rather than the venues surface.
+	require_once __DIR__ . '/inc/Cli/AuditPipelinesCommand.php';
+	\WP_CLI::add_command( 'extrachill events flows audit-pipelines', \ExtraChillEvents\Cli\AuditPipelinesCommand::class );
+
 	// Location / flow_config hygiene (extrachill-events#98).
 	// Issue #98 — Both commands operate against the events subsite (blog 7).
 	// Always invoke with `--url=events.extrachill.com` so $wpdb->prefix is c8c_7_.

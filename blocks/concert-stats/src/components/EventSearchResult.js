@@ -95,7 +95,7 @@ const EventSearchResult = ( { event, onMarkedChange } ) => {
 						type="button"
 						className="button-1 button-medium"
 						onClick={ handleMark }
-						disabled={ submitting }
+						disabled={ isMarking }
 					>
 						+ Mark Attended
 					</button>

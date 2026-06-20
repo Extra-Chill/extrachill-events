@@ -69,6 +69,41 @@ $cases = array(
 	// Galveston itself has its own location term — the market map must NOT
 	// roll it up; null lets the exact-city-name match resolve it.
 	array( 'Galveston', 'TX', '77550', null ),
+
+	// Network-wide metro-suburb rollups (data-machine-events#379).
+	// Spelling normalizations.
+	array( 'Saint Louis', 'MO', '63101', 'st-louis' ),
+	array( 'Saint Paul', 'MN', '55101', 'st-paul' ),
+	array( 'Saint Augustine', 'FL', '32084', 'st-augustine' ),
+	// LA / Orange County rolls to los-angeles (existing convention).
+	array( 'Santa Ana', 'CA', '92701', 'los-angeles' ),
+	array( 'Anaheim', 'CA', '92805', 'los-angeles' ),
+	array( 'Inglewood', 'CA', '90301', 'los-angeles' ),
+	// Phoenix metro.
+	array( 'Mesa', 'AZ', '85201', 'phoenix' ),
+	array( 'Chandler', 'AZ', '85225', 'phoenix' ),
+	// Detroit metro.
+	array( 'Ferndale', 'MI', '48220', 'detroit' ),
+	array( 'Royal Oak', 'MI', '48067', 'detroit' ),
+	// Chicago metro.
+	array( 'Joliet', 'IL', '60435', 'chicago' ),
+	array( 'Rosemont', 'IL', '60018', 'chicago' ),
+	// Cleveland / Pittsburgh metro.
+	array( 'Cleveland Heights', 'OH', '44118', 'cleveland' ),
+	array( 'Millvale', 'PA', '15209', 'pittsburgh' ),
+	// State-keyed disambiguation.
+	array( 'Aurora', 'CO', '80012', 'denver' ),
+	array( 'Aurora', 'IL', '60505', 'chicago' ),
+	array( 'Newport', 'KY', '41071', 'cincinnati' ),
+	array( 'Covington', 'KY', '41011', 'cincinnati' ),
+	array( 'Covington', 'OH', '45318', 'dayton' ),
+	array( 'Everett', 'MA', '02149', 'boston' ),
+	array( 'Everett', 'WA', '98201', 'seattle' ),
+	array( 'Highland Park', 'CA', '90042', 'los-angeles' ),
+	array( 'Highland Park', 'IL', '60035', 'chicago' ),
+	array( 'Dallas suburb Irving', 'TX', '75061', null ), // sanity: unmapped phrase stays null
+	array( 'Irving', 'TX', '75061', 'dallas' ),
+
 	// Existing mappings must keep working.
 	array( 'Cambridge', 'MA', '02139', 'boston' ),
 	array( 'North Charleston', 'SC', '29405', 'charleston' ),

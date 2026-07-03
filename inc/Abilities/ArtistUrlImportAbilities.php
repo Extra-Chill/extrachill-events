@@ -183,7 +183,10 @@ class ArtistUrlImportAbilities {
 					'type'       => 'object',
 					'required'   => array( 'url' ),
 					'properties' => array(
-						'url'           => array( 'type' => 'string', 'format' => 'uri' ),
+						'url'           => array(
+							'type'   => 'string',
+							'format' => 'uri',
+						),
 						'contact_email' => array( 'type' => 'string' ),
 						'contact_name'  => array( 'type' => 'string' ),
 					),
@@ -399,7 +402,7 @@ class ArtistUrlImportAbilities {
 		if ( $user_id > 0 ) {
 			$user          = wp_get_current_user();
 			$contact_email = (string) $user->user_email;
-			$contact_name  = (string) ( $user->display_name ?: $user->user_login );
+			$contact_name  = (string) ( $user->display_name ? $user->display_name : $user->user_login );
 		} else {
 			// Issue #320 says "any logged-in user" — we hard-reject
 			// anonymous to match that contract.
@@ -859,8 +862,8 @@ class ArtistUrlImportAbilities {
 			);
 		}
 
-		$abilities = new HandlerAbilities();
-		$info      = $abilities->getHandler( self::SCRAPER_HANDLER_SLUG );
+		$abilities     = new HandlerAbilities();
+		$info          = $abilities->getHandler( self::SCRAPER_HANDLER_SLUG );
 		$handler_class = is_array( $info ) ? ( $info['class'] ?? null ) : null;
 
 		if ( ! $handler_class || ! class_exists( $handler_class ) ) {
@@ -1315,7 +1318,7 @@ class ArtistUrlImportAbilities {
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$pipeline = $wpdb->get_row(
-			$wpdb->prepare( "SELECT pipeline_config FROM {$table} WHERE pipeline_id = %d", $pipeline_id ),
+			$wpdb->prepare( "SELECT pipeline_config FROM {$table} WHERE pipeline_id = %d", $pipeline_id ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 			ARRAY_A
 		);
 
@@ -1382,7 +1385,7 @@ class ArtistUrlImportAbilities {
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$flow = $wpdb->get_row(
-			$wpdb->prepare( "SELECT flow_config FROM {$table} WHERE flow_id = %d", $flow_id ),
+			$wpdb->prepare( "SELECT flow_config FROM {$table} WHERE flow_id = %d", $flow_id ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 			ARRAY_A
 		);
 		if ( ! $flow ) {

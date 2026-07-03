@@ -28,6 +28,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * @param string $ticket_url Ticket URL (may be empty).
  */
 function ec_events_render_attendance_button( $post_id, $ticket_url ) {
+	unset( $ticket_url );
 	if ( ! ec_is_events_site() ) {
 		return;
 	}

@@ -1235,9 +1235,18 @@ class ArtistUrlImportAbilities {
 			array(
 				'pipeline_name' => self::SHARED_PIPELINE_NAME,
 				'steps'         => array(
-					array( 'step_type' => 'event_import', 'label' => 'Event Import' ),
-					array( 'step_type' => 'ai',           'label' => 'AI Agent' ),
-					array( 'step_type' => 'upsert',       'label' => 'Upsert' ),
+					array(
+						'step_type' => 'event_import',
+						'label'     => 'Event Import',
+					),
+					array(
+						'step_type' => 'ai',
+						'label'     => 'AI Agent',
+					),
+					array(
+						'step_type' => 'upsert',
+						'label'     => 'Upsert',
+					),
 				),
 			)
 		);
@@ -1269,6 +1278,7 @@ class ArtistUrlImportAbilities {
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$found = $wpdb->get_var(
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is a trusted internal identifier built from $wpdb->prefix; not user input.
 			$wpdb->prepare( "SELECT pipeline_id FROM {$table} WHERE pipeline_id = %d LIMIT 1", $pipeline_id )
 		);
 
@@ -1292,6 +1302,7 @@ class ArtistUrlImportAbilities {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 		$pipeline_id = $wpdb->get_var(
 			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is a trusted internal identifier built from $wpdb->prefix; not user input.
 				"SELECT pipeline_id FROM {$table} WHERE pipeline_name = %s LIMIT 1",
 				$pipeline_name
 			)

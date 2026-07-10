@@ -121,7 +121,10 @@ class ArtistUrlImportAbilities {
 			return $context;
 		}
 
-		$context = array( 'agent_id' => null, 'user_id' => null );
+		$context = array(
+			'agent_id' => null,
+			'user_id'  => null,
+		);
 
 		if ( function_exists( 'datamachine_resolve_system_agent_context' ) ) {
 			$resolved = datamachine_resolve_system_agent_context();

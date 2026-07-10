@@ -1324,7 +1324,7 @@ class ArtistUrlImportAbilities {
 
 		if ( $stored_id > 0 && $this->pipelineExists( $stored_id ) ) {
 			$existing_agent_id = $this->getPipelineAgentId( $stored_id );
-			if ( null !== $existing_agent_id && $existing_agent_id <= 0 && $agent_id > 0 ) {
+			if ( ( null === $existing_agent_id || $existing_agent_id <= 0 ) && $agent_id > 0 ) {
 				$this->assignPipelineAgent( $stored_id, $agent_id );
 			}
 			return $stored_id;
@@ -1335,7 +1335,7 @@ class ArtistUrlImportAbilities {
 		if ( $found_id > 0 ) {
 			update_option( self::SHARED_PIPELINE_OPTION, $found_id, false );
 			$existing_agent_id = $this->getPipelineAgentId( $found_id );
-			if ( null !== $existing_agent_id && $existing_agent_id <= 0 && $agent_id > 0 ) {
+			if ( ( null === $existing_agent_id || $existing_agent_id <= 0 ) && $agent_id > 0 ) {
 				$this->assignPipelineAgent( $found_id, $agent_id );
 			}
 			return $found_id;

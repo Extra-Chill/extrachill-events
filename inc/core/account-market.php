@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * dependency is available, or when it returns an invalid/empty preference,
  * this fails open.
  *
- * @return array{lat: float|null, lon: float|null, slug: string, term_id: int}|null
+ * @return array{lat: float|null, lon: float|null, slug: string, term_id: int, label: string, url: string}|null
  */
 function extrachill_events_get_account_market(): ?array {
 	static $resolved = false;
@@ -51,6 +51,9 @@ function extrachill_events_get_account_market(): ?array {
 	$lon         = filter_var( $coordinates['lon'] ?? null, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE );
 	$term_id     = absint( $location['term_id'] ?? 0 );
 	$slug        = sanitize_title( $location['slug'] ?? '' );
+	$hierarchy   = is_array( $location['hierarchy'] ?? null ) ? $location['hierarchy'] : array();
+	$label       = sanitize_text_field( $hierarchy['label'] ?? $location['name'] ?? '' );
+	$url         = esc_url_raw( $location['archive_url'] ?? '' );
 
 	if ( $term_id < 1 || '' === $slug ) {
 		return null;
@@ -67,15 +70,31 @@ function extrachill_events_get_account_market(): ?array {
 		'lon'     => null !== $lon ? (float) $lon : null,
 		'slug'    => $slug,
 		'term_id' => $term_id,
+		'label'   => $label,
+		'url'     => $url,
 	);
 
 	return $market;
 }
 
 /**
+ * Whether this request explicitly opts out of account market fallback.
+ */
+function extrachill_events_is_exploring_all_markets(): bool {
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public read-only discovery preference.
+	$value = isset( $_GET['explore_all'] ) && is_scalar( $_GET['explore_all'] ) ? sanitize_text_field( wp_unslash( $_GET['explore_all'] ) ) : '';
+
+	return '1' === $value;
+}
+
+/**
  * Whether the request already carries an explicit location selection.
  */
 function extrachill_events_has_explicit_market(): bool {
+	if ( extrachill_events_is_exploring_all_markets() ) {
+		return true;
+	}
+
 	if ( is_tax() ) {
 		return true;
 	}
@@ -120,7 +139,7 @@ function extrachill_events_supports_account_market(): bool {
  * @return array
  */
 function extrachill_events_calendar_account_market_defaults( array $query_args, array $context ): array {
-	if ( ! extrachill_events_supports_account_market() || ! empty( $context['archive_term'] ) || ! empty( $query_args['tax_filter'] ) ) {
+	if ( ! extrachill_events_supports_account_market() || extrachill_events_is_exploring_all_markets() || ! empty( $context['archive_term'] ) || ! empty( $query_args['tax_filter'] ) ) {
 		return $query_args;
 	}
 
@@ -175,3 +194,58 @@ function extrachill_events_account_market_map_center( $center, array $context ) 
 	);
 }
 add_filter( 'data_machine_events_map_center', 'extrachill_events_account_market_map_center', 5, 2 );
+
+/**
+ * Render account market context on primary Events discovery surfaces.
+ */
+function extrachill_events_render_account_market_context(): void {
+	if ( ! extrachill_events_supports_account_market() || is_tax() || ( extrachill_events_has_explicit_market() && ! extrachill_events_is_exploring_all_markets() ) ) {
+		return;
+	}
+
+	$community_url = function_exists( 'ec_get_site_url' ) ? ec_get_site_url( 'community' ) : 'https://community.extrachill.com';
+	$settings_url  = trailingslashit( $community_url ) . 'settings/#tab-account-details';
+	$current_url   = remove_query_arg( 'explore_all' );
+	$explore_url   = add_query_arg( 'explore_all', '1', $current_url );
+	$market        = extrachill_events_get_account_market();
+	$is_logged_in  = is_user_logged_in();
+	$is_exploring  = extrachill_events_is_exploring_all_markets();
+	?>
+	<aside class="events-market-context<?php echo $is_logged_in ? '' : ' events-market-context--quiet'; ?>" aria-label="<?php esc_attr_e( 'Event location preference', 'extrachill-events' ); ?>" role="status">
+		<div class="events-market-context__copy">
+			<?php if ( $market && $is_exploring ) : ?>
+				<strong><?php esc_html_e( 'Exploring all locations', 'extrachill-events' ); ?></strong>
+				<span><?php esc_html_e( 'Your saved market is still available whenever you want to focus the calendar again.', 'extrachill-events' ); ?></span>
+			<?php elseif ( $market ) : ?>
+				<strong>
+					<?php
+					printf(
+						/* translators: %s: Market hierarchy label. */
+						esc_html__( 'Showing events for %s', 'extrachill-events' ),
+						esc_html( '' !== $market['label'] ? $market['label'] : $market['slug'] )
+					);
+					?>
+				</strong>
+			<?php elseif ( $is_logged_in ) : ?>
+				<strong><?php esc_html_e( 'Focus Events around your city', 'extrachill-events' ); ?></strong>
+				<span><?php esc_html_e( 'Set a default market once and use it across devices.', 'extrachill-events' ); ?></span>
+			<?php else : ?>
+				<span><?php esc_html_e( 'Sign in to save a default market across devices.', 'extrachill-events' ); ?></span>
+			<?php endif; ?>
+		</div>
+		<div class="events-market-context__actions">
+			<?php if ( $market && $is_exploring ) : ?>
+				<a href="<?php echo esc_url( $current_url ); ?>"><?php esc_html_e( 'Use my default market', 'extrachill-events' ); ?></a>
+				<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Change default', 'extrachill-events' ); ?></a>
+			<?php elseif ( $market ) : ?>
+				<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Change default', 'extrachill-events' ); ?></a>
+				<a href="<?php echo esc_url( $explore_url ); ?>"><?php esc_html_e( 'Explore all locations', 'extrachill-events' ); ?></a>
+			<?php elseif ( $is_logged_in ) : ?>
+				<a class="button-1 button-small" href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Set default market', 'extrachill-events' ); ?></a>
+			<?php else : ?>
+				<a href="<?php echo esc_url( wp_login_url( $current_url ) ); ?>"><?php esc_html_e( 'Sign in', 'extrachill-events' ); ?></a>
+			<?php endif; ?>
+		</div>
+	</aside>
+	<?php
+}

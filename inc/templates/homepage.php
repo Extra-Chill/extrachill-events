@@ -28,6 +28,7 @@ extrachill_breadcrumbs();
 	</div>
 
 		<div class="entry-content" itemprop="text">
+			<?php extrachill_events_render_account_market_context(); ?>
 			<?php do_action( 'extrachill_events_home_before_calendar' ); ?>
 			<div class="events-calendar-container ec-mobile-full-width-panel">
 				<?php

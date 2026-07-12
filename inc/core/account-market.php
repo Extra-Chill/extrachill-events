@@ -199,7 +199,7 @@ add_filter( 'data_machine_events_map_center', 'extrachill_events_account_market_
  * Render account market context on primary Events discovery surfaces.
  */
 function extrachill_events_render_account_market_context(): void {
-	if ( ! extrachill_events_supports_account_market() || is_tax() || ( extrachill_events_has_explicit_market() && ! extrachill_events_is_exploring_all_markets() ) ) {
+	if ( is_front_page() || ! extrachill_events_supports_account_market() || is_tax() || ( extrachill_events_has_explicit_market() && ! extrachill_events_is_exploring_all_markets() ) ) {
 		return;
 	}
 
@@ -247,5 +247,42 @@ function extrachill_events_render_account_market_context(): void {
 			<?php endif; ?>
 		</div>
 	</aside>
+	<?php
+}
+
+/**
+ * Render the personalized route above the homepage city directory.
+ */
+function extrachill_events_render_home_market_router(): void {
+	if ( ! is_front_page() || ! extrachill_events_supports_account_market() ) {
+		return;
+	}
+
+	$community_url = function_exists( 'ec_get_site_url' ) ? ec_get_site_url( 'community' ) : 'https://community.extrachill.com';
+	$settings_url  = trailingslashit( $community_url ) . 'settings/#tab-account-details';
+	$market        = extrachill_events_get_account_market();
+	$is_logged_in  = is_user_logged_in();
+	?>
+	<div class="events-home-market<?php echo $market ? ' events-home-market--active' : ''; ?>">
+		<?php if ( $market ) : ?>
+			<div class="events-home-market__copy">
+				<span class="events-home-market__eyebrow"><?php esc_html_e( 'Your default market', 'extrachill-events' ); ?></span>
+				<strong><?php echo esc_html( '' !== $market['label'] ? $market['label'] : $market['slug'] ); ?></strong>
+			</div>
+			<div class="events-home-market__actions">
+				<a class="button-1 button-small" href="<?php echo esc_url( $market['url'] ); ?>"><?php esc_html_e( 'View local events', 'extrachill-events' ); ?></a>
+				<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Change default', 'extrachill-events' ); ?></a>
+			</div>
+		<?php elseif ( $is_logged_in ) : ?>
+			<span><?php esc_html_e( 'Choose a default market to put your city first whenever you visit Events.', 'extrachill-events' ); ?></span>
+			<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Set default market', 'extrachill-events' ); ?></a>
+		<?php else : ?>
+			<span><?php esc_html_e( 'Pick a city below, or sign in to save your default market.', 'extrachill-events' ); ?></span>
+			<a href="<?php echo esc_url( wp_login_url( home_url( '/' ) ) ); ?>"><?php esc_html_e( 'Sign in', 'extrachill-events' ); ?></a>
+		<?php endif; ?>
+	</div>
+	<?php if ( $market ) : ?>
+		<p class="events-home-market__explore"><?php esc_html_e( 'Or explore another location:', 'extrachill-events' ); ?></p>
+	<?php endif; ?>
 	<?php
 }

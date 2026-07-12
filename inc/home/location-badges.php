@@ -44,6 +44,8 @@ $location_counts = array_filter(
 if ( empty( $location_counts ) ) {
 	return;
 }
+
+extrachill_events_render_home_market_router();
 ?>
 	<div class="taxonomy-badges ec-edge-gutter">
 	<?php foreach ( $location_counts as $location ) : ?>

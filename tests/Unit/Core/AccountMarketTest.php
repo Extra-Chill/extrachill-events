@@ -151,6 +151,12 @@ if ( ! function_exists( 'wp_login_url' ) ) {
 	}
 }
 
+if ( ! function_exists( 'home_url' ) ) {
+	function home_url( $path = '/' ) {
+		return 'https://events.example' . $path;
+	}
+}
+
 require_once dirname( __DIR__, 3 ) . '/inc/core/account-market.php';
 
 /**
@@ -263,7 +269,7 @@ final class AccountMarketTest extends TestCase {
 	 */
 	public function test_explore_all_suppresses_fallback_without_mutating_preference(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
-		$GLOBALS['test_is_front_page']          = true;
+		$GLOBALS['test_is_all_events_page']     = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
 				return array(
@@ -357,7 +363,7 @@ final class AccountMarketTest extends TestCase {
 	 */
 	public function test_active_market_context_escapes_label_and_links_to_account_details(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
-		$GLOBALS['test_is_front_page']          = true;
+		$GLOBALS['test_is_all_events_page']     = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
 				return array(
@@ -389,15 +395,47 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_is_user_logged_in'] = true;
 
 		ob_start();
-		extrachill_events_render_account_market_context();
+		extrachill_events_render_home_market_router();
 		$logged_in = (string) ob_get_clean();
 		$this->assertStringContainsString( 'Set default market', $logged_in );
 
 		$GLOBALS['test_is_user_logged_in'] = false;
 		ob_start();
-		extrachill_events_render_account_market_context();
+		extrachill_events_render_home_market_router();
 		$anonymous = (string) ob_get_clean();
-		$this->assertStringContainsString( 'Sign in to save a default market', $anonymous );
-		$this->assertStringContainsString( 'events-market-context--quiet', $anonymous );
+		$this->assertStringContainsString( 'Pick a city below', $anonymous );
+		$this->assertStringContainsString( 'Sign in', $anonymous );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_homepage_promotes_saved_market_as_primary_city_route(): void {
+		$GLOBALS['test_is_user_logged_in']      = true;
+		$GLOBALS['test_is_front_page']          = true;
+		$GLOBALS['test_account_market_ability'] = new class() {
+			public function execute(): array {
+				return array(
+					'default_event_location' => array(
+						'slug'        => 'charleston',
+						'term_id'     => 1618,
+						'hierarchy'   => array( 'label' => 'Charleston, South Carolina' ),
+						'archive_url' => 'https://events.example/location/charleston/',
+					),
+				);
+			}
+		};
+
+		ob_start();
+		extrachill_events_render_home_market_router();
+		$output = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'Your default market', $output );
+		$this->assertStringContainsString( 'Charleston, South Carolina', $output );
+		$this->assertStringContainsString( 'https://events.example/location/charleston/', $output );
+		$this->assertStringContainsString( 'View local events', $output );
+		$this->assertStringContainsString( 'Or explore another location:', $output );
+		$this->assertStringNotContainsString( 'Showing events for', $output );
 	}
 }

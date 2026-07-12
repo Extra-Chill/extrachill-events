@@ -37,6 +37,12 @@ if ( ! function_exists( 'sanitize_title' ) ) {
 	}
 }
 
+if ( ! function_exists( 'absint' ) ) {
+	function absint( $value ) {
+		return abs( (int) $value );
+	}
+}
+
 if ( ! function_exists( 'sanitize_text_field' ) ) {
 	function sanitize_text_field( $value ) {
 		return trim( (string) $value );
@@ -67,6 +73,12 @@ if ( ! function_exists( 'ec_is_events_site' ) ) {
 	}
 }
 
+if ( ! function_exists( 'extrachill_events_is_near_me_page' ) ) {
+	function extrachill_events_is_near_me_page() {
+		return (bool) ( $GLOBALS['test_is_near_me_page'] ?? false );
+	}
+}
+
 require_once dirname( __DIR__, 3 ) . '/inc/core/account-market.php';
 
 /**
@@ -84,9 +96,10 @@ final class AccountMarketTest extends TestCase {
 				return array(
 					'default_event_location' => array(
 						'slug'        => 'Charleston SC',
+						'term_id'     => 1618,
 						'coordinates' => array(
 							'lat' => 32.7765,
-							'lng' => -79.9311,
+							'lon' => -79.9311,
 						),
 					),
 				);
@@ -95,9 +108,10 @@ final class AccountMarketTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'lat'  => 32.7765,
-				'lng'  => -79.9311,
-				'slug' => 'charleston-sc',
+				'lat'     => 32.7765,
+				'lon'     => -79.9311,
+				'slug'    => 'charleston-sc',
+				'term_id' => 1618,
 			),
 			extrachill_events_get_account_market()
 		);
@@ -117,7 +131,7 @@ final class AccountMarketTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_seeds_and_restores_existing_calendar_geo_inputs(): void {
+	public function test_adds_taxonomy_default_without_mutating_request_globals(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_front_page']          = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -125,24 +139,20 @@ final class AccountMarketTest extends TestCase {
 				return array(
 					'default_event_location' => array(
 						'slug'        => 'charleston',
+						'term_id'     => 1618,
 						'coordinates' => array(
 							'lat' => 32.7765,
-							'lng' => -79.9311,
+							'lon' => -79.9311,
 						),
 					),
 				);
 			}
 		};
 		$_GET = array();
-		$block = array( 'blockName' => 'data-machine-events/calendar' );
+		$result = extrachill_events_calendar_account_market_defaults( array(), array( 'archive_term' => null ) );
 
-		extrachill_events_seed_account_market( $block );
-		$this->assertSame( '32.7765', $_GET['lat'] );
-		$this->assertSame( '-79.9311', $_GET['lng'] );
-
-		extrachill_events_restore_account_market_request( '', $block );
-		$this->assertArrayNotHasKey( 'lat', $_GET );
-		$this->assertArrayNotHasKey( 'lng', $_GET );
+		$this->assertSame( array( 'location' => array( 1618 ) ), $result['tax_filter'] );
+		$this->assertSame( array(), $_GET );
 	}
 
 	public function test_explicit_geo_and_taxonomy_filters_win(): void {
@@ -154,6 +164,50 @@ final class AccountMarketTest extends TestCase {
 
 		$_GET = array( 'tax_filter' => array( 'location' => array( 42 ) ) );
 		$this->assertTrue( extrachill_events_has_explicit_market() );
+
+		$explicit_geo = array(
+			'lat' => '40.7',
+			'lng' => '-74.0',
+		);
+		$this->assertSame(
+			$explicit_geo,
+			extrachill_events_calendar_account_market_defaults( $explicit_geo, array( 'archive_term' => null ) )
+		);
+
+		$explicit_taxonomy = array( 'tax_filter' => array( 'location' => array( 42 ) ) );
+		$this->assertSame(
+			$explicit_taxonomy,
+			extrachill_events_calendar_account_market_defaults( $explicit_taxonomy, array( 'archive_term' => null ) )
+		);
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_near_me_adds_geo_defaults_without_taxonomy_filter(): void {
+		$GLOBALS['test_is_user_logged_in']      = true;
+		$GLOBALS['test_is_near_me_page']        = true;
+		$GLOBALS['test_account_market_ability'] = new class() {
+			public function execute(): array {
+				return array(
+					'default_event_location' => array(
+						'slug'        => 'charleston',
+						'term_id'     => 1618,
+						'coordinates' => array(
+							'lat' => 32.7765,
+							'lon' => -79.9311,
+						),
+					),
+				);
+			}
+		};
+
+		$result = extrachill_events_calendar_account_market_defaults( array(), array( 'archive_term' => null ) );
+
+		$this->assertSame( 32.7765, $result['lat'] );
+		$this->assertSame( -79.9311, $result['lng'] );
+		$this->assertArrayNotHasKey( 'tax_filter', $result );
 	}
 
 	public function test_anonymous_request_does_not_resolve_account_market(): void {

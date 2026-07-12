@@ -16,10 +16,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Get the current user's resolved default event location.
  *
- * The Ability is introduced by extrachill-users#176. Until that dependency is
- * available, or when it returns an invalid/empty preference, this fails open.
+ * The Ability contract is provided by extrachill-users#179. Until that
+ * dependency is available, or when it returns an invalid/empty preference,
+ * this fails open.
  *
- * @return array{lat: float, lng: float, slug: string}|null
+ * @return array{lat: float|null, lon: float|null, slug: string, term_id: int}|null
  */
 function extrachill_events_get_account_market(): ?array {
 	static $resolved = false;
@@ -46,17 +47,26 @@ function extrachill_events_get_account_market(): ?array {
 
 	$location    = $result['default_event_location'];
 	$coordinates = is_array( $location['coordinates'] ?? null ) ? $location['coordinates'] : array();
-	$lat         = filter_var( $coordinates['lat'] ?? null, FILTER_VALIDATE_FLOAT );
-	$lng         = filter_var( $coordinates['lng'] ?? null, FILTER_VALIDATE_FLOAT );
+	$lat         = filter_var( $coordinates['lat'] ?? null, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE );
+	$lon         = filter_var( $coordinates['lon'] ?? null, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE );
+	$term_id     = absint( $location['term_id'] ?? 0 );
+	$slug        = sanitize_title( $location['slug'] ?? '' );
 
-	if ( false === $lat || false === $lng || $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 ) {
+	if ( $term_id < 1 || '' === $slug ) {
 		return null;
+	}
+	if ( null !== $lat && ( $lat < -90 || $lat > 90 ) ) {
+		$lat = null;
+	}
+	if ( null !== $lon && ( $lon < -180 || $lon > 180 ) ) {
+		$lon = null;
 	}
 
 	$market = array(
-		'lat'  => (float) $lat,
-		'lng'  => (float) $lng,
-		'slug' => sanitize_title( $location['slug'] ?? '' ),
+		'lat'     => null !== $lat ? (float) $lat : null,
+		'lon'     => null !== $lon ? (float) $lon : null,
+		'slug'    => $slug,
+		'term_id' => $term_id,
 	);
 
 	return $market;
@@ -99,65 +109,48 @@ function extrachill_events_supports_account_market(): bool {
 }
 
 /**
- * Seed account coordinates into an otherwise unscoped calendar render.
+ * Add account market defaults before the calendar request is parsed.
  *
- * DME already gives server-rendered geo attributes precedence over its browser
- * localStorage fallback. URL/archive inputs remain first because this hook does
- * nothing when either is present.
+ * Explicit request/archive state wins. Near Me receives geo defaults so browser
+ * geolocation can replace them; other public calendar surfaces receive the
+ * canonical taxonomy term. CalendarRequest sanitizes every injected value.
  *
- * @param array $parsed_block Parsed block data.
+ * @param array $query_args Assembled calendar request arguments.
+ * @param array $context    Calendar render context.
  * @return array
  */
-function extrachill_events_seed_account_market( array $parsed_block ): array {
-	if ( 'data-machine-events/calendar' !== ( $parsed_block['blockName'] ?? '' ) || ! extrachill_events_supports_account_market() || extrachill_events_has_explicit_market() ) {
-		return $parsed_block;
+function extrachill_events_calendar_account_market_defaults( array $query_args, array $context ): array {
+	if ( ! extrachill_events_supports_account_market() || ! empty( $context['archive_term'] ) || ! empty( $query_args['tax_filter'] ) ) {
+		return $query_args;
+	}
+
+	if ( ! empty( $query_args['lat'] ) || ! empty( $query_args['lng'] ) ) {
+		return $query_args;
 	}
 
 	$market = extrachill_events_get_account_market();
 	if ( null === $market ) {
-		return $parsed_block;
+		return $query_args;
 	}
 
-	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Temporarily preserving and seeding public read-only calendar parameters.
-	$GLOBALS['extrachill_events_account_market_request'][] = array(
-		'lat_exists' => isset( $_GET['lat'] ),
-		'lng_exists' => isset( $_GET['lng'] ),
-		'lat'        => isset( $_GET['lat'] ) ? sanitize_text_field( wp_unslash( $_GET['lat'] ) ) : null,
-		'lng'        => isset( $_GET['lng'] ) ? sanitize_text_field( wp_unslash( $_GET['lng'] ) ) : null,
-	);
-
-	$_GET['lat'] = (string) $market['lat'];
-	$_GET['lng'] = (string) $market['lng'];
-	// phpcs:enable WordPress.Security.NonceVerification.Recommended
-
-	return $parsed_block;
-}
-add_filter( 'render_block_data', 'extrachill_events_seed_account_market' );
-
-/**
- * Restore request globals after an account-scoped calendar has rendered.
- *
- * @param string $block_content Rendered block HTML.
- * @param array  $block         Parsed block data.
- * @return string
- */
-function extrachill_events_restore_account_market_request( string $block_content, array $block ): string {
-	if ( 'data-machine-events/calendar' !== ( $block['blockName'] ?? '' ) || empty( $GLOBALS['extrachill_events_account_market_request'] ) ) {
-		return $block_content;
-	}
-
-	$previous = array_pop( $GLOBALS['extrachill_events_account_market_request'] );
-	foreach ( array( 'lat', 'lng' ) as $key ) {
-		if ( $previous[ $key . '_exists' ] ) {
-			$_GET[ $key ] = $previous[ $key ];
-		} else {
-			unset( $_GET[ $key ] );
+	if ( function_exists( 'extrachill_events_is_near_me_page' ) && extrachill_events_is_near_me_page() ) {
+		if ( null !== $market['lat'] && null !== $market['lon'] ) {
+			$query_args += array(
+				'lat' => $market['lat'],
+				'lng' => $market['lon'],
+			);
 		}
+	} else {
+		$query_args += array(
+			'tax_filter' => array(
+				'location' => array( $market['term_id'] ),
+			),
+		);
 	}
 
-	return $block_content;
+	return $query_args;
 }
-add_filter( 'render_block', 'extrachill_events_restore_account_market_request', 10, 2 );
+add_filter( 'data_machine_events_calendar_request_args', 'extrachill_events_calendar_account_market_defaults', 10, 2 );
 
 /**
  * Use the account market as a map center only when no stronger context exists.
@@ -172,13 +165,13 @@ function extrachill_events_account_market_map_center( $center, array $context ) 
 	}
 
 	$market = extrachill_events_get_account_market();
-	if ( null === $market ) {
+	if ( null === $market || null === $market['lat'] || null === $market['lon'] ) {
 		return $center;
 	}
 
 	return array(
 		'lat' => $market['lat'],
-		'lon' => $market['lng'],
+		'lon' => $market['lon'],
 	);
 }
 add_filter( 'data_machine_events_map_center', 'extrachill_events_account_market_map_center', 5, 2 );

@@ -29,6 +29,8 @@ define( 'EXTRACHILL_EVENTS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'EXTRACHILL_EVENTS_PLUGIN_FILE', __FILE__ );
 define( 'EXTRACHILL_EVENTS_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
+require_once __DIR__ . '/inc/Core/LocationTermIntegrity.php';
+
 // WP-CLI commands.
 if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCommand.php' ) ) {
 	require_once __DIR__ . '/inc/Cli/AddCityCommand.php';
@@ -73,6 +75,9 @@ if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCo
 
 	require_once __DIR__ . '/inc/Cli/PruneOrphanLocationsCommand.php';
 	\WP_CLI::add_command( 'extrachill events locations prune-orphans', \ExtraChillEvents\Cli\PruneOrphanLocationsCommand::class );
+
+	require_once __DIR__ . '/inc/Cli/ReconcileLocationTermsCommand.php';
+	\WP_CLI::add_command( 'extrachill events locations reconcile-integrity', \ExtraChillEvents\Cli\ReconcileLocationTermsCommand::class );
 
 	require_once __DIR__ . '/inc/Cli/BackfillVenueMetaCommand.php';
 	\WP_CLI::add_command( 'extrachill events venues backfill-meta', \ExtraChillEvents\Cli\BackfillVenueMetaCommand::class );

@@ -46,6 +46,12 @@ if ( ! function_exists( 'apply_filters' ) ) {
 	}
 }
 
+if ( ! function_exists( 'add_filter' ) ) {
+	function add_filter( $hook, $callback, $priority = 10, $accepted_args = 1 ) {
+		return true;
+	}
+}
+
 if ( ! function_exists( 'esc_url_raw' ) ) {
 	function esc_url_raw( $url ) {
 		return is_string( $url ) ? trim( $url ) : '';
@@ -82,4 +88,5 @@ require_once dirname( __DIR__ ) . '/inc/Core/QualifyVerdict.php';
 require_once dirname( __DIR__ ) . '/inc/Core/QualifyVerdictResolver.php';
 require_once dirname( __DIR__ ) . '/inc/Core/PlatformDetector.php';
 require_once dirname( __DIR__ ) . '/inc/Core/QualifyFingerprinter.php';
+require_once dirname( __DIR__ ) . '/inc/Core/LocationTermIntegrity.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueQualificationAbilities.php';

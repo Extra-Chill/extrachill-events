@@ -6,14 +6,14 @@
  * Version: 0.39.0
  * Author: Chris Huber
  * Author URI: https://chubes.net
- * Requires Plugins: data-machine, data-machine-events
+ * Requires Plugins: data-machine
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: extrachill-events
  * Requires at least: 6.9
  * Tested up to: 6.9
  * Requires PHP: 7.4
- * Network: false
+ * Network: true
  *
  * @package ExtraChillEvents
  * @since 0.1.0
@@ -28,6 +28,15 @@ define( 'EXTRACHILL_EVENTS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EXTRACHILL_EVENTS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'EXTRACHILL_EVENTS_PLUGIN_FILE', __FILE__ );
 define( 'EXTRACHILL_EVENTS_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
+
+// The canonical locations Ability is event-owned but consumed network-wide.
+require_once __DIR__ . '/inc/abilities/canonical-locations.php';
+require_once __DIR__ . '/inc/activation.php';
+
+$extrachill_events_blog_id = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'events' ) : 7;
+if ( get_current_blog_id() !== $extrachill_events_blog_id ) {
+	return;
+}
 
 // WP-CLI commands.
 if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCommand.php' ) ) {
@@ -180,7 +189,6 @@ class ExtraChillEvents {
 	private function __construct() {
 		$this->init_hooks();
 		$this->load_dependencies();
-		$this->init_integrations();
 	}
 
 	private function init_hooks() {
@@ -188,6 +196,7 @@ class ExtraChillEvents {
 		add_action( 'init', array( $this, 'init_data_machine_handlers' ), 20 );
 		add_action( 'init', array( $this, 'init_abilities' ), 25 );
 		add_action( 'plugins_loaded', array( $this, 'maybe_install_schema' ), 20 );
+		add_action( 'plugins_loaded', array( $this, 'init_integrations' ), 20 );
 
 		// Artist URL Import moderation queue admin screen (migrated from
 		// data-machine-events in #200). Hooks DME's public post-type menu
@@ -195,8 +204,6 @@ class ExtraChillEvents {
 		if ( is_admin() ) {
 			add_action( 'init', array( $this, 'init_artist_url_admin' ), 5 );
 		}
-		register_activation_hook( __FILE__, array( $this, 'activate' ) );
-		register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
 	}
 
 	public function load_textdomain() {
@@ -352,27 +359,10 @@ class ExtraChillEvents {
 	 * data-machine-events' public integration API (inc/public-api.php) so the
 	 * check survives internal namespace changes in DM-events.
 	 */
-	private function init_integrations() {
+	public function init_integrations() {
 		if ( defined( 'DATA_MACHINE_EVENTS_POST_TYPE' ) ) {
 			extrachill_events_init_data_machine_integration();
 		}
-	}
-
-	public function activate() {
-		// Create/upgrade the qualify verdicts table at activation. Safe to
-		// call repeatedly — dbDelta handles idempotency.
-		\ExtraChillEvents\Core\QualifyVerdictsTable::create_table();
-
-		// Artist URL submissions table (migrated from data-machine-events in
-		// #200). Same table name as before — ownership transfers, no data move.
-		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/ArtistUrlSubmissionsTable.php';
-		\ExtraChillEvents\Core\ArtistUrlSubmissionsTable::create_table();
-
-		flush_rewrite_rules();
-	}
-
-	public function deactivate() {
-		flush_rewrite_rules();
 	}
 
 	/**

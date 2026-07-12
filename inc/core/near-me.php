@@ -127,16 +127,18 @@ function extrachill_events_near_me_scripts() {
 		true
 	);
 
-	$geo = extrachill_events_get_geo_params();
+	$geo            = extrachill_events_get_geo_params();
+	$account_market = extrachill_events_get_account_market();
 
 	wp_localize_script(
 		'extrachill-events-near-me',
 		'ecNearMe',
 		array(
-			'hasLocation' => null !== $geo['lat'] && null !== $geo['lng'],
-			'lat'         => $geo['lat'],
-			'lng'         => $geo['lng'],
-			'pageUrl'     => get_permalink(),
+			'hasLocation'      => null !== $geo['lat'] && null !== $geo['lng'],
+			'lat'              => $geo['lat'],
+			'lng'              => $geo['lng'],
+			'pageUrl'          => get_permalink(),
+			'hasAccountMarket' => null !== $account_market,
 		)
 	);
 }

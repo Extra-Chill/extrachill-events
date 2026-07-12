@@ -13,6 +13,12 @@ if ( ! function_exists( 'add_filter' ) ) {
 	}
 }
 
+if ( ! function_exists( 'add_action' ) ) {
+	function add_action() {
+		return true;
+	}
+}
+
 if ( ! function_exists( 'is_user_logged_in' ) ) {
 	function is_user_logged_in() {
 		return (bool) ( $GLOBALS['test_is_user_logged_in'] ?? false );
@@ -85,9 +91,18 @@ if ( ! function_exists( 'extrachill_events_is_near_me_page' ) ) {
 	}
 }
 
-if ( ! function_exists( 'extrachill_events_is_all_events_page' ) ) {
-	function extrachill_events_is_all_events_page() {
-		return (bool) ( $GLOBALS['test_is_all_events_page'] ?? false );
+if ( ! function_exists( 'apply_filters' ) ) {
+	function apply_filters( $name, $value ) {
+		return $value;
+	}
+}
+
+if ( ! function_exists( 'get_query_var' ) ) {
+	function get_query_var( $name, $default = '' ) {
+		if ( 'ec_events_router' === $name && ! empty( $GLOBALS['test_is_all_events_page'] ) ) {
+			return 'all';
+		}
+		return $default;
 	}
 }
 
@@ -103,6 +118,24 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	}
 }
 
+if ( ! function_exists( '__' ) ) {
+	function __( $value ) {
+		return $value;
+	}
+}
+
+if ( ! function_exists( '_n' ) ) {
+	function _n( $single, $plural, $number ) {
+		return 1 === (int) $number ? $single : $plural;
+	}
+}
+
+if ( ! function_exists( 'number_format_i18n' ) ) {
+	function number_format_i18n( $number ) {
+		return number_format( (int) $number );
+	}
+}
+
 if ( ! function_exists( 'esc_html_e' ) ) {
 	function esc_html_e( $value ) {
 		echo esc_html( $value );
@@ -112,6 +145,12 @@ if ( ! function_exists( 'esc_html_e' ) ) {
 if ( ! function_exists( 'esc_attr_e' ) ) {
 	function esc_attr_e( $value ) {
 		echo esc_html( $value );
+	}
+}
+
+if ( ! function_exists( 'esc_attr' ) ) {
+	function esc_attr( $value ) {
+		return esc_html( $value );
 	}
 }
 
@@ -157,6 +196,7 @@ if ( ! function_exists( 'home_url' ) ) {
 	}
 }
 
+require_once dirname( __DIR__, 3 ) . '/inc/core/router-pages.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/account-market.php';
 
 /**
@@ -357,6 +397,10 @@ final class AccountMarketTest extends TestCase {
 		$this->assertFalse( extrachill_events_supports_account_market() );
 	}
 
+	public function test_location_directory_is_enabled_by_default(): void {
+		$this->assertTrue( extrachill_events_location_directory_enabled() );
+	}
+
 	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
@@ -395,15 +439,15 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_is_user_logged_in'] = true;
 
 		ob_start();
-		extrachill_events_render_home_market_router();
+		extrachill_events_render_home_market_router( array() );
 		$logged_in = (string) ob_get_clean();
 		$this->assertStringContainsString( 'Set default market', $logged_in );
 
 		$GLOBALS['test_is_user_logged_in'] = false;
 		ob_start();
-		extrachill_events_render_home_market_router();
+		extrachill_events_render_home_market_router( array() );
 		$anonymous = (string) ob_get_clean();
-		$this->assertStringContainsString( 'Pick a city below', $anonymous );
+		$this->assertStringContainsString( 'Search without an account', $anonymous );
 		$this->assertStringContainsString( 'Sign in', $anonymous );
 	}
 
@@ -428,14 +472,36 @@ final class AccountMarketTest extends TestCase {
 		};
 
 		ob_start();
-		extrachill_events_render_home_market_router();
+		extrachill_events_render_home_market_router(
+			array(
+				array(
+					'term_id' => 1618,
+					'name'    => 'Charleston',
+					'label'   => 'Charleston, South Carolina',
+					'slug'    => 'charleston',
+					'count'   => 883,
+					'url'     => 'https://events.example/location/charleston/',
+				),
+				array(
+					'term_id' => 42,
+					'name'    => 'Austin',
+					'label'   => 'Austin, Texas',
+					'slug'    => 'austin',
+					'count'   => 1458,
+					'url'     => 'https://events.example/location/austin/',
+				),
+			)
+		);
 		$output = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'Your default market', $output );
+		$this->assertStringContainsString( 'Your market', $output );
 		$this->assertStringContainsString( 'Charleston, South Carolina', $output );
 		$this->assertStringContainsString( 'https://events.example/location/charleston/', $output );
-		$this->assertStringContainsString( 'View local events', $output );
-		$this->assertStringContainsString( 'Or explore another location:', $output );
+		$this->assertStringContainsString( '883 upcoming events', $output );
+		$this->assertStringContainsString( 'location/charleston/tonight/', $output );
+		$this->assertStringContainsString( 'location/charleston/this-weekend/', $output );
+		$this->assertStringContainsString( 'Austin, Texas', $output );
+		$this->assertStringContainsString( 'Browse all locations', $output );
 		$this->assertStringNotContainsString( 'Showing events for', $output );
 	}
 }

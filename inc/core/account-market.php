@@ -251,9 +251,11 @@ function extrachill_events_render_account_market_context(): void {
 }
 
 /**
- * Render the personalized route above the homepage city directory.
+ * Render the progressive homepage market router.
+ *
+ * @param array $locations Canonical active city rows ordered by upcoming count.
  */
-function extrachill_events_render_home_market_router(): void {
+function extrachill_events_render_home_market_router( array $locations ): void {
 	if ( ! is_front_page() || ! extrachill_events_supports_account_market() ) {
 		return;
 	}
@@ -262,27 +264,79 @@ function extrachill_events_render_home_market_router(): void {
 	$settings_url  = trailingslashit( $community_url ) . 'settings/#tab-account-details';
 	$market        = extrachill_events_get_account_market();
 	$is_logged_in  = is_user_logged_in();
+	$market_count  = 0;
+	foreach ( $locations as $location ) {
+		if ( $market && (int) $location['term_id'] === (int) $market['term_id'] ) {
+			$market_count = (int) $location['count'];
+			break;
+		}
+	}
+	$sample_min_events = (int) apply_filters( 'extrachill_events_badge_min_count', 20 );
+	$sample            = array_values(
+		array_filter(
+			$locations,
+			static function ( array $location ) use ( $market, $sample_min_events ): bool {
+				$is_other_market = ! $market || (int) $location['term_id'] !== (int) $market['term_id'];
+				return $is_other_market && (int) $location['count'] >= $sample_min_events;
+			}
+		)
+	);
+	$sample            = array_slice( $sample, 0, 8 );
 	?>
-	<div class="events-home-market<?php echo $market ? ' events-home-market--active' : ''; ?>">
+	<section class="events-home-router ec-edge-gutter" aria-labelledby="events-market-heading">
+		<div class="events-home-router__heading">
 		<?php if ( $market ) : ?>
-			<div class="events-home-market__copy">
-				<span class="events-home-market__eyebrow"><?php esc_html_e( 'Your default market', 'extrachill-events' ); ?></span>
-				<strong><?php echo esc_html( '' !== $market['label'] ? $market['label'] : $market['slug'] ); ?></strong>
-			</div>
-			<div class="events-home-market__actions">
-				<a class="button-1 button-small" href="<?php echo esc_url( $market['url'] ); ?>"><?php esc_html_e( 'View local events', 'extrachill-events' ); ?></a>
-				<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Change default', 'extrachill-events' ); ?></a>
-			</div>
+			<h2 id="events-market-heading"><?php esc_html_e( 'Your market', 'extrachill-events' ); ?></h2>
 		<?php elseif ( $is_logged_in ) : ?>
-			<span><?php esc_html_e( 'Choose a default market to put your city first whenever you visit Events.', 'extrachill-events' ); ?></span>
-			<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Set default market', 'extrachill-events' ); ?></a>
+			<h2 id="events-market-heading"><?php esc_html_e( 'Choose your market', 'extrachill-events' ); ?></h2>
+			<p><?php esc_html_e( 'Find a city now, or set a default to put it first on every visit.', 'extrachill-events' ); ?> <a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Set default market', 'extrachill-events' ); ?></a></p>
 		<?php else : ?>
-			<span><?php esc_html_e( 'Pick a city below, or sign in to save your default market.', 'extrachill-events' ); ?></span>
-			<a href="<?php echo esc_url( wp_login_url( home_url( '/' ) ) ); ?>"><?php esc_html_e( 'Sign in', 'extrachill-events' ); ?></a>
+			<h2 id="events-market-heading"><?php esc_html_e( 'Find your city', 'extrachill-events' ); ?></h2>
+			<p><?php esc_html_e( 'Search without an account.', 'extrachill-events' ); ?> <a href="<?php echo esc_url( wp_login_url( home_url( '/' ) ) ); ?>"><?php esc_html_e( 'Sign in to save a default', 'extrachill-events' ); ?></a></p>
 		<?php endif; ?>
-	</div>
-	<?php if ( $market ) : ?>
-		<p class="events-home-market__explore"><?php esc_html_e( 'Or explore another location:', 'extrachill-events' ); ?></p>
-	<?php endif; ?>
+		</div>
+
+		<form class="events-location-search" role="search" method="get" action="<?php echo esc_url( home_url( '/location/' ) ); ?>">
+			<label for="events-location-search"><?php esc_html_e( 'Search cities', 'extrachill-events' ); ?></label>
+			<div class="events-location-search__controls">
+				<input id="events-location-search" name="search" type="search" autocomplete="off" required placeholder="<?php esc_attr_e( 'City or state', 'extrachill-events' ); ?>">
+				<button class="button-1 button-small" type="submit"><?php esc_html_e( 'Search', 'extrachill-events' ); ?></button>
+			</div>
+		</form>
+
+		<?php if ( $market ) : ?>
+			<article class="events-primary-market">
+				<div>
+					<span class="events-primary-market__eyebrow"><?php esc_html_e( 'Your default market', 'extrachill-events' ); ?></span>
+					<h3><?php echo esc_html( '' !== $market['label'] ? $market['label'] : $market['slug'] ); ?></h3>
+					<?php if ( $market_count > 0 ) : ?>
+						<p><?php echo esc_html( sprintf( /* translators: %s: Number of upcoming events. */ _n( '%s upcoming event', '%s upcoming events', $market_count, 'extrachill-events' ), number_format_i18n( $market_count ) ) ); ?></p>
+					<?php endif; ?>
+				</div>
+				<nav class="events-primary-market__links" aria-label="<?php esc_attr_e( 'Default market event views', 'extrachill-events' ); ?>">
+					<a href="<?php echo esc_url( trailingslashit( $market['url'] ) . 'tonight/' ); ?>"><?php esc_html_e( 'Tonight', 'extrachill-events' ); ?></a>
+					<a href="<?php echo esc_url( trailingslashit( $market['url'] ) . 'this-weekend/' ); ?>"><?php esc_html_e( 'This Weekend', 'extrachill-events' ); ?></a>
+					<a href="<?php echo esc_url( $market['url'] ); ?>"><?php esc_html_e( 'City calendar', 'extrachill-events' ); ?></a>
+					<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Change default', 'extrachill-events' ); ?></a>
+				</nav>
+			</article>
+		<?php endif; ?>
+
+		<?php if ( $sample ) : ?>
+			<div class="events-market-sample">
+				<h3><?php echo esc_html( $market ? __( 'Explore other active markets', 'extrachill-events' ) : __( 'Active markets', 'extrachill-events' ) ); ?></h3>
+				<div class="taxonomy-badges">
+					<?php foreach ( $sample as $location ) : ?>
+						<a href="<?php echo esc_url( $location['url'] ); ?>" class="taxonomy-badge location-badge location-<?php echo esc_attr( $location['slug'] ); ?>"><?php echo esc_html( $location['label'] ); ?> (<?php echo esc_html( number_format_i18n( $location['count'] ) ); ?>)</a>
+					<?php endforeach; ?>
+				</div>
+			</div>
+		<?php endif; ?>
+
+		<div class="events-home-router__paths">
+			<a href="<?php echo esc_url( home_url( '/location/' ) ); ?>"><?php esc_html_e( 'Browse all locations', 'extrachill-events' ); ?> &rarr;</a>
+			<a href="<?php echo esc_url( home_url( '/all/' ) ); ?>"><?php esc_html_e( 'See every event', 'extrachill-events' ); ?> &rarr;</a>
+		</div>
+	</section>
 	<?php
 }

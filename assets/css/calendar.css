@@ -99,53 +99,85 @@
     flex-shrink: 0;
 }
 
-/* Preferred route integrated with the homepage city chooser. */
-.events-home-market {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: var(--spacing-sm) var(--spacing-md);
-    margin: 0 auto var(--spacing-md);
-    color: var(--muted-text);
-    font-size: var(--font-size-sm);
+/* Progressive homepage router: search, preferred market, sample, directories. */
+.events-home-router {
+    display: grid;
+    gap: var(--spacing-lg);
+}
+
+.events-home-router__heading {
     text-align: center;
 }
 
-.events-home-market--active {
+.events-home-router__heading h2,
+.events-home-router__heading p,
+.events-primary-market h3,
+.events-primary-market p,
+.events-market-sample h3 {
+    margin: 0;
+}
+
+.events-home-router__heading p {
+    margin-top: var(--spacing-xs);
+    color: var(--muted-text);
+    font-size: var(--font-size-sm);
+}
+
+.events-location-search {
+    width: min(100%, 38rem);
+    margin: 0 auto;
+}
+
+.events-location-search label {
+    display: block;
+    margin-bottom: var(--spacing-xs);
+    font-weight: 600;
+}
+
+.events-location-search__controls {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.events-location-search input[type="search"] {
+    min-width: 0;
+    flex: 1;
+}
+
+.events-primary-market {
+    display: flex;
+    align-items: center;
     justify-content: space-between;
-    max-width: 42rem;
-    padding: var(--spacing-md);
-    color: inherit;
+    gap: var(--spacing-lg);
+    padding: var(--spacing-lg);
     background: var(--background-color);
     border: 1px solid var(--border-color);
     border-left: 3px solid var(--accent);
     border-radius: var(--border-radius, 8px);
-    text-align: left;
+    box-shadow: var(--card-shadow);
 }
 
-.events-home-market__copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-xs);
-}
-
-.events-home-market__eyebrow,
-.events-home-market__explore {
+.events-primary-market__eyebrow {
     color: var(--muted-text);
     font-size: var(--font-size-sm);
 }
 
-.events-home-market__actions {
+.events-primary-market__links,
+.events-home-router__paths {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: var(--spacing-md);
+    gap: var(--spacing-sm) var(--spacing-md);
 }
 
-.events-home-market__explore {
-    margin: 0 0 var(--spacing-sm);
+.events-market-sample h3 {
+    margin-bottom: var(--spacing-sm);
     text-align: center;
+}
+
+.events-home-router__paths {
+    justify-content: center;
+    font-weight: 600;
 }
 
 @media (max-width: 600px) {
@@ -158,11 +190,15 @@
         gap: var(--spacing-sm) var(--spacing-md);
     }
 
-    .events-home-market--active {
+    .events-primary-market {
         align-items: flex-start;
         flex-direction: column;
-        margin-left: var(--spacing-md);
-        margin-right: var(--spacing-md);
+        padding: var(--spacing-md);
+    }
+
+    .events-location-search__controls {
+        align-items: stretch;
+        flex-direction: column;
     }
 }
 
@@ -213,6 +249,21 @@
 
 .cities-region-title {
     margin-bottom: var(--spacing-md);
+}
+
+.cities-state {
+    margin-bottom: var(--spacing-lg);
+}
+
+.cities-state-title {
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-body);
+}
+
+.cities-state-title span,
+.cities-directory-results,
+.cities-directory-empty {
+    color: var(--muted-text);
 }
 
 .cities-region-count {

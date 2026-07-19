@@ -32,7 +32,42 @@
  * @since 0.18.0
  */
 
-$user_id = ! empty( $attributes['userId'] ) ? (int) $attributes['userId'] : get_current_user_id();
+$on_my_shows = function_exists( 'is_page' ) && is_page( 'my-shows' );
+$user_id     = ! empty( $attributes['userId'] ) ? (int) $attributes['userId'] : get_current_user_id();
+
+// Public profile cards link to the canonical My Shows page with the profile
+// owner's network user ID. Resolve that selection before the anonymous
+// marketing fallback so every viewer sees the requested public history rather
+// than their own dashboard (or the logged-out marketing state).
+// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only public route selection.
+if ( $on_my_shows && isset( $_GET['user_id'] ) ) {
+	$requested_user_id = is_scalar( $_GET['user_id'] )
+		? absint( wp_unslash( $_GET['user_id'] ) )
+		: 0;
+
+	if ( $requested_user_id < 1 || ! get_userdata( $requested_user_id ) ) {
+		$wrapper_attributes = get_block_wrapper_attributes(
+			array(
+				'class' => 'ec-concert-stats-shell ec-concert-stats-shell--invalid-user',
+			)
+		);
+		?>
+		<div <?php echo $wrapper_attributes; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped via get_block_wrapper_attributes. ?>>
+			<div class="ec-block-shell ec-block-shell--depth-0 ec-mobile-full-width-panel">
+				<div class="ec-block-shell-inner ec-block-shell-inner--narrow">
+					<div class="ec-inline-status ec-inline-status--error" role="status">
+						<?php esc_html_e( 'This concert history could not be found.', 'extrachill-events' ); ?>
+					</div>
+				</div>
+			</div>
+		</div>
+		<?php
+		return;
+	}
+
+	$user_id = $requested_user_id;
+}
+// phpcs:enable WordPress.Security.NonceVerification.Recommended
 
 // #126: when there's no explicit `userId` attribute (the usual case
 // on /my-shows/) and the visitor is logged out, render a public
@@ -111,7 +146,6 @@ $is_own     = is_user_logged_in() && get_current_user_id() === $user_id;
 // #110: Calendar tab is owner-only, and the server-side filter callback
 // only activates on /my-shows/. Match both conditions before emitting
 // the embedded calendar block so we don't ship dead markup elsewhere.
-$on_my_shows              = function_exists( 'is_page' ) && is_page( 'my-shows' );
 $render_embedded_calendar = $is_own && $on_my_shows;
 
 // #111: Same gate for the Map tab. The events-map block in

@@ -188,7 +188,7 @@ function ConcertStatsApp( {
 	// We hoist the hook to the parent and pass the full bag down to ImportTab
 	// so we don't double-fetch from two `useImportRuns()` sites on the same
 	// page. ImportTab consumes the props directly.
-	const importRunsBag = useImportRuns();
+	const importRunsBag = useImportRuns( isOwn );
 	const hasImports =
 		isOwn && importRunsBag.sources && importRunsBag.sources.length > 0;
 

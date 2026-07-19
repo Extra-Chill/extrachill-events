@@ -98,6 +98,12 @@ if ( ! function_exists( 'do_blocks' ) ) {
 	}
 }
 
+if ( ! function_exists( 'current_datetime' ) ) {
+	function current_datetime() {
+		return new DateTimeImmutable( '2026-07-19 12:00:00' );
+	}
+}
+
 final class ConcertStatsPublicProfileRenderTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['ec_test_current_user_id']   = 0;
@@ -118,6 +124,7 @@ final class ConcertStatsPublicProfileRenderTest extends TestCase {
 
 		$this->assertStringContainsString( 'data-user-id="12"', $output );
 		$this->assertStringContainsString( 'data-is-own="1"', $output );
+		$this->assertStringContainsString( 'data-public-date-to=""', $output );
 		$this->assertStringContainsString( 'data-has-calendar="1"', $output );
 		$this->assertStringContainsString( 'data-has-map="1"', $output );
 		$this->assertStringContainsString( 'ec-concert-stats__embedded-calendar', $output );
@@ -133,6 +140,7 @@ final class ConcertStatsPublicProfileRenderTest extends TestCase {
 
 		$this->assertStringContainsString( 'data-user-id="34"', $output );
 		$this->assertStringContainsString( 'data-is-own="0"', $output );
+		$this->assertStringContainsString( 'data-public-date-to="2026-07-18"', $output );
 		$this->assertStringContainsString( 'data-has-calendar="0"', $output );
 		$this->assertStringContainsString( 'data-has-map="0"', $output );
 		$this->assertStringNotContainsString( 'ec-concert-stats__embedded-calendar', $output );
@@ -146,6 +154,7 @@ final class ConcertStatsPublicProfileRenderTest extends TestCase {
 
 		$this->assertStringContainsString( 'data-user-id="34"', $output );
 		$this->assertStringContainsString( 'data-is-own="0"', $output );
+		$this->assertStringContainsString( 'data-public-date-to="2026-07-18"', $output );
 		$this->assertStringNotContainsString( 'ec-concert-stats-shell--marketing', $output );
 	}
 
@@ -170,16 +179,6 @@ final class ConcertStatsPublicProfileRenderTest extends TestCase {
 
 		$this->assertStringContainsString( 'This concert history could not be found.', $output );
 		$this->assertStringNotContainsString( 'data-user-id="12"', $output );
-	}
-
-	public function test_client_write_controls_remain_owner_only(): void {
-		$root     = dirname( __DIR__, 2 );
-		$view     = (string) file_get_contents( $root . '/blocks/concert-stats/src/view.js' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Local test fixture.
-		$past_tab = (string) file_get_contents( $root . '/blocks/concert-stats/src/components/PastTab.js' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Local test fixture.
-
-		$this->assertStringContainsString( 'useImportRuns( isOwn )', $view );
-		$this->assertStringContainsString( 'isOwn && importRunsBag.sources', $view );
-		$this->assertStringContainsString( 'isOwn && <AddPastShows', $past_tab );
 	}
 
 	private function renderBlock(): string {

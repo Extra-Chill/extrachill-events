@@ -93,8 +93,16 @@ if ( ! function_exists( 'get_term_meta' ) ) {
 }
 if ( ! function_exists( 'update_term_meta' ) ) {
 	function update_term_meta( $term_id, $key, $value ) {
+		if ( ! empty( $GLOBALS['ec_artist_test']['fail_updates'][ $term_id ] ) ) {
+			return false;
+		}
 		$GLOBALS['ec_artist_test']['meta'][ get_current_blog_id() ][ $term_id ][ $key ] = $value;
 		return true;
+	}
+}
+if ( ! function_exists( 'wp_register_ability' ) ) {
+	function wp_register_ability( $name, $args ) {
+		$GLOBALS['ec_artist_test']['registered'][ $name ] = $args;
 	}
 }
 if ( ! function_exists( 'get_terms' ) ) {
@@ -144,6 +152,8 @@ final class EventsByArtistAbilityTest extends TestCase {
 			'meta'    => array( 1 => array(), 7 => array() ),
 			'options' => array( 1 => array(), 7 => array() ),
 			'events'  => array( 44 => array( 'artists' => array() ) ),
+			'fail_updates' => array(),
+			'registered'   => array(),
 		);
 		$GLOBALS['ec_artist_test']['ability'] = new class() {
 			public function execute( array $input ): array {
@@ -190,6 +200,32 @@ final class EventsByArtistAbilityTest extends TestCase {
 		$result = extrachill_events_ability_events_by_artist( array( 'artist_term_id' => 101 ) );
 
 		$this->assertSame( 'artist_mapping_missing', $result->get_error_code() );
+		$this->assertSame( 4, get_current_blog_id() );
+	}
+
+	public function test_canonical_identity_cannot_be_overridden_by_legacy_slug(): void {
+		$this->addTerm( 1, 101, 'canonical-band' );
+		$this->addTerm( 7, 501, 'other-band' );
+
+		$result = extrachill_events_ability_events_by_artist(
+			array(
+				'artist_term_id' => 101,
+				'term_slug'      => 'other-band',
+			)
+		);
+
+		$this->assertSame( 'artist_mapping_missing', $result->get_error_code() );
+	}
+
+	public function test_canonical_slug_fallback_rejects_a_term_claimed_by_another_artist(): void {
+		$this->addTerm( 1, 101, 'shared-band' );
+		$this->addTerm( 1, 102, 'other-name' );
+		$this->addTerm( 7, 501, 'shared-band' );
+		$GLOBALS['ec_artist_test']['meta'][1][102][ EXTRACHILL_EVENTS_ARTIST_TERM_META ] = 501;
+
+		$result = extrachill_events_ability_events_by_artist( array( 'artist_term_id' => 101 ) );
+
+		$this->assertSame( 'duplicate_artist_mapping', $result->get_error_code() );
 		$this->assertSame( 4, get_current_blog_id() );
 	}
 
@@ -278,5 +314,46 @@ final class EventsByArtistAbilityTest extends TestCase {
 		$this->assertArrayNotHasKey( EXTRACHILL_EVENTS_ARTIST_TERM_META, $GLOBALS['ec_artist_test']['meta'][1][101] );
 		$this->assertArrayNotHasKey( EXTRACHILL_EVENTS_ARTIST_TERM_META, $GLOBALS['ec_artist_test']['meta'][1][102] );
 		$this->assertSame( 4, get_current_blog_id() );
+	}
+
+	public function test_backfill_counts_unbound_artist_mappings_as_claims(): void {
+		$this->addTerm( 1, 101, 'candidate' );
+		$this->addTerm( 1, 102, 'unbound-owner' );
+		$this->bindProfile( 101, 1101 );
+		$this->addTerm( 7, 501, 'candidate' );
+		$GLOBALS['ec_artist_test']['meta'][1][102][ EXTRACHILL_EVENTS_ARTIST_TERM_META ] = 501;
+
+		$report = extrachill_events_backfill_artist_identity();
+
+		$this->assertCount( 0, $report['mapped'] );
+		$this->assertCount( 1, $report['collisions'] );
+		$this->assertArrayNotHasKey( EXTRACHILL_EVENTS_ARTIST_TERM_META, $GLOBALS['ec_artist_test']['meta'][1][101] );
+	}
+
+	public function test_failed_mapping_write_is_reported_and_remains_retryable(): void {
+		$this->addTerm( 1, 101, 'candidate' );
+		$this->bindProfile( 101, 1101 );
+		$this->addTerm( 7, 501, 'candidate' );
+		$GLOBALS['ec_artist_test']['fail_updates'][101] = true;
+
+		$report = extrachill_events_backfill_artist_identity();
+
+		$this->assertFalse( $report['complete'] );
+		$this->assertCount( 0, $report['mapped'] );
+		$this->assertCount( 1, $report['write_failures'] );
+		$this->assertArrayNotHasKey( EXTRACHILL_EVENTS_ARTIST_TERM_META, $GLOBALS['ec_artist_test']['meta'][1][101] );
+	}
+
+	public function test_input_schema_requires_a_canonical_id_or_legacy_slug(): void {
+		extrachill_events_register_events_by_artist_ability();
+
+		$schema = $GLOBALS['ec_artist_test']['registered']['extrachill-events/events-by-artist']['input_schema'];
+		$this->assertSame(
+			array(
+				array( 'required' => array( 'artist_term_id' ) ),
+				array( 'required' => array( 'term_slug' ) ),
+			),
+			$schema['anyOf']
+		);
 	}
 }

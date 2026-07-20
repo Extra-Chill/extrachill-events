@@ -27,6 +27,10 @@ function extrachill_events_register_events_by_artist_ability(): void {
 			'category'            => 'extrachill-events',
 			'input_schema'        => array(
 				'type'       => 'object',
+				'anyOf'      => array(
+					array( 'required' => array( 'artist_term_id' ) ),
+					array( 'required' => array( 'term_slug' ) ),
+				),
 				'properties' => array(
 					'artist_term_id' => array(
 						'type'        => 'integer',
@@ -162,7 +166,7 @@ function extrachill_events_resolve_artist_term( int $artist_term_id, string $leg
 		}
 	}
 
-	$lookup_slug = '' !== $legacy_slug ? $legacy_slug : $canonical_slug;
+	$lookup_slug = $artist_term_id > 0 ? $canonical_slug : $legacy_slug;
 	switch_to_blog( $events_blog_id );
 	try {
 		if ( $mapped_term_id > 0 ) {
@@ -174,6 +178,18 @@ function extrachill_events_resolve_artist_term( int $artist_term_id, string $leg
 			$local = '' !== $lookup_slug ? get_term_by( 'slug', $lookup_slug, 'artist' ) : false;
 			if ( ! $local || is_wp_error( $local ) ) {
 				return new WP_Error( 'artist_mapping_missing', __( 'No Events artist mapping or legacy slug match exists.', 'extrachill-events' ), array( 'status' => 404 ) );
+			}
+
+			if ( $artist_term_id > 0 ) {
+				switch_to_blog( $main_blog_id );
+				try {
+					$claims = extrachill_events_find_artist_mapping_claims( (int) $local->term_id );
+					if ( ! empty( $claims ) ) {
+						return new WP_Error( 'duplicate_artist_mapping', __( 'The matched Events artist term is already claimed by another canonical artist.', 'extrachill-events' ), array( 'status' => 409 ) );
+					}
+				} finally {
+					restore_current_blog();
+				}
 			}
 		}
 
@@ -232,7 +248,8 @@ function extrachill_events_maybe_backfill_artist_identity(): void {
 
 	switch_to_blog( $events_blog_id );
 	try {
-		if ( get_option( EXTRACHILL_EVENTS_ARTIST_BACKFILL_OPTION, false ) ) {
+		$existing_report = get_option( EXTRACHILL_EVENTS_ARTIST_BACKFILL_OPTION, false );
+		if ( is_array( $existing_report ) && ! empty( $existing_report['complete'] ) ) {
 			return;
 		}
 	} finally {
@@ -266,6 +283,7 @@ function extrachill_events_backfill_artist_identity() {
 
 	$report = array(
 		'version'         => 1,
+		'complete'        => true,
 		'mapped'          => array(),
 		'existing'        => array(),
 		'missing'         => array(),
@@ -273,6 +291,7 @@ function extrachill_events_backfill_artist_identity() {
 		'stale'           => array(),
 		'ambiguous'       => array(),
 		'collisions'      => array(),
+		'write_failures'  => array(),
 	);
 
 	switch_to_blog( $main_blog_id );
@@ -287,16 +306,17 @@ function extrachill_events_backfill_artist_identity() {
 			return $canonical_terms;
 		}
 
-		$canonical_terms = array_values(
+		$all_canonical_terms = $canonical_terms;
+		$canonical_terms     = array_values(
 			array_filter(
-				$canonical_terms,
+				$all_canonical_terms,
 				static function ( $term ): bool {
 					return absint( get_term_meta( $term->term_id, '_artist_profile_id', true ) ) > 0;
 				}
 			)
 		);
-		$mappings        = array();
-		foreach ( $canonical_terms as $term ) {
+		$mappings            = array();
+		foreach ( $all_canonical_terms as $term ) {
 			$mappings[ (int) $term->term_id ] = absint( get_term_meta( $term->term_id, EXTRACHILL_EVENTS_ARTIST_TERM_META, true ) );
 		}
 	} finally {
@@ -355,7 +375,7 @@ function extrachill_events_backfill_artist_identity() {
 	}
 
 	$canonical_by_slug = array();
-	foreach ( $canonical_terms as $term ) {
+	foreach ( $all_canonical_terms as $term ) {
 		$canonical_by_slug[ (string) $term->slug ][] = $term;
 	}
 
@@ -399,9 +419,17 @@ function extrachill_events_backfill_artist_identity() {
 
 		switch_to_blog( $main_blog_id );
 		try {
-			update_term_meta( $canonical_id, EXTRACHILL_EVENTS_ARTIST_TERM_META, $local_id );
+			$updated = update_term_meta( $canonical_id, EXTRACHILL_EVENTS_ARTIST_TERM_META, $local_id );
 		} finally {
 			restore_current_blog();
+		}
+		if ( false === $updated || is_wp_error( $updated ) ) {
+			$report['complete']         = false;
+			$report['write_failures'][] = array(
+				'artist_term_id' => $canonical_id,
+				'events_term_id' => $local_id,
+			);
+			continue;
 		}
 		$claims[ $local_id ] = array( $canonical_id );
 		$report['mapped'][]  = array(

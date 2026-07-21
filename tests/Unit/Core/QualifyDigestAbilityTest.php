@@ -235,6 +235,120 @@ class QualifyDigestAbilityTest extends TestCase {
 	}
 
 	/**
+	 * Every digest event section uses the same site-local half-open window.
+	 */
+	public function test_all_digest_sections_exclude_exact_end_boundary_in_site_timezone(): void {
+		$GLOBALS['ec_digest_timezone'] = 'America/New_York';
+		$verdict_rows                  = array(
+			array(
+				'id'           => 1,
+				'url_hash'     => 'qualified-start',
+				'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
+				'qualified_at' => '2026-07-01 00:00:00',
+			),
+			array(
+				'id'           => 2,
+				'url_hash'     => 'qualified-end',
+				'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
+				'qualified_at' => '2026-07-08 00:00:00',
+			),
+			array(
+				'id'               => 3,
+				'url_hash'         => 'gap-start',
+				'verdict'          => QualifyVerdict::EXTRACTION_GAP,
+				'qualified_at'     => '2026-07-01 00:00:00',
+				'improvement_hint' => 'inside gap',
+			),
+			array(
+				'id'               => 4,
+				'url_hash'         => 'gap-end',
+				'verdict'          => QualifyVerdict::EXTRACTION_GAP,
+				'qualified_at'     => '2026-07-08 00:00:00',
+				'improvement_hint' => 'excluded gap',
+			),
+			array(
+				'id'           => 5,
+				'url_hash'     => 'unsupported-start',
+				'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+				'qualified_at' => '2026-07-01 00:00:00',
+			),
+			array(
+				'id'           => 6,
+				'url_hash'     => 'unsupported-end',
+				'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+				'qualified_at' => '2026-07-08 00:00:00',
+			),
+		);
+		$flow_rows                     = array(
+			array(
+				'flow_id'           => 1,
+				'flow_name'         => 'Paused Start',
+				'scheduling_config' => wp_json_encode(
+					array(
+						'paused_at'     => '2026-07-01 00:00:00',
+						'paused_reason' => QualifyVerdict::EXTRACTION_GAP,
+					)
+				),
+			),
+			array(
+				'flow_id'           => 2,
+				'flow_name'         => 'Paused End',
+				'scheduling_config' => wp_json_encode(
+					array(
+						'paused_at'     => '2026-07-08 00:00:00',
+						'paused_reason' => QualifyVerdict::UNSUPPORTED_SOURCE,
+					)
+				),
+			),
+			array(
+				'flow_id'           => 3,
+				'flow_name'         => 'Resumed Start',
+				'scheduling_config' => wp_json_encode(
+					array(
+						'resumed_at'         => '2026-07-01 00:00:00',
+						'resumed_by_qualify' => true,
+					)
+				),
+			),
+			array(
+				'flow_id'           => 4,
+				'flow_name'         => 'Resumed End',
+				'scheduling_config' => wp_json_encode(
+					array(
+						'resumed_at'         => '2026-07-08 00:00:00',
+						'resumed_by_qualify' => true,
+					)
+				),
+			),
+		);
+		$wpdb                          = new QualifyDigestWpdbStub( $verdict_rows, $flow_rows );
+		$GLOBALS['wpdb']               = $wpdb; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Test installs an isolated database stub.
+
+		$data = ( new QualifyDigestAbilities() )->gather_data(
+			strtotime( '2026-07-01 04:00:00 UTC' ),
+			strtotime( '2026-07-08 04:00:00 UTC' )
+		);
+
+		$this->assertSame( array( QualifyVerdict::EXTRACTION_GAP => 1 ), $data['paused_by_verdict'] );
+		$this->assertSame( 1, $data['counts']['resumed_total'] );
+		$this->assertSame( 1, $data['counts']['new_qualified_total'] );
+		$this->assertSame( 1, $data['counts']['unsupported_total'] );
+		$this->assertSame(
+			array(
+				array(
+					'hint'  => 'inside gap',
+					'count' => 1,
+				),
+			),
+			$data['top_extraction_gap']
+		);
+		$this->assertStringContainsString( 'qualified_at <', $wpdb->qualified_query );
+		$this->assertStringNotContainsString( 'qualified_at <=', $wpdb->qualified_query );
+		$this->assertStringContainsString( 'qualified_at <', $wpdb->gap_query );
+		$this->assertStringNotContainsString( 'qualified_at <=', $wpdb->gap_query );
+	}
+
+	/**
 	 * Verify each edge case in the canonical latest unsupported contract.
 	 *
 	 * @param array<int,array<string,mixed>> $rows     Verdict history.

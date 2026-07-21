@@ -36,11 +36,32 @@ class QualifyDigestWpdbStub {
 	public string $unsupported_query = '';
 
 	/**
+	 * Captured newly-qualified query.
+	 *
+	 * @var string
+	 */
+	public string $qualified_query = '';
+
+	/**
+	 * Captured extraction-gap query.
+	 *
+	 * @var string
+	 */
+	public string $gap_query = '';
+
+	/**
 	 * Seeded verdict history.
 	 *
 	 * @var array<int,array<string,mixed>>
 	 */
 	private array $verdict_rows;
+
+	/**
+	 * Seeded flow rows.
+	 *
+	 * @var array<int,array<string,mixed>>
+	 */
+	private array $flow_rows;
 
 	/**
 	 * Arguments keyed by prepared SQL.
@@ -53,9 +74,11 @@ class QualifyDigestWpdbStub {
 	 * Seed verdict history.
 	 *
 	 * @param array<int,array<string,mixed>> $verdict_rows Seeded verdict rows.
+	 * @param array<int,array<string,mixed>> $flow_rows    Seeded flow rows.
 	 */
-	public function __construct( array $verdict_rows ) {
+	public function __construct( array $verdict_rows, array $flow_rows = array() ) {
 		$this->verdict_rows = $verdict_rows;
+		$this->flow_rows    = $flow_rows;
 	}
 
 	/**
@@ -74,14 +97,38 @@ class QualifyDigestWpdbStub {
 	}
 
 	/**
-	 * Return no flow or extraction-gap rows for digest setup queries.
+	 * Return seeded flow rows and grouped extraction-gap rows.
 	 *
 	 * @param string $sql    SQL query.
 	 * @param mixed  $output Output mode.
 	 * @return array Empty rows.
 	 */
 	public function get_results( string $sql, $output = ARRAY_A ): array {
-		unset( $sql, $output );
+		unset( $output );
+		if ( false !== strpos( $sql, 'SELECT flow_id, flow_name, scheduling_config' ) ) {
+			return $this->flow_rows;
+		}
+		if ( false !== strpos( $sql, "verdict = '" . QualifyVerdict::EXTRACTION_GAP . "'" ) ) {
+			$this->gap_query = $sql;
+			$args            = $this->prepared_args[ $sql ];
+			$counts          = array();
+			foreach ( $this->verdict_rows as $row ) {
+				if ( QualifyVerdict::EXTRACTION_GAP === $row['verdict']
+					&& $row['qualified_at'] >= $args[1]
+					&& $row['qualified_at'] < $args[2] ) {
+					$hint            = $row['improvement_hint'] ?? '';
+					$counts[ $hint ] = ( $counts[ $hint ] ?? 0 ) + 1;
+				}
+			}
+			$rows = array();
+			foreach ( $counts as $hint => $count ) {
+				$rows[] = array(
+					'improvement_hint' => $hint,
+					'c'                => $count,
+				);
+			}
+			return $rows;
+		}
 		return array();
 	}
 
@@ -94,6 +141,19 @@ class QualifyDigestWpdbStub {
 	public function get_var( string $sql ) {
 		if ( 0 === strpos( $sql, 'SHOW TABLES LIKE' ) ) {
 			return $this->prefix . 'dme_qualify_verdicts';
+		}
+		if ( false !== strpos( $sql, "verdict = '" . QualifyVerdict::QUALIFIED_STRUCTURED . "'" ) ) {
+			$this->qualified_query = $sql;
+			$args                  = $this->prepared_args[ $sql ];
+			$count                 = 0;
+			foreach ( $this->verdict_rows as $row ) {
+				if ( QualifyVerdict::QUALIFIED_STRUCTURED === $row['verdict']
+					&& $row['qualified_at'] >= $args[1]
+					&& $row['qualified_at'] < $args[2] ) {
+					++$count;
+				}
+			}
+			return $count;
 		}
 		if ( false === strpos( $sql, "current_verdict.verdict = '" . QualifyVerdict::UNSUPPORTED_SOURCE . "'" ) ) {
 			return 0;

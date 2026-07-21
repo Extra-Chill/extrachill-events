@@ -211,16 +211,14 @@ class QualifyDigestAbilities {
 			if ( ! is_array( $cfg ) ) {
 				continue;
 			}
-			$paused_at_str = (string) ( $cfg['paused_at'] ?? '' );
-			$paused_at_ts  = '' !== $paused_at_str ? strtotime( $paused_at_str . ' UTC' ) : false;
-			if ( $paused_at_ts && $paused_at_ts >= $start_ts && $paused_at_ts <= $end_ts ) {
+			$paused_at_ts = self::site_datetime_timestamp( (string) ( $cfg['paused_at'] ?? '' ), $timezone );
+			if ( null !== $paused_at_ts && $paused_at_ts >= $start_ts && $paused_at_ts < $end_ts ) {
 				$verdict                       = (string) ( $cfg['paused_reason'] ?? 'unknown' );
 				$paused_by_verdict[ $verdict ] = ( $paused_by_verdict[ $verdict ] ?? 0 ) + 1;
 			}
 
-			$resumed_at_str = (string) ( $cfg['resumed_at'] ?? '' );
-			$resumed_at_ts  = '' !== $resumed_at_str ? strtotime( $resumed_at_str . ' UTC' ) : false;
-			if ( $resumed_at_ts && $resumed_at_ts >= $start_ts && $resumed_at_ts <= $end_ts && ! empty( $cfg['resumed_by_qualify'] ) ) {
+			$resumed_at_ts = self::site_datetime_timestamp( (string) ( $cfg['resumed_at'] ?? '' ), $timezone );
+			if ( null !== $resumed_at_ts && $resumed_at_ts >= $start_ts && $resumed_at_ts < $end_ts && ! empty( $cfg['resumed_by_qualify'] ) ) {
 				++$resumed_count;
 			}
 
@@ -267,7 +265,7 @@ class QualifyDigestAbilities {
 			$new_qualified = (int) $wpdb->get_var(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at <= %s",
+					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at < %s",
 					QualifyVerdict::QUALIFIED_STRUCTURED,
 					$start,
 					$end
@@ -291,7 +289,7 @@ class QualifyDigestAbilities {
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 					"SELECT improvement_hint, COUNT(*) AS c FROM {$verdicts_table}
-					 WHERE verdict = %s AND qualified_at >= %s AND qualified_at <= %s
+					 WHERE verdict = %s AND qualified_at >= %s AND qualified_at < %s
 					 GROUP BY improvement_hint
 					 ORDER BY c DESC LIMIT 3",
 					QualifyVerdict::EXTRACTION_GAP,
@@ -472,5 +470,21 @@ class QualifyDigestAbilities {
 		$lines[] = 'Run: wp extrachill venues qualify-stats   for the full breakdown.';
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Parse a DATETIME stored by current_time( 'mysql' ) in the site timezone.
+	 *
+	 * @param string        $value    Stored local DATETIME value.
+	 * @param \DateTimeZone $timezone Site timezone.
+	 * @return int|null Unix timestamp, or null for an invalid value.
+	 */
+	private static function site_datetime_timestamp( string $value, \DateTimeZone $timezone ): ?int {
+		if ( '' === $value ) {
+			return null;
+		}
+
+		$date = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $value, $timezone );
+		return false === $date ? null : $date->getTimestamp();
 	}
 }

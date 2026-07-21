@@ -205,7 +205,8 @@ final class CanonicalAdapterContractsTest extends TestCase {
 				'startTime'      => '20:00:00',
 				'endDate'        => '2026-08-09',
 				'endTime'        => '00:30:00',
-				'performerName'  => 'Kid Lake',
+				'performer'      => 'Kid Lake',
+				'performerType'  => 'MusicGroup',
 				'organizer'      => 'Extra Chill',
 				'organizerUrl'   => 'https://extrachill.com',
 				'organizerType'  => 'promoter',
@@ -237,7 +238,8 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		);
 		$event   = $adapted['dates'][0]['events'][0];
 
-		$this->assertSame( $canonical_event['event_data']['performerName'], $event['performer']['name'] );
+		$this->assertSame( $canonical_event['event_data']['performer'], $event['performer']['name'] );
+		$this->assertSame( $canonical_event['event_data']['performerType'], $event['performer']['type'] );
 		$this->assertSame( $canonical_event['event_data']['eventStatus'], $event['status'] );
 		$this->assertSame( $canonical_event['display_context'], $event['occurrence_context'] );
 		$this->assertSame( 'kid-lake', $event['taxonomies']['artist'][0]['slug'] );

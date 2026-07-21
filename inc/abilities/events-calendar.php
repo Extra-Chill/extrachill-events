@@ -256,7 +256,10 @@ function extrachill_events_transform_calendar_event( array $event ): array {
 			'url'  => $event_data['organizerUrl'] ?? '',
 			'type' => $event_data['organizerType'] ?? '',
 		),
-		'performer'          => array( 'name' => $event_data['performerName'] ?? '' ),
+		'performer'          => array(
+			'name' => $event_data['performer'] ?? '',
+			'type' => $event_data['performerType'] ?? '',
+		),
 		'taxonomies'         => extrachill_events_get_calendar_taxonomies( $post_id ),
 		'status'             => $event_data['eventStatus'] ?? null,
 		'occurrence_context' => $event['display_context'] ?? array(),

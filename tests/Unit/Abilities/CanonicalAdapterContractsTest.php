@@ -204,15 +204,29 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		$this->assertSame( $fixture['event']['organizer'], $event['organizer'] );
 		$this->assertSame( $fixture['event']['status'], $event['status'] );
 		$this->assertSame( $fixture['occurrence']['display_context'], $event['occurrence_context'] );
+		$this->assertSame( $fixture['occurrence']['display'], $event['occurrence_display'] );
+		$this->assertSame( $fixture['event']['id'], $event['id'] );
+		$this->assertSame(
+			$fixture['event']['date']['start_date'] . 'T' . $fixture['event']['date']['start_time'],
+			$event['datetime']
+		);
+		$this->assertSame(
+			$fixture['event']['date']['end_date'] . 'T' . $fixture['event']['date']['end_time'],
+			$event['end_datetime']
+		);
 		foreach ( array( 'artist', 'location', 'promoter' ) as $taxonomy ) {
 			$this->assertSame( $fixture['event']['taxonomies'][ $taxonomy ], $event['taxonomies'][ $taxonomy ] );
+			$this->assertNotEmpty( $event['taxonomies'][ $taxonomy ] );
+			foreach ( $event['taxonomies'][ $taxonomy ] as $term ) {
+				$this->assertSame( array( 'term_id', 'name', 'slug' ), array_keys( $term ) );
+			}
 		}
-		foreach ( array( 'address', 'city', 'state', 'zip', 'country', 'coordinates', 'timezone' ) as $field ) {
+		foreach ( array( 'address', 'formatted_address', 'city', 'state', 'zip', 'country', 'coordinates', 'timezone', 'website' ) as $field ) {
 			$this->assertSame( $fixture['event']['venue'][ $field ], $event['venue'][ $field ], $field );
 		}
 
 		// Existing API callers retain their original transport fields.
-		foreach ( array( 'id', 'title', 'datetime', 'end_datetime', 'venue', 'ticket_url', 'permalink' ) as $field ) {
+		foreach ( array( 'id', 'title', 'datetime', 'end_datetime', 'venue', 'occurrence_display', 'ticket_url', 'permalink' ) as $field ) {
 			$this->assertArrayHasKey( $field, $event );
 		}
 	}

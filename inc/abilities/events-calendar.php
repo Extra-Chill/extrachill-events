@@ -250,6 +250,7 @@ function extrachill_events_transform_calendar_event( array $occurrence ): array 
 		'taxonomies'         => $event['taxonomies'],
 		'status'             => $event['status'],
 		'occurrence_context' => $occurrence['occurrence']['display_context'],
+		'occurrence_display' => $occurrence['occurrence']['display'],
 		'ticket_url'         => '' !== $event['ticket']['url'] ? $event['ticket']['url'] : null,
 		'permalink'          => get_permalink( $post_id ),
 	);

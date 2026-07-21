@@ -182,8 +182,9 @@ class QualifyDigestAbilities {
 	public function gather_data( int $start_ts, int $end_ts ): array {
 		global $wpdb;
 
-		$start = gmdate( 'Y-m-d H:i:s', $start_ts );
-		$end   = gmdate( 'Y-m-d H:i:s', $end_ts );
+		$timezone = wp_timezone();
+		$start    = wp_date( 'Y-m-d H:i:s', $start_ts, $timezone );
+		$end      = wp_date( 'Y-m-d H:i:s', $end_ts, $timezone );
 
 		$verdicts_table = QualifyVerdictsTable::table_name();
 		$flows_table    = $wpdb->prefix . 'datamachine_flows';
@@ -272,22 +273,10 @@ class QualifyDigestAbilities {
 					$end
 				)
 			);
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-			$unsupported_sources = (int) $wpdb->get_var(
-				// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-				$wpdb->prepare(
-					"SELECT COUNT(*) FROM {$verdicts_table} v
-					 INNER JOIN (
-						 SELECT url_hash, MAX(id) AS max_id
-						 FROM {$verdicts_table}
-						 GROUP BY url_hash
-					 ) latest ON latest.max_id = v.id
-					 WHERE v.verdict = %s AND v.qualified_at >= %s AND v.qualified_at <= %s",
-					QualifyVerdict::UNSUPPORTED_SOURCE,
-					$start,
-					$end
-				)
-				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$unsupported_sources = QualifyVerdictsTable::count_latest_verdicts_in_window(
+				QualifyVerdict::UNSUPPORTED_SOURCE,
+				$start,
+				$end
 			);
 		}
 

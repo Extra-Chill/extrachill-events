@@ -76,8 +76,10 @@ if ( ! function_exists( 'get_term_link' ) ) {
 	}
 }
 if ( ! function_exists( 'get_post_meta' ) ) {
-	function get_post_meta() {
-		return '';
+	function get_post_meta( $post_id, $key ) {
+		$GLOBALS['ec_adapter_meta_reads'][] = array( $post_id, $key );
+
+		return $GLOBALS['ec_adapter_post_meta'][ $post_id ][ $key ] ?? '';
 	}
 }
 if ( ! function_exists( 'get_permalink' ) ) {
@@ -105,6 +107,8 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		$GLOBALS['ec_adapter_primed_ids']    = array();
 		$GLOBALS['ec_adapter_venue_reads']   = array();
 		$GLOBALS['ec_adapter_relationships'] = array();
+		$GLOBALS['ec_adapter_meta_reads']    = array();
+		$GLOBALS['ec_adapter_post_meta']     = array();
 		$GLOBALS['ec_adapter_venues']        = array(
 			44 => array(
 				'term_id'     => 44,
@@ -198,6 +202,7 @@ final class CanonicalAdapterContractsTest extends TestCase {
 
 	public function test_calendar_adapter_preserves_canonical_event_and_occurrence_contracts(): void {
 		$fixture = $this->load_pinned_dme_contract();
+		$GLOBALS['ec_adapter_post_meta'][ $fixture['event']['id'] ]['_datamachine_ticket_url'] = 'https://tickets.example/fallback';
 		$event   = extrachill_events_transform_calendar_event( $fixture );
 
 		$this->assertSame( $fixture['event']['performer'], $event['performer'] );
@@ -205,6 +210,8 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		$this->assertSame( $fixture['event']['status'], $event['status'] );
 		$this->assertSame( $fixture['occurrence']['display_context'], $event['occurrence_context'] );
 		$this->assertSame( $fixture['occurrence']['display'], $event['occurrence_display'] );
+		$this->assertSame( $fixture['event']['ticket']['url'], $event['ticket_url'] );
+		$this->assertSame( array(), $GLOBALS['ec_adapter_meta_reads'], 'Canonical ticket URL must avoid the legacy meta fallback.' );
 		$this->assertSame( $fixture['event']['id'], $event['id'] );
 		$this->assertSame(
 			$fixture['event']['date']['start_date'] . 'T' . $fixture['event']['date']['start_time'],
@@ -229,6 +236,18 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		foreach ( array( 'id', 'title', 'datetime', 'end_datetime', 'venue', 'occurrence_display', 'ticket_url', 'permalink' ) as $field ) {
 			$this->assertArrayHasKey( $field, $event );
 		}
+	}
+
+	public function test_calendar_adapter_falls_back_to_legacy_ticket_meta_when_canonical_url_is_empty(): void {
+		$fixture = $this->load_pinned_dme_contract();
+		$post_id = $fixture['event']['id'];
+		$fixture['event']['ticket']['url'] = '';
+		$GLOBALS['ec_adapter_post_meta'][ $post_id ]['_datamachine_ticket_url'] = 'https://tickets.example/fallback';
+
+		$event = extrachill_events_transform_calendar_event( $fixture );
+
+		$this->assertSame( 'https://tickets.example/fallback', $event['ticket_url'] );
+		$this->assertSame( array( array( $post_id, '_datamachine_ticket_url' ) ), $GLOBALS['ec_adapter_meta_reads'] );
 	}
 
 	public function test_calendar_contract_pin_rejects_producer_version_and_hash_drift(): void {

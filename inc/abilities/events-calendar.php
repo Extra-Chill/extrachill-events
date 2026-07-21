@@ -238,6 +238,10 @@ function extrachill_events_transform_calendar_event( array $occurrence ): array 
 	if ( '' !== $date['end_date'] ) {
 		$end_datetime = $date['end_date'] . 'T' . ( '' !== $date['end_time'] ? $date['end_time'] : '23:59:59' );
 	}
+	$ticket_url = $event['ticket']['url'];
+	if ( '' === $ticket_url ) {
+		$ticket_url = (string) get_post_meta( $post_id, '_datamachine_ticket_url', true );
+	}
 
 	return array(
 		'id'                 => $post_id,
@@ -251,7 +255,7 @@ function extrachill_events_transform_calendar_event( array $occurrence ): array 
 		'status'             => $event['status'],
 		'occurrence_context' => $occurrence['occurrence']['display_context'],
 		'occurrence_display' => $occurrence['occurrence']['display'],
-		'ticket_url'         => '' !== $event['ticket']['url'] ? $event['ticket']['url'] : null,
+		'ticket_url'         => '' !== $ticket_url ? $ticket_url : null,
 		'permalink'          => get_permalink( $post_id ),
 	);
 }

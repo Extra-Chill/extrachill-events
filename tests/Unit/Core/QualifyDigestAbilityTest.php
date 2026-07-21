@@ -26,6 +26,7 @@ class QualifyDigestAbilityTest extends TestCase {
 				'paused_total'        => 4,
 				'resumed_total'       => 12,
 				'new_qualified_total' => 18,
+				'unsupported_total'   => 9,
 				'stale_total'         => 1,
 			),
 			'paused_by_verdict'  => array(
@@ -72,6 +73,7 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertStringContainsString( 'Paused this week:        4 flows', $body );
 		$this->assertStringContainsString( 'Auto-resumed this week:  12 flows', $body );
 		$this->assertStringContainsString( 'New venues qualified:    18', $body );
+		$this->assertStringContainsString( 'Unsupported sources:     9', $body );
 		$this->assertStringContainsString( 'Stale paused flows:      1', $body );
 	}
 
@@ -113,6 +115,7 @@ class QualifyDigestAbilityTest extends TestCase {
 				'paused_total'        => 0,
 				'resumed_total'       => 0,
 				'new_qualified_total' => 0,
+				'unsupported_total'   => 0,
 				'stale_total'         => 0,
 			),
 			'paused_by_verdict'  => array(),
@@ -136,5 +139,6 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertStringContainsString( '147', $body, 'standing inventory active:daily count' );
 		$this->assertStringContainsString( '22', $body, 'paused extraction_gap count' );
 		$this->assertStringContainsString( '18', $body, 'new qualified total' );
+		$this->assertStringContainsString( '9', $body, 'unsupported source total' );
 	}
 }

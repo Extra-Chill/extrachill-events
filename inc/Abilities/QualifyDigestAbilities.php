@@ -258,7 +258,8 @@ class QualifyDigestAbilities {
 
 		// Newly-qualified venues this week — count of QUALIFIED_STRUCTURED
 		// verdict rows in the window.
-		$new_qualified = 0;
+		$new_qualified       = 0;
+		$unsupported_sources = 0;
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 		if ( $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -267,6 +268,16 @@ class QualifyDigestAbilities {
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at <= %s",
 					QualifyVerdict::QUALIFIED_STRUCTURED,
+					$start,
+					$end
+				)
+			);
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+			$unsupported_sources = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
+					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at <= %s",
+					QualifyVerdict::UNSUPPORTED_SOURCE,
 					$start,
 					$end
 				)
@@ -305,6 +316,7 @@ class QualifyDigestAbilities {
 			'paused_total'        => array_sum( $paused_by_verdict ),
 			'resumed_total'       => $resumed_count,
 			'new_qualified_total' => $new_qualified,
+			'unsupported_total'   => $unsupported_sources,
 			'stale_total'         => count( $stale_flows ),
 		);
 
@@ -339,6 +351,7 @@ class QualifyDigestAbilities {
 		$h .= '<tr><td>Flows paused this week</td><td class="count">' . (int) $data['counts']['paused_total'] . '</td></tr>';
 		$h .= '<tr><td>Flows auto-resumed this week</td><td class="count">' . (int) $data['counts']['resumed_total'] . '</td></tr>';
 		$h .= '<tr><td>New venues qualified</td><td class="count">' . (int) $data['counts']['new_qualified_total'] . '</td></tr>';
+		$h .= '<tr><td>Unsupported sources identified</td><td class="count">' . (int) ( $data['counts']['unsupported_total'] ?? 0 ) . '</td></tr>';
 		$h .= '<tr><td>Stale paused flows (need review)</td><td class="count">' . (int) $data['counts']['stale_total'] . '</td></tr>';
 		$h .= '</table>';
 
@@ -415,6 +428,7 @@ class QualifyDigestAbilities {
 		$lines[] = sprintf( 'Paused this week:        %d flows', (int) $data['counts']['paused_total'] );
 		$lines[] = sprintf( 'Auto-resumed this week:  %d flows', (int) $data['counts']['resumed_total'] );
 		$lines[] = sprintf( 'New venues qualified:    %d', (int) $data['counts']['new_qualified_total'] );
+		$lines[] = sprintf( 'Unsupported sources:     %d', (int) ( $data['counts']['unsupported_total'] ?? 0 ) );
 		$lines[] = sprintf( 'Stale paused flows:      %d', (int) $data['counts']['stale_total'] );
 		$lines[] = '';
 

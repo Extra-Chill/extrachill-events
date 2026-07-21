@@ -48,16 +48,34 @@ class QualifyDigestAbilityTest extends TestCase {
 			),
 			'top_extraction_gap' => array(
 				array(
-					'hint'  => 'squarespace — no upcoming array',
-					'count' => 8,
+					'category'            => 'extractor',
+					'platform'            => 'squarespace',
+					'structured_signal'   => 'none',
+					'page_shape'          => 'listing',
+					'extractor'           => 'SquarespaceExtractor',
+					'reason'              => 'attempt_failed',
+					'count'               => 8,
+					'representative_urls' => array( 'https://venue-one.example/events' ),
 				),
 				array(
-					'hint'  => 'wordpress_generic — no Tribe plugin',
-					'count' => 5,
+					'category'            => 'extractor',
+					'platform'            => 'wordpress_generic',
+					'structured_signal'   => 'jsonld',
+					'page_shape'          => 'listing',
+					'extractor'           => 'JsonLdExtractor',
+					'reason'              => 'attempt_failed',
+					'count'               => 5,
+					'representative_urls' => array( 'https://venue-two.example/calendar' ),
 				),
 				array(
-					'hint'  => 'wix — no events block',
-					'count' => 3,
+					'category'            => 'non_actionable',
+					'platform'            => 'facebook.com',
+					'structured_signal'   => 'none',
+					'page_shape'          => 'unknown',
+					'extractor'           => 'none',
+					'reason'              => 'login_wall',
+					'count'               => 3,
+					'representative_urls' => array( 'https://facebook.com/venue' ),
 				),
 			),
 			'stale_flows'        => array(
@@ -84,13 +102,14 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertStringContainsString( 'Stale paused flows:      1', $body );
 	}
 
-	public function test_text_renderer_contains_top_3_fingerprints(): void {
+	public function test_text_renderer_contains_ranked_cohorts_and_urls(): void {
 		$ability = new QualifyDigestAbilities();
 		$body    = $ability->render_text( $this->seed_data(), time() - WEEK_IN_SECONDS, time() );
 
-		$this->assertStringContainsString( 'squarespace — no upcoming array', $body );
-		$this->assertStringContainsString( 'wordpress_generic — no Tribe plugin', $body );
-		$this->assertStringContainsString( 'wix — no events block', $body );
+		$this->assertStringContainsString( 'extractor: platform=squarespace, signal=none, shape=listing, extractor=SquarespaceExtractor, reason=attempt_failed', $body );
+		$this->assertStringContainsString( 'extractor: platform=wordpress_generic, signal=jsonld, shape=listing, extractor=JsonLdExtractor, reason=attempt_failed', $body );
+		$this->assertStringContainsString( 'non_actionable: platform=facebook.com, signal=none, shape=unknown, extractor=none, reason=login_wall', $body );
+		$this->assertStringContainsString( 'https://venue-one.example/events', $body );
 	}
 
 	public function test_text_renderer_surfaces_stale_flows(): void {
@@ -111,7 +130,7 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertStringContainsString( '<h2>Summary</h2>', $body );
 		$this->assertStringContainsString( '<h2>Paused this week — by verdict</h2>', $body );
 		$this->assertStringContainsString( '<h2>Standing inventory</h2>', $body );
-		$this->assertStringContainsString( '<h2>Top extraction_gap fingerprints</h2>', $body );
+		$this->assertStringContainsString( '<h2>Top extraction_gap remediation cohorts</h2>', $body );
 		$this->assertStringContainsString( '<h2>Stale paused flows — manual review recommended</h2>', $body );
 	}
 

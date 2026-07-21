@@ -13,6 +13,7 @@
 
 namespace ExtraChillEvents\Cli;
 
+use ExtraChillEvents\Core\QualifyCohortDeriver;
 use ExtraChillEvents\Core\QualifyVerdict;
 use ExtraChillEvents\Core\QualifyVerdictsTable;
 
@@ -68,7 +69,9 @@ class QualifyStatsCommand {
 		$days   = max( 1, (int) ( $assoc_args['days'] ?? 30 ) );
 		$format = $assoc_args['format'] ?? 'table';
 
-		$rows = $this->aggregate_latest( $days );
+		$latest_rows = $this->latest_rows( $days );
+		$rows        = $this->aggregate_latest( $latest_rows );
+		$cohorts     = QualifyCohortDeriver::group( $latest_rows );
 
 		if ( 'json' === $format ) {
 			\WP_CLI::log(
@@ -77,6 +80,7 @@ class QualifyStatsCommand {
 						'days'           => $days,
 						'total_urls'     => array_sum( array_column( $rows, 'count' ) ),
 						'verdicts'       => array_values( $rows ),
+						'cohorts'        => $cohorts,
 						'guidance_index' => $this->guidance_index(),
 					),
 					JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
@@ -117,18 +121,38 @@ class QualifyStatsCommand {
 		}
 
 		\WP_CLI\Utils\format_items( $format, $table_rows, array( 'verdict', 'count', 'top_platforms' ) );
+
+		if ( empty( $cohorts ) ) {
+			return;
+		}
+
+		$cohort_rows = array_map(
+			static function ( array $cohort ): array {
+				$cohort['representative_urls'] = implode( ', ', $cohort['representative_urls'] );
+				return $cohort;
+			},
+			$cohorts
+		);
+		\WP_CLI::log( '' );
+		\WP_CLI::log( 'Remediation cohorts (latest verdict per URL):' );
+		\WP_CLI::log( '' );
+		\WP_CLI\Utils\format_items(
+			$format,
+			$cohort_rows,
+			array( 'category', 'platform', 'structured_signal', 'page_shape', 'extractor', 'reason', 'count', 'representative_urls' )
+		);
 	}
 
 	/**
-	 * Build the latest-verdict-per-URL histogram from the verdicts table.
+	 * Read one current row per canonical URL.
 	 *
 	 * The query keeps history-aware semantics: many runs against the same URL
 	 * collapse to a single "current" verdict (the most recent one).
 	 *
 	 * @param int $days Lookback window in days.
-	 * @return array<string,array{verdict:string,count:int,platforms:array<string,int>}>
+	 * @return array<int,array<string,mixed>>
 	 */
-	private function aggregate_latest( int $days ): array {
+	private function latest_rows( int $days ): array {
 		global $wpdb;
 		$table = QualifyVerdictsTable::table_name();
 
@@ -140,7 +164,7 @@ class QualifyStatsCommand {
 		// Table name is a trusted internal identifier built from $wpdb->prefix; $since_sql is itself a $wpdb->prepare() fragment with a bound %d placeholder.
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$rows = $wpdb->get_results(
-			"SELECT v.verdict, v.fingerprint
+			"SELECT v.url, v.verdict, v.fingerprint
 			FROM {$table} v
 			INNER JOIN (
 				SELECT url_hash, MAX(id) AS max_id
@@ -152,8 +176,19 @@ class QualifyStatsCommand {
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Build a verdict histogram from latest-verdict rows.
+	 *
+	 * @param array<int,array<string,mixed>> $rows Latest verdict rows.
+	 * @return array<string,array{verdict:string,count:int,platforms:array<string,int>,agent_guidance:string}>
+	 */
+	private function aggregate_latest( array $rows ): array {
+
 		$histogram = array();
-		foreach ( (array) $rows as $row ) {
+		foreach ( $rows as $row ) {
 			$verdict = (string) ( $row['verdict'] ?? '' );
 			if ( '' === $verdict ) {
 				continue;
@@ -184,9 +219,15 @@ class QualifyStatsCommand {
 			}
 		}
 
-		// Sort platforms by frequency for display.
+		// Sort platforms by frequency and then slug for deterministic output.
 		foreach ( $histogram as &$row ) {
-			arsort( $row['platforms'] );
+			uksort(
+				$row['platforms'],
+				static function ( string $a, string $b ) use ( $row ): int {
+					$count_order = $row['platforms'][ $b ] <=> $row['platforms'][ $a ];
+					return 0 !== $count_order ? $count_order : strcmp( $a, $b );
+				}
+			);
 		}
 		unset( $row );
 

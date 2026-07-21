@@ -92,6 +92,12 @@ require_once dirname( __DIR__, 3 ) . '/inc/abilities/events-check-venue-duplicat
 require_once dirname( __DIR__, 3 ) . '/inc/abilities/events-calendar.php';
 
 final class CanonicalAdapterContractsTest extends TestCase {
+	private const DME_CONTRACT_NAME = 'data-machine-events/calendar-occurrence';
+
+	private const DME_CONTRACT_VERSION = 1;
+
+	private const DME_CONTRACT_HASH = 'fd1cbb79a52c405f747eaacf30b161f444c210c75c5189d9e446623d2badc84f';
+
 	protected function setUp(): void {
 		parent::setUp();
 
@@ -191,47 +197,58 @@ final class CanonicalAdapterContractsTest extends TestCase {
 	}
 
 	public function test_calendar_adapter_preserves_canonical_event_and_occurrence_contracts(): void {
-		$fixture = json_decode(
-			(string) file_get_contents( dirname( __DIR__, 2 ) . '/Fixtures/dme-calendar-page-v0.49.4.json' ),
-			true,
-			512,
-			JSON_THROW_ON_ERROR
-		);
-		$this->assertSame( 'data-machine-events/get-calendar-page', $fixture['provenance']['producer'] );
+		$fixture = $this->load_pinned_dme_contract();
+		$event   = extrachill_events_transform_calendar_event( $fixture );
 
-		$canonical_event = $fixture['payload']['paged_date_groups'][0]['events'][0];
-		$post_id         = $canonical_event['post_id'];
-		foreach ( $fixture['canonical_context']['taxonomies'] as $taxonomy => $terms ) {
-			$GLOBALS['ec_adapter_relationships'][ $post_id ][ $taxonomy ] = array_map(
-				static fn( $term ) => new WP_Term( $term['term_id'], $term['name'], $term['slug'] ),
-				$terms
-			);
-		}
-		$canonical_venue                                       = $fixture['canonical_context']['venue'];
-		$GLOBALS['ec_adapter_venues'][ $canonical_venue['term_id'] ] = $canonical_venue;
-
-		$adapted = extrachill_events_transform_calendar_response( $fixture['payload'] );
-		$event   = $adapted['dates'][0]['events'][0];
-
-		$this->assertSame( $canonical_event['event_data']['performer'], $event['performer']['name'] );
-		$this->assertSame( $canonical_event['event_data']['performerType'], $event['performer']['type'] );
-		$this->assertSame( $canonical_event['event_data']['organizer'], $event['organizer']['name'] );
-		$this->assertSame( $canonical_event['event_data']['organizerType'], $event['organizer']['type'] );
-		$this->assertSame( $canonical_event['event_data']['eventStatus'], $event['status'] );
-		$this->assertSame( $canonical_event['display_context'], $event['occurrence_context'] );
+		$this->assertSame( $fixture['event']['performer'], $event['performer'] );
+		$this->assertSame( $fixture['event']['organizer'], $event['organizer'] );
+		$this->assertSame( $fixture['event']['status'], $event['status'] );
+		$this->assertSame( $fixture['occurrence']['display_context'], $event['occurrence_context'] );
 		foreach ( array( 'artist', 'location', 'promoter' ) as $taxonomy ) {
-			$this->assertSame(
-				array_column( $fixture['canonical_context']['taxonomies'][ $taxonomy ], 'slug' ),
-				array_column( $event['taxonomies'][ $taxonomy ], 'slug' )
-			);
+			$this->assertSame( $fixture['event']['taxonomies'][ $taxonomy ], $event['taxonomies'][ $taxonomy ] );
 		}
 		foreach ( array( 'address', 'city', 'state', 'zip', 'country', 'coordinates', 'timezone' ) as $field ) {
-			$this->assertSame( $canonical_venue[ $field ], $event['venue'][ $field ], $field );
+			$this->assertSame( $fixture['event']['venue'][ $field ], $event['venue'][ $field ], $field );
 		}
 
 		// Existing API callers retain their original transport fields.
 		foreach ( array( 'id', 'title', 'datetime', 'end_datetime', 'venue', 'ticket_url', 'permalink' ) as $field ) {
 			$this->assertArrayHasKey( $field, $event );
 		}
+	}
+
+	public function test_calendar_contract_pin_rejects_producer_version_and_hash_drift(): void {
+		$this->assertTrue( $this->verify_dme_contract_pin( self::DME_CONTRACT_VERSION, self::DME_CONTRACT_HASH ) );
+		$this->assertFalse( $this->verify_dme_contract_pin( self::DME_CONTRACT_VERSION + 1, self::DME_CONTRACT_HASH ) );
+		$this->assertFalse( $this->verify_dme_contract_pin( self::DME_CONTRACT_VERSION, str_repeat( '0', 64 ) ) );
+	}
+
+	private function load_pinned_dme_contract(): array {
+		$this->assertTrue( $this->verify_dme_contract_pin( self::DME_CONTRACT_VERSION, self::DME_CONTRACT_HASH ) );
+		$root = $this->dme_contract_root();
+
+		return json_decode( (string) file_get_contents( $root . '/calendar-occurrence-v1.json' ), true, 512, JSON_THROW_ON_ERROR );
+	}
+
+	private function verify_dme_contract_pin( int $version, string $hash ): bool {
+		$root          = $this->dme_contract_root();
+		$manifest_path = $root . '/calendar-occurrence-v1.manifest.json';
+		$manifest      = json_decode( (string) file_get_contents( $manifest_path ), true, 512, JSON_THROW_ON_ERROR );
+		$artifact_path = $root . '/' . $manifest['file'];
+
+		return self::DME_CONTRACT_NAME === $manifest['name']
+			&& $version === $manifest['version']
+			&& hash_equals( $hash, $manifest['sha256'] )
+			&& hash_equals( $manifest['sha256'], hash_file( 'sha256', $artifact_path ) );
+	}
+
+	private function dme_contract_root(): string {
+		$root = getenv( 'DME_CALENDAR_CONTRACT_ROOT' );
+		if ( false === $root || '' === $root ) {
+			$root = defined( 'DATA_MACHINE_EVENTS_PATH' ) ? DATA_MACHINE_EVENTS_PATH . 'contracts' : '';
+		}
+		$this->assertDirectoryExists( $root, 'A composed Data Machine Events contract source is required.' );
+
+		return rtrim( $root, '/' );
 	}
 }

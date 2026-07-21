@@ -26,6 +26,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class QualifyDigestAbilities {
+	private const VERDICT_PAGE_SIZE = 250;
 
 	private static bool $registered = false;
 
@@ -279,31 +280,51 @@ class QualifyDigestAbilities {
 			);
 		}
 
-		// Top current extraction-gap cohorts changed in this window. The inner
-		// query preserves canonical latest-verdict-per-URL semantics; grouping
-		// happens over bounded summaries derived from fingerprint evidence.
+		// Current remediation cohorts changed in this window. The inner query
+		// preserves canonical latest-verdict-per-URL semantics; keyset paging
+		// bounds fingerprint memory while incremental grouping retains only a
+		// fixed number of representative URLs per cohort.
 		$top_extraction_gap = array();
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 		if ( $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table ) {
-			// phpcs:disable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Read-only report against a trusted internal table name.
-			$gap_rows = (array) $wpdb->get_results(
-				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-					"SELECT v.url, v.verdict, v.fingerprint FROM {$verdicts_table} v
-					 INNER JOIN (
-						 SELECT url_hash, MAX(id) AS max_id
-						 FROM {$verdicts_table}
-						 GROUP BY url_hash
-					 ) latest ON latest.max_id = v.id
-					 WHERE v.verdict = %s AND v.qualified_at >= %s AND v.qualified_at < %s",
-					QualifyVerdict::EXTRACTION_GAP,
-					$start,
-					$end
-				),
-				ARRAY_A
-			);
-			// phpcs:enable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$top_extraction_gap = QualifyCohortDeriver::group( $gap_rows, 3 );
+			$cohort_state = QualifyCohortDeriver::start();
+			$after_id     = 0;
+			$page_count   = 0;
+			do {
+				// phpcs:disable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Read-only report against a trusted internal table name.
+				$gap_rows = (array) $wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT v.id, v.url, v.verdict, v.fingerprint FROM {$verdicts_table} v
+						 INNER JOIN (
+							 SELECT url_hash, MAX(id) AS max_id
+							 FROM {$verdicts_table}
+							 GROUP BY url_hash
+						 ) latest ON latest.max_id = v.id
+						 WHERE v.verdict IN (%s, %s)
+						 AND v.qualified_at >= %s AND v.qualified_at < %s
+						 AND v.id > %d
+						 ORDER BY v.id ASC
+						 LIMIT %d",
+						QualifyVerdict::EXTRACTION_GAP,
+						'unsupported_source',
+						$start,
+						$end,
+						$after_id,
+						self::VERDICT_PAGE_SIZE
+					),
+					ARRAY_A
+				);
+				// phpcs:enable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				if ( empty( $gap_rows ) ) {
+					break;
+				}
+				QualifyCohortDeriver::accumulate( $cohort_state, $gap_rows );
+				$last       = end( $gap_rows );
+				$after_id   = (int) ( $last['id'] ?? 0 );
+				$page_count = count( $gap_rows );
+			} while ( self::VERDICT_PAGE_SIZE === $page_count );
+
+			$top_extraction_gap = QualifyCohortDeriver::finish( $cohort_state, 3 );
 		}
 
 		$counts = array(
@@ -374,10 +395,10 @@ class QualifyDigestAbilities {
 			$h .= '</table>';
 		}
 
-		// Top extraction-gap remediation cohorts.
-		$h .= '<h2>Top extraction_gap remediation cohorts</h2>';
+		// Top qualification remediation cohorts.
+		$h .= '<h2>Top qualification remediation cohorts</h2>';
 		if ( empty( $data['top_extraction_gap'] ) ) {
-			$h .= '<p class="empty">No extraction_gap verdicts this week.</p>';
+			$h .= '<p class="empty">No remediation verdicts this week.</p>';
 		} else {
 			$h .= '<table><tr><th>Cohort</th><th>Representative URLs</th><th class="count">Count</th></tr>';
 			foreach ( $data['top_extraction_gap'] as $row ) {
@@ -445,7 +466,7 @@ class QualifyDigestAbilities {
 		}
 
 		if ( ! empty( $data['top_extraction_gap'] ) ) {
-			$lines[] = 'Top extraction_gap remediation cohorts:';
+			$lines[] = 'Top qualification remediation cohorts:';
 			$i       = 1;
 			foreach ( $data['top_extraction_gap'] as $row ) {
 				$label   = $this->format_cohort_label( $row );

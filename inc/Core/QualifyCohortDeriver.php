@@ -16,7 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class QualifyCohortDeriver {
 
-	private const REPRESENTATIVE_URL_LIMIT = 3;
+	private const REPRESENTATIVE_URL_LIMIT   = 3;
+	private const UNSUPPORTED_SOURCE_VERDICT = 'unsupported_source';
 
 	/**
 	 * Group latest-verdict rows into deterministic, bounded cohorts.
@@ -26,7 +27,30 @@ final class QualifyCohortDeriver {
 	 * @return array<int,array<string,mixed>>
 	 */
 	public static function group( array $rows, int $limit = 0 ): array {
-		$groups = array();
+		$groups = self::start();
+		self::accumulate( $groups, $rows );
+		return self::finish( $groups, $limit );
+	}
+
+	/**
+	 * Start an incremental cohort accumulator.
+	 *
+	 * @return array<string,array<string,mixed>>
+	 */
+	public static function start(): array {
+		return array();
+	}
+
+	/**
+	 * Add one bounded page of latest-verdict rows to an accumulator.
+	 *
+	 * Only the lexically first representative URLs are retained, so memory use
+	 * does not grow with the number of URLs in a cohort.
+	 *
+	 * @param array<string,array<string,mixed>> $groups Accumulator, passed by reference.
+	 * @param array<int,array<string,mixed>>    $rows   Latest verdict rows.
+	 */
+	public static function accumulate( array &$groups, array $rows ): void {
 
 		foreach ( $rows as $row ) {
 			if ( QualifyVerdict::is_qualified( (string) ( $row['verdict'] ?? '' ) ) ) {
@@ -44,18 +68,22 @@ final class QualifyCohortDeriver {
 
 			++$groups[ $key ]['count'];
 			$url = (string) ( $row['url'] ?? '' );
-			if ( '' !== $url ) {
+			if ( '' !== $url && ! in_array( $url, $groups[ $key ]['representative_urls'], true ) ) {
 				$groups[ $key ]['representative_urls'][] = $url;
+				sort( $groups[ $key ]['representative_urls'], SORT_STRING );
+				$groups[ $key ]['representative_urls'] = array_slice( $groups[ $key ]['representative_urls'], 0, self::REPRESENTATIVE_URL_LIMIT );
 			}
 		}
+	}
 
-		foreach ( $groups as &$group ) {
-			$group['representative_urls'] = array_values( array_unique( $group['representative_urls'] ) );
-			sort( $group['representative_urls'], SORT_STRING );
-			$group['representative_urls'] = array_slice( $group['representative_urls'], 0, self::REPRESENTATIVE_URL_LIMIT );
-		}
-		unset( $group );
-
+	/**
+	 * Sort and limit an incremental accumulator for output.
+	 *
+	 * @param array<string,array<string,mixed>> $groups Completed accumulator.
+	 * @param int                               $limit  Maximum cohorts to return. Zero means all.
+	 * @return array<int,array<string,mixed>>
+	 */
+	public static function finish( array $groups, int $limit = 0 ): array {
 		$groups = array_values( $groups );
 		usort(
 			$groups,
@@ -66,6 +94,13 @@ final class QualifyCohortDeriver {
 		);
 
 		return $limit > 0 ? array_slice( $groups, 0, $limit ) : $groups;
+	}
+
+	/**
+	 * Maximum representative URLs retained and emitted for each cohort.
+	 */
+	public static function representative_url_limit(): int {
+		return self::REPRESENTATIVE_URL_LIMIT;
 	}
 
 	/**
@@ -98,6 +133,18 @@ final class QualifyCohortDeriver {
 			return self::cohort( 'non_actionable', $platform, $signal, $shape, $attempt['extractor'], 'reservation_only' );
 		}
 
+		$final_url   = (string) ( $fingerprint['final_url'] ?? '' );
+		$source_host = self::url_host( $source_url );
+		if ( self::UNSUPPORTED_SOURCE_VERDICT === $verdict ) {
+			if ( self::is_login_wall( $final_url ) ) {
+				return self::cohort( 'non_actionable', self::url_host( $final_url ), $signal, $shape, $attempt['extractor'], 'login_wall' );
+			}
+			if ( self::is_social_host( $source_host ) ) {
+				return self::cohort( 'non_actionable', $source_host, $signal, $shape, $attempt['extractor'], 'unsupported_social_source' );
+			}
+			return self::cohort( 'non_actionable', $platform, $signal, $shape, $attempt['extractor'], 'unsupported_source' );
+		}
+
 		if ( ! empty( $fingerprint['timeout'] ) || 0 === $status || $status >= 500 ) {
 			return self::cohort( 'operational', $platform, $signal, $shape, $attempt['extractor'], ! empty( $fingerprint['timeout'] ) ? 'timeout' : 'http_' . $status );
 		}
@@ -107,9 +154,12 @@ final class QualifyCohortDeriver {
 			return self::cohort( 'operational', $platform, $signal, $shape, $attempt['extractor'], $reason );
 		}
 
-		$final_url = (string) ( $fingerprint['final_url'] ?? '' );
 		if ( self::is_login_wall( $final_url ) ) {
 			return self::cohort( 'non_actionable', self::url_host( $final_url ), $signal, $shape, $attempt['extractor'], 'login_wall' );
+		}
+
+		if ( self::is_social_host( $source_host ) ) {
+			return self::cohort( 'non_actionable', $source_host, $signal, $shape, $attempt['extractor'], 'unsupported_social_source' );
 		}
 
 		if ( QualifyVerdict::BOT_BLOCKED === $verdict ) {
@@ -126,11 +176,6 @@ final class QualifyCohortDeriver {
 
 		if ( 'unknown' !== $platform ) {
 			return self::cohort( 'extractor', $platform, $signal, $shape, $attempt['extractor'], $attempt['failure'] );
-		}
-
-		$source_host = self::url_host( $source_url );
-		if ( self::is_social_host( $source_host ) ) {
-			return self::cohort( 'non_actionable', $source_host, $signal, $shape, $attempt['extractor'], 'unsupported_social_source' );
 		}
 
 		$reason = self::cross_host_redirect( $source_url, $final_url ) ? 'redirect_no_event_evidence' : 'no_event_evidence';

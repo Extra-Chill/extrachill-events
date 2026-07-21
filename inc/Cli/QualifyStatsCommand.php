@@ -22,6 +22,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class QualifyStatsCommand {
+	private const PAGE_SIZE = 250;
 
 	/**
 	 * Show a verdict histogram from the persistent verdict log.
@@ -69,19 +70,35 @@ class QualifyStatsCommand {
 		$days   = max( 1, (int) ( $assoc_args['days'] ?? 30 ) );
 		$format = $assoc_args['format'] ?? 'table';
 
-		$latest_rows = $this->latest_rows( $days );
-		$rows        = $this->aggregate_latest( $latest_rows );
-		$cohorts     = QualifyCohortDeriver::group( $latest_rows );
+		$rows         = array();
+		$cohort_state = QualifyCohortDeriver::start();
+		$after_id     = 0;
+		$page_count   = 0;
+		do {
+			$page = $this->latest_rows_page( $days, $after_id, self::PAGE_SIZE );
+			if ( empty( $page ) ) {
+				break;
+			}
+			$this->aggregate_latest( $page, $rows );
+			QualifyCohortDeriver::accumulate( $cohort_state, $page );
+			$last       = end( $page );
+			$after_id   = (int) ( $last['id'] ?? 0 );
+			$page_count = count( $page );
+		} while ( self::PAGE_SIZE === $page_count );
+
+		$this->sort_histogram( $rows );
+		$cohorts = QualifyCohortDeriver::finish( $cohort_state );
 
 		if ( 'json' === $format ) {
 			\WP_CLI::log(
 				wp_json_encode(
 					array(
-						'days'           => $days,
-						'total_urls'     => array_sum( array_column( $rows, 'count' ) ),
-						'verdicts'       => array_values( $rows ),
-						'cohorts'        => $cohorts,
-						'guidance_index' => $this->guidance_index(),
+						'days'                     => $days,
+						'total_urls'               => array_sum( array_column( $rows, 'count' ) ),
+						'representative_url_limit' => QualifyCohortDeriver::representative_url_limit(),
+						'verdicts'                 => array_values( $rows ),
+						'cohorts'                  => $cohorts,
+						'guidance_index'           => $this->guidance_index(),
 					),
 					JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
 				)
@@ -135,6 +152,7 @@ class QualifyStatsCommand {
 		);
 		\WP_CLI::log( '' );
 		\WP_CLI::log( 'Remediation cohorts (latest verdict per URL):' );
+		\WP_CLI::log( sprintf( 'Representative URLs are capped at %d per cohort.', QualifyCohortDeriver::representative_url_limit() ) );
 		\WP_CLI::log( '' );
 		\WP_CLI\Utils\format_items(
 			$format,
@@ -144,15 +162,17 @@ class QualifyStatsCommand {
 	}
 
 	/**
-	 * Read one current row per canonical URL.
+	 * Read one bounded page of current rows per canonical URL.
 	 *
 	 * The query keeps history-aware semantics: many runs against the same URL
 	 * collapse to a single "current" verdict (the most recent one).
 	 *
-	 * @param int $days Lookback window in days.
+	 * @param int $days     Lookback window in days.
+	 * @param int $after_id Exclusive keyset cursor.
+	 * @param int $limit    Page size.
 	 * @return array<int,array<string,mixed>>
 	 */
-	private function latest_rows( int $days ): array {
+	private function latest_rows_page( int $days, int $after_id, int $limit ): array {
 		global $wpdb;
 		$table = QualifyVerdictsTable::table_name();
 
@@ -164,14 +184,21 @@ class QualifyStatsCommand {
 		// Table name is a trusted internal identifier built from $wpdb->prefix; $since_sql is itself a $wpdb->prepare() fragment with a bound %d placeholder.
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$rows = $wpdb->get_results(
-			"SELECT v.url, v.verdict, v.fingerprint
+			$wpdb->prepare(
+				"SELECT v.id, v.url, v.verdict, v.fingerprint
 			FROM {$table} v
 			INNER JOIN (
 				SELECT url_hash, MAX(id) AS max_id
 				FROM {$table}
 				WHERE 1=1{$since_sql}
 				GROUP BY url_hash
-			) latest ON latest.max_id = v.id",
+			) latest ON latest.max_id = v.id
+			WHERE v.id > %d
+			ORDER BY v.id ASC
+			LIMIT %d",
+				$after_id,
+				max( 1, $limit )
+			),
 			ARRAY_A
 		);
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -182,12 +209,10 @@ class QualifyStatsCommand {
 	/**
 	 * Build a verdict histogram from latest-verdict rows.
 	 *
-	 * @param array<int,array<string,mixed>> $rows Latest verdict rows.
-	 * @return array<string,array{verdict:string,count:int,platforms:array<string,int>,agent_guidance:string}>
+	 * @param array $rows      Latest verdict rows.
+	 * @param array $histogram Verdict histogram accumulator.
 	 */
-	private function aggregate_latest( array $rows ): array {
-
-		$histogram = array();
+	private function aggregate_latest( array $rows, array &$histogram ): void {
 		foreach ( $rows as $row ) {
 			$verdict = (string) ( $row['verdict'] ?? '' );
 			if ( '' === $verdict ) {
@@ -219,7 +244,14 @@ class QualifyStatsCommand {
 			}
 		}
 
-		// Sort platforms by frequency and then slug for deterministic output.
+	}
+
+	/**
+	 * Sort platform counts after all pages have been accumulated.
+	 *
+	 * @param array<string,array<string,mixed>> $histogram Verdict histogram.
+	 */
+	private function sort_histogram( array &$histogram ): void {
 		foreach ( $histogram as &$row ) {
 			uksort(
 				$row['platforms'],
@@ -230,13 +262,13 @@ class QualifyStatsCommand {
 			);
 		}
 		unset( $row );
-
-		return $histogram;
 	}
 
 	/**
 	 * Compact "top platforms" string for table output. Caps at 3 entries plus
 	 * an "(other)" bucket so the column stays readable.
+	 *
+	 * @param array $platforms Platform counts.
 	 */
 	private function format_platforms( array $platforms ): string {
 		if ( empty( $platforms ) ) {

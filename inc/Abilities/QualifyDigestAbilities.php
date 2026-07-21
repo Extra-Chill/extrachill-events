@@ -287,7 +287,8 @@ class QualifyDigestAbilities {
 			$unsupported_sources = QualifyVerdictsTable::count_latest_verdicts_in_window(
 				QualifyVerdict::UNSUPPORTED_SOURCE,
 				$start,
-				$end
+				$end,
+				$snapshot_id
 			);
 		}
 

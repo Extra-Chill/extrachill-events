@@ -245,11 +245,12 @@ class QualifyDigestAbilityTest extends TestCase {
 		$data = ( new QualifyDigestAbilities() )->gather_data( $start, $end );
 
 		$this->assertSame( 2, $data['counts']['unsupported_total'] );
-		$this->assertSame( array( QualifyVerdict::UNSUPPORTED_SOURCE, '2026-07-01 00:00:00', '2026-07-08 00:00:00' ), $wpdb->unsupported_args );
+		$this->assertSame( array( QualifyVerdict::UNSUPPORTED_SOURCE, '2026-07-01 00:00:00', '2026-07-08 00:00:00', 100, 100 ), $wpdb->unsupported_args );
 		$this->assertStringContainsString( 'COUNT(DISTINCT current_verdict.url_hash)', $wpdb->unsupported_query );
 		$this->assertStringContainsString( 'current_verdict.qualified_at <', $wpdb->unsupported_query );
 		$this->assertStringContainsString( 'newer_verdict.qualified_at > current_verdict.qualified_at', $wpdb->unsupported_query );
 		$this->assertStringContainsString( 'newer_verdict.id > current_verdict.id', $wpdb->unsupported_query );
+		$this->assertSame( 2, substr_count( $wpdb->unsupported_query, 'id <= 100' ) );
 		$this->assertStringNotContainsString( 'MAX(id)', $wpdb->unsupported_query );
 	}
 
@@ -352,15 +353,12 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertSame( 1, $data['counts']['resumed_total'] );
 		$this->assertSame( 1, $data['counts']['new_qualified_total'] );
 		$this->assertSame( 1, $data['counts']['unsupported_total'] );
-		$this->assertSame(
-			array(
-				array(
-					'hint'  => 'inside gap',
-					'count' => 1,
-				),
-			),
-			$data['top_extraction_gap']
-		);
+		$representative_urls = array_merge( ...array_column( $data['top_extraction_gap'], 'representative_urls' ) );
+		$this->assertCount( 2, $data['top_extraction_gap'] );
+		$this->assertContains( 'https://gap-start.example/events', $representative_urls );
+		$this->assertContains( 'https://unsupported-start.example/events', $representative_urls );
+		$this->assertNotContains( 'https://gap-end.example/events', $representative_urls );
+		$this->assertNotContains( 'https://unsupported-end.example/events', $representative_urls );
 		$this->assertStringContainsString( 'qualified_at <', $wpdb->qualified_query );
 		$this->assertStringNotContainsString( 'qualified_at <=', $wpdb->qualified_query );
 		$this->assertStringContainsString( 'qualified_at <', $wpdb->gap_query );
@@ -485,7 +483,7 @@ class QualifyDigestAbilityTest extends TestCase {
 	public function test_gather_data_pages_latest_rows_with_local_half_open_bounds(): void {
 		global $wpdb;
 		$GLOBALS['ec_digest_timezone'] = 'America/New_York';
-		$original_wpdb = $wpdb ?? null;
+		$original_wpdb                 = $wpdb ?? null;
 		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Isolated database test double.
 		$wpdb = new class() {
 			/**
@@ -564,7 +562,7 @@ class QualifyDigestAbilityTest extends TestCase {
 							'flow_name'         => 'Before boundary',
 							'scheduling_config' => wp_json_encode(
 								array(
-									'paused_at'     => '2025-01-08 11:59:59',
+									'paused_at'     => '2025-01-08 06:59:59',
 									'paused_reason' => QualifyVerdict::EXTRACTION_GAP,
 								)
 							),
@@ -574,7 +572,7 @@ class QualifyDigestAbilityTest extends TestCase {
 							'flow_name'         => 'Exact boundary',
 							'scheduling_config' => wp_json_encode(
 								array(
-									'paused_at'     => '2025-01-08 12:00:00',
+									'paused_at'     => '2025-01-08 07:00:00',
 									'paused_reason' => QualifyVerdict::EXTRACTION_GAP,
 								)
 							),

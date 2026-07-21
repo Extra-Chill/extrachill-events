@@ -1,0 +1,120 @@
+{
+  "provenance": {
+    "repository": "Extra-Chill/data-machine-events",
+    "version": "0.49.4",
+    "commit": "135307d20ab26c7b24102ab44c0ab85a3dcdf75e",
+    "producer": "data-machine-events/get-calendar-page",
+    "producer_class": "DataMachineEvents\\Abilities\\CalendarAbilities",
+    "captured_at": "2026-07-21T02:50:46+00:00",
+    "input": {
+      "date_start": "2026-07-21",
+      "date_end": "2026-07-21",
+      "tax_filter": {
+        "promoter": [1934]
+      },
+      "include_html": false,
+      "include_gaps": false
+    }
+  },
+  "payload": {
+    "paged_date_groups": [
+      {
+        "date": "2026-07-21",
+        "events": [
+          {
+            "post_id": 239460,
+            "title": "feeble little horse w/ Touching Ice",
+            "event_data": {
+              "startDate": "2026-07-21",
+              "startTime": "19:30:00",
+              "endDate": "2026-07-21",
+              "endTime": "23:59:59",
+              "venue": "Mohawk",
+              "address": "912 Red River, Austin, TX, 78701",
+              "ticketUrl": "https://ticketmaster.evyy.net/c/1191134/264167/4272?u=https%3A%2F%2Fwww.ticketmaster.com%2Fevent%2FZ7r9jZ1A70UZY&utm_medium=affiliate",
+              "performer": "feeble little horse",
+              "performerType": "Person",
+              "organizerType": "Organization",
+              "eventStatus": "EventScheduled",
+              "priceCurrency": "USD",
+              "offerAvailability": "PreOrder",
+              "showVenue": true,
+              "showPrice": true,
+              "showTicketLink": true,
+              "venueTimezone": "America/Chicago",
+              "organizer": "Resound Presents",
+              "organizerUrl": "https://resoundpresents.com"
+            },
+            "display_context": {
+              "is_multi_day": false,
+              "is_start_day": true,
+              "is_end_day": true,
+              "is_continuation": false,
+              "display_date": "2026-07-21",
+              "original_start_date": "2026-07-21",
+              "original_end_date": "2026-07-21",
+              "day_number": 1,
+              "total_days": 1
+            }
+          }
+        ]
+      }
+    ],
+    "total_event_count": 1,
+    "current_page": 1,
+    "max_pages": 1
+  },
+  "canonical_context": {
+    "taxonomies": {
+      "venue": [
+        {
+          "term_id": 1807,
+          "name": "Mohawk",
+          "slug": "mohawk"
+        }
+      ],
+      "artist": [
+        {
+          "term_id": 54345,
+          "name": "feeble little horse",
+          "slug": "feeble-little-horse"
+        },
+        {
+          "term_id": 8108,
+          "name": "Touching Ice",
+          "slug": "touching-ice"
+        }
+      ],
+      "location": [
+        {
+          "term_id": 1628,
+          "name": "Austin",
+          "slug": "austin"
+        }
+      ],
+      "promoter": [
+        {
+          "term_id": 1934,
+          "name": "Resound Presents",
+          "slug": "resound-presents"
+        }
+      ]
+    },
+    "venue": {
+      "name": "Mohawk",
+      "term_id": 1807,
+      "slug": "mohawk",
+      "description": "",
+      "address": "912 Red River",
+      "city": "Austin",
+      "state": "TX",
+      "zip": "78701",
+      "country": "US",
+      "phone": "",
+      "website": "https://themohawk.com",
+      "capacity": "",
+      "coordinates": "30.272100000,-97.742401000",
+      "timezone": "America/Chicago"
+    }
+  }
+}

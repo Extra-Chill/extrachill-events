@@ -191,62 +191,43 @@ final class CanonicalAdapterContractsTest extends TestCase {
 	}
 
 	public function test_calendar_adapter_preserves_canonical_event_and_occurrence_contracts(): void {
-		$GLOBALS['ec_adapter_relationships'][123] = array(
-			'venue'    => array( new WP_Term( 44, 'The Royal American', 'the-royal-american' ) ),
-			'artist'   => array( new WP_Term( 51, 'Kid Lake', 'kid-lake' ) ),
-			'location' => array( new WP_Term( 52, 'Charleston', 'charleston-sc' ) ),
-			'promoter' => array( new WP_Term( 53, 'Extra Chill', 'extra-chill' ) ),
+		$fixture = json_decode(
+			(string) file_get_contents( dirname( __DIR__, 2 ) . '/Fixtures/dme-calendar-page-v0.49.4.json' ),
+			true,
+			512,
+			JSON_THROW_ON_ERROR
 		);
-		$canonical_event = array(
-			'post_id'         => 123,
-			'title'           => 'Kid Lake at The Royal American',
-			'event_data'      => array(
-				'startDate'      => '2026-08-08',
-				'startTime'      => '20:00:00',
-				'endDate'        => '2026-08-09',
-				'endTime'        => '00:30:00',
-				'performer'      => 'Kid Lake',
-				'performerType'  => 'MusicGroup',
-				'organizer'      => 'Extra Chill',
-				'organizerUrl'   => 'https://extrachill.com',
-				'organizerType'  => 'promoter',
-				'address'        => '970 Morrison Dr, Charleston, SC 29403',
-				'venueTimezone'  => 'America/New_York',
-				'eventStatus'    => 'EventRescheduled',
-				'ticketUrl'      => 'https://tickets.example/show',
-			),
-			'display_context' => array(
-				'is_multi_day'    => true,
-				'is_continuation' => false,
-				'day_number'      => 1,
-				'total_days'      => 2,
-			),
-		);
+		$this->assertSame( 'data-machine-events/get-calendar-page', $fixture['provenance']['producer'] );
 
-		$adapted = extrachill_events_transform_calendar_response(
-			array(
-				'paged_date_groups' => array(
-					array(
-						'date'   => '2026-08-08',
-						'events' => array( $canonical_event ),
-					),
-				),
-				'total_event_count' => 1,
-				'current_page'      => 1,
-				'max_pages'         => 1,
-			)
-		);
+		$canonical_event = $fixture['payload']['paged_date_groups'][0]['events'][0];
+		$post_id         = $canonical_event['post_id'];
+		foreach ( $fixture['canonical_context']['taxonomies'] as $taxonomy => $terms ) {
+			$GLOBALS['ec_adapter_relationships'][ $post_id ][ $taxonomy ] = array_map(
+				static fn( $term ) => new WP_Term( $term['term_id'], $term['name'], $term['slug'] ),
+				$terms
+			);
+		}
+		$canonical_venue                                       = $fixture['canonical_context']['venue'];
+		$GLOBALS['ec_adapter_venues'][ $canonical_venue['term_id'] ] = $canonical_venue;
+
+		$adapted = extrachill_events_transform_calendar_response( $fixture['payload'] );
 		$event   = $adapted['dates'][0]['events'][0];
 
 		$this->assertSame( $canonical_event['event_data']['performer'], $event['performer']['name'] );
 		$this->assertSame( $canonical_event['event_data']['performerType'], $event['performer']['type'] );
+		$this->assertSame( $canonical_event['event_data']['organizer'], $event['organizer']['name'] );
+		$this->assertSame( $canonical_event['event_data']['organizerType'], $event['organizer']['type'] );
 		$this->assertSame( $canonical_event['event_data']['eventStatus'], $event['status'] );
 		$this->assertSame( $canonical_event['display_context'], $event['occurrence_context'] );
-		$this->assertSame( 'kid-lake', $event['taxonomies']['artist'][0]['slug'] );
-		$this->assertSame( 'charleston-sc', $event['taxonomies']['location'][0]['slug'] );
-		$this->assertSame( 'extra-chill', $event['taxonomies']['promoter'][0]['slug'] );
-		$this->assertSame( $GLOBALS['ec_adapter_venues'][44]['coordinates'], $event['venue']['coordinates'] );
-		$this->assertSame( $GLOBALS['ec_adapter_venues'][44]['timezone'], $event['venue']['timezone'] );
+		foreach ( array( 'artist', 'location', 'promoter' ) as $taxonomy ) {
+			$this->assertSame(
+				array_column( $fixture['canonical_context']['taxonomies'][ $taxonomy ], 'slug' ),
+				array_column( $event['taxonomies'][ $taxonomy ], 'slug' )
+			);
+		}
+		foreach ( array( 'address', 'city', 'state', 'zip', 'country', 'coordinates', 'timezone' ) as $field ) {
+			$this->assertSame( $canonical_venue[ $field ], $event['venue'][ $field ], $field );
+		}
 
 		// Existing API callers retain their original transport fields.
 		foreach ( array( 'id', 'title', 'datetime', 'end_datetime', 'venue', 'ticket_url', 'permalink' ) as $field ) {

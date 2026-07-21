@@ -190,13 +190,17 @@ class QualifyDigestAbilities {
 
 		$verdicts_table = QualifyVerdictsTable::table_name();
 		$flows_table    = $wpdb->prefix . 'datamachine_flows';
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Read-only metadata against a trusted internal table.
 		$verdicts_exist = $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table;
 		$snapshot_id    = 0;
 		if ( $verdicts_exist ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted internal table; read-only snapshot boundary.
 			$snapshot_id = (int) $wpdb->get_var( "SELECT COALESCE(MAX(id), 0) FROM {$verdicts_table}" );
 		}
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// Ordinary appends receive ids above the snapshot and cannot extend the
+		// scan. A transaction that reserved a lower id before this read may commit
+		// later and appear only on the next digest; avoiding that rare omission
+		// would require a long transaction or lock across all paged fingerprint reads.
 
 		// Paused-this-week — read scheduling_config from datamachine_flows
 		// rows whose paused_at falls in the window. paused_at is stashed as

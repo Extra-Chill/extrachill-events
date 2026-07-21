@@ -22,6 +22,8 @@ class QualifyStatsCommandTest extends TestCase {
 	/** Test snapshot paging honors canonical backfill and equal-local-time ordering. */
 	public function test_latest_rows_query_is_snapshot_bounded_and_canonical(): void {
 		global $wpdb;
+		$GLOBALS['ec_digest_timezone'] = 'America/New_York';
+
 		$original_wpdb = $wpdb ?? null;
 		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Isolated database test double.
 		$wpdb = new class() {
@@ -113,6 +115,7 @@ class QualifyStatsCommandTest extends TestCase {
 		} finally {
 			// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Restore original database object.
 			$wpdb = $original_wpdb;
+			unset( $GLOBALS['ec_digest_timezone'] );
 		}
 	}
 }

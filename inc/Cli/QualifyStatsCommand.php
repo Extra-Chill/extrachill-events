@@ -181,9 +181,8 @@ class QualifyStatsCommand {
 
 		// Match QualifyVerdictsTable::latest_for_url_hash(): qualified_at DESC,
 		// then id DESC. The fixed upper bound excludes concurrent appends.
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 		// Table name is a trusted internal identifier built from $wpdb->prefix.
-		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Read-only, bounded report against an append-only internal table.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT v.id, v.url, v.verdict, v.fingerprint
@@ -210,13 +209,18 @@ class QualifyStatsCommand {
 			),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		return is_array( $rows ) ? $rows : array();
 	}
 
 	/**
 	 * Capture the finite verdict-log snapshot used by every page.
+	 *
+	 * This excludes ordinary appends allocated above the bound. An InnoDB
+	 * transaction can reserve a lower auto-increment id and commit after this
+	 * read; avoiding a long locking transaction means that rare row may wait
+	 * until the next report, but it cannot make this scan duplicate or loop.
 	 */
 	private function snapshot_upper_bound(): int {
 		global $wpdb;

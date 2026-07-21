@@ -484,6 +484,7 @@ class QualifyDigestAbilityTest extends TestCase {
 	/** Test digest keyset paging and site-local half-open verdict bounds. */
 	public function test_gather_data_pages_latest_rows_with_local_half_open_bounds(): void {
 		global $wpdb;
+		$GLOBALS['ec_digest_timezone'] = 'America/New_York';
 		$original_wpdb = $wpdb ?? null;
 		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Isolated database test double.
 		$wpdb = new class() {

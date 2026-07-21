@@ -274,13 +274,20 @@ class QualifyDigestAbilities {
 			);
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 			$unsupported_sources = (int) $wpdb->get_var(
+				// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
 				$wpdb->prepare(
-					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at <= %s",
+					"SELECT COUNT(*) FROM {$verdicts_table} v
+					 INNER JOIN (
+						 SELECT url_hash, MAX(id) AS max_id
+						 FROM {$verdicts_table}
+						 GROUP BY url_hash
+					 ) latest ON latest.max_id = v.id
+					 WHERE v.verdict = %s AND v.qualified_at >= %s AND v.qualified_at <= %s",
 					QualifyVerdict::UNSUPPORTED_SOURCE,
 					$start,
 					$end
 				)
+				// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			);
 		}
 

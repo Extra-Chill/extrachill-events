@@ -476,6 +476,12 @@ class QualifyVerdictResolverTest extends TestCase {
 		$this->assertContains( QualifyVerdict::UNSUPPORTED_SOURCE, QualifyVerdict::all() );
 	}
 
+	public function test_unsupported_source_is_not_an_actionable_extractor_cohort(): void {
+		$this->assertNotSame( QualifyVerdict::EXTRACTION_GAP, QualifyVerdict::UNSUPPORTED_SOURCE );
+		$this->assertFalse( QualifyVerdict::is_qualified( QualifyVerdict::UNSUPPORTED_SOURCE ) );
+		$this->assertStringContainsString( 'Do NOT treat this as extractor work', QualifyVerdict::guidance_for( QualifyVerdict::UNSUPPORTED_SOURCE ) );
+	}
+
 	public function test_min_events_thresholds_are_distinct(): void {
 		// Listing-page threshold MUST stay at 2 — the existing guard against
 		// stray-snippet false positives. Detail-page threshold relaxes to 1

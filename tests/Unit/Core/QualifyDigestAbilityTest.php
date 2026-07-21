@@ -20,6 +20,11 @@ require_once dirname( __DIR__, 3 ) . '/inc/Abilities/QualifyDigestAbilities.php'
 
 class QualifyDigestAbilityTest extends TestCase {
 
+	protected function tearDown(): void {
+		unset( $GLOBALS['wpdb'] );
+		parent::tearDown();
+	}
+
 	private function seed_data(): array {
 		return array(
 			'counts'             => array(
@@ -140,5 +145,112 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->assertStringContainsString( '22', $body, 'paused extraction_gap count' );
 		$this->assertStringContainsString( '18', $body, 'new qualified total' );
 		$this->assertStringContainsString( '9', $body, 'unsupported source total' );
+	}
+
+	public function test_digest_counts_only_latest_unsupported_urls_in_window(): void {
+		$start = strtotime( '2026-07-01 00:00:00 UTC' );
+		$end   = strtotime( '2026-07-08 00:00:00 UTC' );
+
+		$wpdb            = new QualifyDigestWpdbStub(
+			array(
+				array(
+					'id'           => 1,
+					'url_hash'     => 'repeat',
+					'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+					'qualified_at' => '2026-07-02 00:00:00',
+				),
+				array(
+					'id'           => 2,
+					'url_hash'     => 'repeat',
+					'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+					'qualified_at' => '2026-07-03 00:00:00',
+				),
+				array(
+					'id'           => 3,
+					'url_hash'     => 'recovered',
+					'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+					'qualified_at' => '2026-07-04 00:00:00',
+				),
+				array(
+					'id'           => 4,
+					'url_hash'     => 'recovered',
+					'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
+					'qualified_at' => '2026-07-05 00:00:00',
+				),
+				array(
+					'id'           => 5,
+					'url_hash'     => 'old',
+					'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+					'qualified_at' => '2026-06-15 00:00:00',
+				),
+				array(
+					'id'           => 6,
+					'url_hash'     => 'current',
+					'verdict'      => QualifyVerdict::UNSUPPORTED_SOURCE,
+					'qualified_at' => '2026-07-06 00:00:00',
+				),
+			)
+		);
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$data = ( new QualifyDigestAbilities() )->gather_data( $start, $end );
+
+		$this->assertSame( 2, $data['counts']['unsupported_total'] );
+		$this->assertStringContainsString( 'MAX(id) AS max_id', $wpdb->unsupported_query );
+		$this->assertStringContainsString( 'GROUP BY url_hash', $wpdb->unsupported_query );
+		$this->assertStringContainsString( 'latest.max_id = v.id', $wpdb->unsupported_query );
+	}
+}
+
+class QualifyDigestWpdbStub {
+
+	public string $prefix            = 'c8c_';
+	public string $unsupported_query = '';
+	private array $verdict_rows;
+	private array $prepared_args = array();
+
+	public function __construct( array $verdict_rows ) {
+		$this->verdict_rows = $verdict_rows;
+	}
+
+	public function prepare( string $sql, ...$args ): string {
+		foreach ( $args as $arg ) {
+			$sql = preg_replace( '/%[sd]/', is_string( $arg ) ? "'{$arg}'" : (string) $arg, $sql, 1 );
+		}
+		$this->prepared_args[ $sql ] = $args;
+		return $sql;
+	}
+
+	public function get_results( string $sql, $output = ARRAY_A ): array {
+		return array();
+	}
+
+	public function get_var( string $sql ) {
+		if ( 0 === strpos( $sql, 'SHOW TABLES LIKE' ) ) {
+			return $this->prefix . 'dme_qualify_verdicts';
+		}
+		if ( false === strpos( $sql, "v.verdict = '" . QualifyVerdict::UNSUPPORTED_SOURCE . "'" ) ) {
+			return 0;
+		}
+
+		$this->unsupported_query = $sql;
+		$args                    = $this->prepared_args[ $sql ];
+		$latest                  = array();
+		foreach ( $this->verdict_rows as $row ) {
+			$hash = $row['url_hash'];
+			if ( ! isset( $latest[ $hash ] ) || $row['id'] > $latest[ $hash ]['id'] ) {
+				$latest[ $hash ] = $row;
+			}
+		}
+
+		$count = 0;
+		foreach ( $latest as $row ) {
+			if ( QualifyVerdict::UNSUPPORTED_SOURCE === $row['verdict']
+				&& $row['qualified_at'] >= $args[1]
+				&& $row['qualified_at'] <= $args[2] ) {
+				++$count;
+			}
+		}
+		return $count;
 	}
 }

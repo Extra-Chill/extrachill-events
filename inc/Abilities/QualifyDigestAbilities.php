@@ -190,6 +190,13 @@ class QualifyDigestAbilities {
 
 		$verdicts_table = QualifyVerdictsTable::table_name();
 		$flows_table    = $wpdb->prefix . 'datamachine_flows';
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
+		$verdicts_exist = $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table;
+		$snapshot_id    = 0;
+		if ( $verdicts_exist ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted internal table; read-only snapshot boundary.
+			$snapshot_id = (int) $wpdb->get_var( "SELECT COALESCE(MAX(id), 0) FROM {$verdicts_table}" );
+		}
 
 		// Paused-this-week — read scheduling_config from datamachine_flows
 		// rows whose paused_at falls in the window. paused_at is stashed as
@@ -261,13 +268,13 @@ class QualifyDigestAbilities {
 		// verdict rows in the window.
 		$new_qualified       = 0;
 		$unsupported_sources = 0;
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table ) {
+		if ( $verdicts_exist ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 			$new_qualified = (int) $wpdb->get_var(
 				$wpdb->prepare(
 					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-					"SELECT COUNT(*) FROM {$verdicts_table} WHERE verdict = %s AND qualified_at >= %s AND qualified_at < %s",
+					"SELECT COUNT(*) FROM {$verdicts_table} WHERE id <= %d AND verdict = %s AND qualified_at >= %s AND qualified_at < %s",
+					$snapshot_id,
 					QualifyVerdict::QUALIFIED_STRUCTURED,
 					$start,
 					$end
@@ -285,8 +292,7 @@ class QualifyDigestAbilities {
 		// bounds fingerprint memory while incremental grouping retains only a
 		// fixed number of representative URLs per cohort.
 		$top_extraction_gap = array();
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Table name is a trusted internal identifier built from $wpdb->prefix.
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '" . $verdicts_table . "'" ) === $verdicts_table ) {
+		if ( $verdicts_exist ) {
 			$cohort_state = QualifyCohortDeriver::start();
 			$after_id     = 0;
 			$page_count   = 0;
@@ -295,21 +301,28 @@ class QualifyDigestAbilities {
 				$gap_rows = (array) $wpdb->get_results(
 					$wpdb->prepare(
 						"SELECT v.id, v.url, v.verdict, v.fingerprint FROM {$verdicts_table} v
-						 INNER JOIN (
-							 SELECT url_hash, MAX(id) AS max_id
-							 FROM {$verdicts_table}
-							 GROUP BY url_hash
-						 ) latest ON latest.max_id = v.id
-						 WHERE v.verdict IN (%s, %s)
+						 WHERE v.id <= %d
+						 AND v.verdict IN (%s, %s)
 						 AND v.qualified_at >= %s AND v.qualified_at < %s
 						 AND v.id > %d
+						 AND NOT EXISTS (
+							 SELECT 1 FROM {$verdicts_table} newer
+							 WHERE newer.url_hash = v.url_hash
+							 AND newer.id <= %d
+							 AND (
+								 newer.qualified_at > v.qualified_at
+								 OR ( newer.qualified_at = v.qualified_at AND newer.id > v.id )
+							 )
+						 )
 						 ORDER BY v.id ASC
 						 LIMIT %d",
+						$snapshot_id,
 						QualifyVerdict::EXTRACTION_GAP,
-						'unsupported_source',
+						QualifyVerdict::UNSUPPORTED_SOURCE,
 						$start,
 						$end,
 						$after_id,
+						$snapshot_id,
 						self::VERDICT_PAGE_SIZE
 					),
 					ARRAY_A

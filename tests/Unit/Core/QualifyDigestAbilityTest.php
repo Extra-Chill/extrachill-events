@@ -505,6 +505,18 @@ class QualifyDigestAbilityTest extends TestCase {
 			 * @var int
 			 */
 			public int $cohort_queries = 0;
+			/**
+			 * Number of snapshot-bound queries.
+			 *
+			 * @var int
+			 */
+			public int $snapshot_queries = 0;
+			/**
+			 * Simulated live maximum id, advanced after page one.
+			 *
+			 * @var int
+			 */
+			public int $live_max_id = 251;
 
 			/**
 			 * Capture a prepared query and its arguments.
@@ -529,6 +541,10 @@ class QualifyDigestAbilityTest extends TestCase {
 				if ( 0 === strpos( $query, 'SHOW TABLES' ) ) {
 					return 'wp_dme_qualify_verdicts';
 				}
+				if ( false !== strpos( $query, 'COALESCE(MAX(id), 0)' ) ) {
+					++$this->snapshot_queries;
+					return $this->live_max_id;
+				}
 				return 0;
 			}
 
@@ -540,11 +556,38 @@ class QualifyDigestAbilityTest extends TestCase {
 			 */
 			public function get_results( string $query, $output ): array {
 				unset( $output );
+				if ( false !== strpos( $query, 'SELECT flow_id' ) ) {
+					return array(
+						array(
+							'flow_id'           => 1,
+							'flow_name'         => 'Before boundary',
+							'scheduling_config' => wp_json_encode(
+								array(
+									'paused_at'     => '2025-01-08 11:59:59',
+									'paused_reason' => QualifyVerdict::EXTRACTION_GAP,
+								)
+							),
+						),
+						array(
+							'flow_id'           => 2,
+							'flow_name'         => 'Exact boundary',
+							'scheduling_config' => wp_json_encode(
+								array(
+									'paused_at'     => '2025-01-08 12:00:00',
+									'paused_reason' => QualifyVerdict::EXTRACTION_GAP,
+								)
+							),
+						),
+					);
+				}
 				if ( false === strpos( $query, 'SELECT v.id, v.url' ) ) {
 					return array();
 				}
 
 				++$this->cohort_queries;
+				if ( 1 === $this->cohort_queries ) {
+					$this->live_max_id = 1000;
+				}
 				$start = 1 === $this->cohort_queries ? 1 : 251;
 				$count = 1 === $this->cohort_queries ? 250 : 1;
 				$rows  = array();
@@ -565,8 +608,11 @@ class QualifyDigestAbilityTest extends TestCase {
 			$data    = $ability->gather_data( strtotime( '2025-01-01 12:00:00 UTC' ), strtotime( '2025-01-08 12:00:00 UTC' ) );
 
 			$this->assertSame( 2, $wpdb->cohort_queries );
+			$this->assertSame( 1, $wpdb->snapshot_queries );
+			$this->assertSame( 1000, $wpdb->live_max_id, 'Fixture must append rows after the snapshot.' );
 			$this->assertSame( 251, $data['top_extraction_gap'][0]['count'] );
 			$this->assertCount( 3, $data['top_extraction_gap'][0]['representative_urls'] );
+			$this->assertSame( 1, $data['counts']['paused_total'], 'Exact end boundary must be excluded.' );
 
 			$verdict_queries = array_values(
 				array_filter(
@@ -577,10 +623,26 @@ class QualifyDigestAbilityTest extends TestCase {
 			$this->assertNotEmpty( $verdict_queries );
 			foreach ( $verdict_queries as $prepared ) {
 				$this->assertStringContainsString( 'qualified_at < %s', $prepared['query'] );
+				$this->assertStringNotContainsString( 'qualified_at <=', $prepared['query'] );
 				$this->assertNotContains( '2025-01-08 12:00:00', $prepared['args'] );
 			}
 			$this->assertContains( '2025-01-01 07:00:00', $verdict_queries[0]['args'] );
 			$this->assertContains( '2025-01-08 07:00:00', $verdict_queries[0]['args'] );
+
+			$cohort_queries = array_values(
+				array_filter(
+					$wpdb->prepared,
+					static fn( array $prepared ): bool => false !== strpos( $prepared['query'], 'SELECT v.id, v.url' )
+				)
+			);
+			$this->assertCount( 2, $cohort_queries );
+			foreach ( $cohort_queries as $prepared ) {
+				$this->assertStringContainsString( 'v.id <= %d', $prepared['query'] );
+				$this->assertStringContainsString( 'newer.qualified_at > v.qualified_at', $prepared['query'] );
+				$this->assertStringContainsString( 'newer.qualified_at = v.qualified_at AND newer.id > v.id', $prepared['query'] );
+				$this->assertSame( 251, $prepared['args'][0] );
+				$this->assertSame( 251, $prepared['args'][6] );
+			}
 		} finally {
 			// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Restore original database object.
 			$wpdb = $original_wpdb;

@@ -69,13 +69,15 @@ class QualifyStatsCommand {
 
 		$days   = max( 1, (int) ( $assoc_args['days'] ?? 30 ) );
 		$format = $assoc_args['format'] ?? 'table';
+		$cutoff = $this->site_local_cutoff( $days );
 
 		$rows         = array();
 		$cohort_state = QualifyCohortDeriver::start();
 		$after_id     = 0;
 		$page_count   = 0;
+		$snapshot_id  = $this->snapshot_upper_bound();
 		do {
-			$page = $this->latest_rows_page( $days, $after_id, self::PAGE_SIZE );
+			$page = $this->latest_rows_page( $cutoff, $snapshot_id, $after_id, self::PAGE_SIZE );
 			if ( empty( $page ) ) {
 				break;
 			}
@@ -167,36 +169,43 @@ class QualifyStatsCommand {
 	 * The query keeps history-aware semantics: many runs against the same URL
 	 * collapse to a single "current" verdict (the most recent one).
 	 *
-	 * @param int $days     Lookback window in days.
-	 * @param int $after_id Exclusive keyset cursor.
-	 * @param int $limit    Page size.
+	 * @param string $cutoff      Inclusive site-local cutoff.
+	 * @param int    $snapshot_id Inclusive snapshot upper bound.
+	 * @param int    $after_id    Exclusive keyset cursor.
+	 * @param int    $limit       Page size.
 	 * @return array<int,array<string,mixed>>
 	 */
-	private function latest_rows_page( int $days, int $after_id, int $limit ): array {
+	private function latest_rows_page( string $cutoff, int $snapshot_id, int $after_id, int $limit ): array {
 		global $wpdb;
 		$table = QualifyVerdictsTable::table_name();
 
-		$since_sql = $days > 0 ? $wpdb->prepare( ' AND qualified_at >= DATE_SUB(NOW(), INTERVAL %d DAY)', $days ) : '';
-
-		// Latest verdict per url_hash. The subquery picks max(id) per hash —
-		// id is autoincrement so it's a stable proxy for "most recent".
+		// Match QualifyVerdictsTable::latest_for_url_hash(): qualified_at DESC,
+		// then id DESC. The fixed upper bound excludes concurrent appends.
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
-		// Table name is a trusted internal identifier built from $wpdb->prefix; $since_sql is itself a $wpdb->prepare() fragment with a bound %d placeholder.
+		// Table name is a trusted internal identifier built from $wpdb->prefix.
 		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT v.id, v.url, v.verdict, v.fingerprint
 			FROM {$table} v
-			INNER JOIN (
-				SELECT url_hash, MAX(id) AS max_id
-				FROM {$table}
-				WHERE 1=1{$since_sql}
-				GROUP BY url_hash
-			) latest ON latest.max_id = v.id
-			WHERE v.id > %d
+			WHERE v.id <= %d
+			AND v.qualified_at >= %s
+			AND v.id > %d
+			AND NOT EXISTS (
+				SELECT 1 FROM {$table} newer
+				WHERE newer.url_hash = v.url_hash
+				AND newer.id <= %d
+				AND (
+					newer.qualified_at > v.qualified_at
+					OR ( newer.qualified_at = v.qualified_at AND newer.id > v.id )
+				)
+			)
 			ORDER BY v.id ASC
 			LIMIT %d",
+				$snapshot_id,
+				$cutoff,
 				$after_id,
+				$snapshot_id,
 				max( 1, $limit )
 			),
 			ARRAY_A
@@ -204,6 +213,28 @@ class QualifyStatsCommand {
 		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Capture the finite verdict-log snapshot used by every page.
+	 */
+	private function snapshot_upper_bound(): int {
+		global $wpdb;
+		$table = QualifyVerdictsTable::table_name();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted internal table; read-only snapshot boundary.
+		return (int) $wpdb->get_var( "SELECT COALESCE(MAX(id), 0) FROM {$table}" );
+	}
+
+	/**
+	 * Compute the explicit site-local cutoff used by qualified_at queries.
+	 *
+	 * @param int      $days   Lookback days.
+	 * @param int|null $now_ts Current timestamp override for tests.
+	 */
+	private function site_local_cutoff( int $days, ?int $now_ts = null ): string {
+		$now_ts = null === $now_ts ? time() : $now_ts;
+		$now    = new \DateTimeImmutable( '@' . $now_ts );
+		return $now->setTimezone( wp_timezone() )->modify( sprintf( '-%d days', max( 1, $days ) ) )->format( 'Y-m-d H:i:s' );
 	}
 
 	/**
@@ -243,7 +274,6 @@ class QualifyStatsCommand {
 				}
 			}
 		}
-
 	}
 
 	/**

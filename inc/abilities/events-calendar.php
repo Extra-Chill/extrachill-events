@@ -201,49 +201,7 @@ function extrachill_events_transform_calendar_response( array $result ): array {
 
 		$events = array();
 		foreach ( $group['events'] ?? array() as $event ) {
-			$event_data = $event['event_data'] ?? array();
-			$post_id    = $event['post_id'];
-
-			// Build datetime from startDate + startTime block attributes.
-			$datetime = '';
-			if ( ! empty( $event_data['startDate'] ) ) {
-				$time     = $event_data['startTime'] ?? '00:00:00';
-				$datetime = $event_data['startDate'] . 'T' . $time;
-			}
-
-			$end_datetime = null;
-			if ( ! empty( $event_data['endDate'] ) ) {
-				$end_time     = $event_data['endTime'] ?? '23:59:59';
-				$end_datetime = $event_data['endDate'] . 'T' . $end_time;
-			}
-
-			// Resolve venue from post terms.
-			$venue_data  = null;
-			$venue_terms = wp_get_post_terms( $post_id, 'venue', array( 'fields' => 'all' ) );
-			if ( ! empty( $venue_terms ) && ! is_wp_error( $venue_terms ) ) {
-				$venue_data = array(
-					'id'   => $venue_terms[0]->term_id,
-					'name' => $venue_terms[0]->name,
-					'slug' => $venue_terms[0]->slug,
-				);
-			}
-
-			// Ticket URL from block attributes or post meta.
-			$ticket_url = $event_data['ticketUrl'] ?? null;
-			if ( empty( $ticket_url ) ) {
-				$meta_ticket_url = get_post_meta( $post_id, '_datamachine_ticket_url', true );
-				$ticket_url      = $meta_ticket_url ? $meta_ticket_url : null;
-			}
-
-			$events[] = array(
-				'id'           => $post_id,
-				'title'        => $event['title'],
-				'datetime'     => $datetime,
-				'end_datetime' => $end_datetime,
-				'venue'        => $venue_data,
-				'ticket_url'   => $ticket_url,
-				'permalink'    => get_permalink( $post_id ),
-			);
+			$events[] = extrachill_events_transform_calendar_event( $event );
 		}
 
 		$dates[] = array(
@@ -259,4 +217,117 @@ function extrachill_events_transform_calendar_response( array $result ): array {
 		'page'     => $result['current_page'] ?? 1,
 		'has_more' => ( $result['current_page'] ?? 1 ) < ( $result['max_pages'] ?? 1 ),
 	);
+}
+
+/**
+ * Adapt one canonical calendar occurrence without discarding its context.
+ *
+ * @param array $event Canonical calendar event occurrence.
+ * @return array Adapted event.
+ */
+function extrachill_events_transform_calendar_event( array $event ): array {
+	$event_data = $event['event_data'] ?? array();
+	$post_id    = (int) ( $event['post_id'] ?? 0 );
+	$datetime   = '';
+
+	if ( ! empty( $event_data['startDate'] ) ) {
+		$datetime = $event_data['startDate'] . 'T' . ( $event_data['startTime'] ?? '00:00:00' );
+	}
+
+	$end_datetime = null;
+	if ( ! empty( $event_data['endDate'] ) ) {
+		$end_datetime = $event_data['endDate'] . 'T' . ( $event_data['endTime'] ?? '23:59:59' );
+	}
+
+	$ticket_url = $event_data['ticketUrl'] ?? null;
+	if ( empty( $ticket_url ) ) {
+		$meta_ticket_url = get_post_meta( $post_id, '_datamachine_ticket_url', true );
+		$ticket_url      = $meta_ticket_url ? $meta_ticket_url : null;
+	}
+
+	return array(
+		'id'                 => $post_id,
+		'title'              => $event['title'] ?? '',
+		'datetime'           => $datetime,
+		'end_datetime'       => $end_datetime,
+		'venue'              => extrachill_events_get_calendar_venue( $post_id, $event_data ),
+		'organizer'          => empty( $event_data['organizer'] ) ? null : array(
+			'name' => $event_data['organizer'],
+			'url'  => $event_data['organizerUrl'] ?? '',
+			'type' => $event_data['organizerType'] ?? '',
+		),
+		'performer'          => array( 'name' => $event_data['performerName'] ?? '' ),
+		'taxonomies'         => extrachill_events_get_calendar_taxonomies( $post_id ),
+		'status'             => $event_data['eventStatus'] ?? null,
+		'occurrence_context' => $event['display_context'] ?? array(),
+		'ticket_url'         => $ticket_url,
+		'permalink'          => get_permalink( $post_id ),
+	);
+}
+
+/**
+ * Return the canonical venue attached to an event in the shared adapter shape.
+ *
+ * @param int   $post_id    Event post ID.
+ * @param array $event_data Canonical hydrated event data.
+ * @return array|null Adapted venue or null.
+ */
+function extrachill_events_get_calendar_venue( int $post_id, array $event_data ): ?array {
+	$terms = wp_get_post_terms( $post_id, 'venue', array( 'fields' => 'all' ) );
+	if ( empty( $terms ) || is_wp_error( $terms ) ) {
+		return null;
+	}
+
+	$term  = $terms[0];
+	$venue = function_exists( 'data_machine_events_get_venue_data' )
+		? data_machine_events_get_venue_data( (int) $term->term_id )
+		: null;
+
+	if ( ! is_array( $venue ) ) {
+		$venue = array(
+			'term_id' => $term->term_id,
+			'name'    => $term->name,
+			'slug'    => $term->slug,
+		);
+	}
+
+	$venue['formatted_address'] = $event_data['address'] ?? null;
+	if ( empty( $venue['timezone'] ) && ! empty( $event_data['venueTimezone'] ) ) {
+		$venue['timezone'] = $event_data['venueTimezone'];
+	}
+
+	return extrachill_events_transform_venue_detail( $venue );
+}
+
+/**
+ * Return canonical taxonomy assignments used by Extra Chill event consumers.
+ *
+ * @param int $post_id Event post ID.
+ * @return array Taxonomy slug to term summaries.
+ */
+function extrachill_events_get_calendar_taxonomies( int $post_id ): array {
+	$taxonomies = array();
+
+	foreach ( array( 'artist', 'location', 'promoter' ) as $taxonomy ) {
+		$terms = wp_get_post_terms( $post_id, $taxonomy, array( 'fields' => 'all' ) );
+		if ( empty( $terms ) || is_wp_error( $terms ) ) {
+			continue;
+		}
+
+		$taxonomies[ $taxonomy ] = array_map(
+			static function ( $term ) use ( $taxonomy ): array {
+				$link = get_term_link( $term, $taxonomy );
+
+				return array(
+					'term_id' => (int) $term->term_id,
+					'name'    => $term->name,
+					'slug'    => $term->slug,
+					'link'    => is_wp_error( $link ) ? '' : $link,
+				);
+			},
+			$terms
+		);
+	}
+
+	return $taxonomies;
 }

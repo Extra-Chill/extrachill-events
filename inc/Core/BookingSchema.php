@@ -333,7 +333,7 @@ class BookingSchema {
 			if ( ! is_array( $status ) ) {
 				continue;
 			}
-			if ( $contract['engine'] === strtolower( (string) ( $status['Engine'] ?? '' ) ) ) {
+			if ( strtolower( (string) ( $status['Engine'] ?? '' ) ) === $contract['engine'] ) {
 				continue;
 			}
 			$engine = strtoupper( $contract['engine'] );

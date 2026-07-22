@@ -44,8 +44,8 @@ class VenueMembershipRepository {
 			return new \WP_Error( 'invalid_venue_membership_status', __( 'The venue membership status is not supported.', 'extrachill-events' ) );
 		}
 
-		$now = gmdate( 'Y-m-d H:i:s' );
-		$row = array(
+		$now   = gmdate( 'Y-m-d H:i:s' );
+		$row   = array(
 			'venue_term_id'      => $venue_term_id,
 			'user_id'            => $user_id,
 			'role'               => $role,
@@ -85,7 +85,7 @@ class VenueMembershipRepository {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Private operational table write.
 		if ( false === $wpdb->insert( $table, $row ) ) {
 			$database_error = $wpdb->last_error;
-			$winner = $this->get( $venue_term_id, $user_id );
+			$winner         = $this->get( $venue_term_id, $user_id );
 			if ( is_array( $winner ) ) {
 				$this->rollback();
 				return $this->conflict( $winner );

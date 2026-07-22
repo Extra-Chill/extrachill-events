@@ -17,8 +17,10 @@ Venue authorization composes two existing platform concepts:
 
 Both checks must pass. A team member without a venue relationship cannot access
 that venue, and a venue relationship does not grant the WordPress capability.
-Administrators retain an explicit `manage_options` bootstrap override without
-receiving synthetic membership rows.
+Administrators retain an explicit `manage_options` override only for membership
+administration so they can bootstrap an owner without receiving a synthetic
+row. Ordinary venue operations still require the feature gate and an active
+membership for the exact venue.
 
 Membership has no operational role taxonomy. An active member may access the
 venue booking feature. The structural `is_owner` flag only determines whether

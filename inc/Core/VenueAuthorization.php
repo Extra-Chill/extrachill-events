@@ -71,7 +71,7 @@ class VenueAuthorization {
 			return $this->denied();
 		}
 
-		if ( $this->is_administrator( $user_id ) ) {
+		if ( self::ACTION_MANAGE_MEMBERS === $action && $this->is_administrator( $user_id ) ) {
 			return true;
 		}
 		if ( ! $this->has_feature_access( $user_id ) ) {

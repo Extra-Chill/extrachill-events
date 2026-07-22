@@ -314,6 +314,7 @@ class VenueQualificationAbilities {
 					$attempt                          = QualifyFingerprinter::add_production_eligibility( $attempt, $flow_context );
 					$fingerprint['production_context'] = $attempt['production_context'];
 				}
+				unset( $attempt['_diagnostic_identifiers'] );
 				if ( ! empty( $attempt['ran'] ) ) {
 					$ran_any = true;
 				}

@@ -27,6 +27,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class QualifyFingerprinter {
+	private const MAX_LIFECYCLE_IDENTIFIERS = 500;
 
 	/**
 	 * Extractor classes that ship with data-machine-events. Used to mark
@@ -232,6 +233,7 @@ class QualifyFingerprinter {
 			'unique_source_events'      => 0,
 			'production_max_items'      => null,
 			'production_context'        => null,
+			'_diagnostic_identifiers'   => array(),
 			'ran'                       => false,
 			'name'                      => '',
 			'exists'                    => true,
@@ -251,7 +253,13 @@ class QualifyFingerprinter {
 
 		$ability_input = array( 'target_url' => $url );
 		if ( null !== $handler_config ) {
-			$ability_input['handler_config'] = $handler_config;
+			$ability_config = $handler_config;
+			if ( method_exists( $ability, 'get_input_schema' ) ) {
+				$input_schema       = (array) $ability->get_input_schema();
+				$config_properties  = (array) ( $input_schema['properties']['handler_config']['properties'] ?? array() );
+				$ability_config     = array_intersect_key( $handler_config, $config_properties );
+			}
+			$ability_input['handler_config'] = $ability_config;
 		}
 
 		$result = $ability->execute( $ability_input );
@@ -281,6 +289,13 @@ class QualifyFingerprinter {
 		if ( ! empty( $result['success'] ) ) {
 			$event_data        = is_array( $result['event_data'] ?? null ) ? $result['event_data'] : array();
 			$attempt['events'] = self::count_events( $event_data, $payload_type );
+			if ( null !== $handler_config ) {
+				$attempt['_diagnostic_identifiers'] = self::diagnostic_identifiers(
+					$event_data,
+					$handler_config,
+					$attempt['unique_source_events']
+				);
+			}
 		}
 
 		return $attempt;
@@ -309,6 +324,8 @@ class QualifyFingerprinter {
 			'production_eligible'  => null,
 			'complete'             => false,
 			'bounded'              => true,
+			'identifier_limit'     => self::MAX_LIFECYCLE_IDENTIFIERS,
+			'identifier_source'    => '',
 			'error'                => '',
 		);
 
@@ -340,12 +357,58 @@ class QualifyFingerprinter {
 			return $attempt;
 		}
 
-		$identifiers = array();
+		$raw_identifiers = array();
 		foreach ( (array) ( $raw_result['packets'] ?? array() ) as $packet ) {
+			$payload = json_decode( (string) ( $packet['data']['body'] ?? '' ), true );
+			if ( ! is_array( $payload ) || ! is_array( $payload['event'] ?? null ) ) {
+				continue;
+			}
 			$identifier = (string) ( $packet['metadata']['item_identifier'] ?? '' );
 			if ( '' !== $identifier ) {
-				$identifiers[] = $identifier;
+				$raw_identifiers[] = $identifier;
 			}
+		}
+
+		$expected_identifiers   = (int) $diagnostics['unique_source'];
+		$derived_identifiers    = (array) ( $attempt['_diagnostic_identifiers'] ?? array() );
+		$identifiers            = $raw_identifiers;
+		$identifier_source      = 'bounded_raw';
+		$derived_inventory_used = $expected_identifiers > count( array_unique( $raw_identifiers ) )
+			&& $expected_identifiers <= self::MAX_LIFECYCLE_IDENTIFIERS
+			&& count( array_unique( $derived_identifiers ) ) === $expected_identifiers
+			&& empty( array_diff( $raw_identifiers, $derived_identifiers ) );
+		if ( $derived_inventory_used ) {
+			$identifiers       = $derived_identifiers;
+			$identifier_source = 'verified_event_inventory';
+		}
+
+		$unique_identifiers = array_values( array_unique( $identifiers ) );
+		$complete           = count( $unique_identifiers ) === $expected_identifiers
+			&& $expected_identifiers <= self::MAX_LIFECYCLE_IDENTIFIERS;
+		$diagnostics['complete']             = $complete;
+		$diagnostics['identifier_source']    = $identifier_source;
+		$diagnostics['returned_identifiers'] = count( $unique_identifiers );
+		$diagnostics['truncation']           = (array) ( $raw_result['truncation'] ?? array() );
+
+		if ( ! $complete ) {
+			$diagnostics['error'] = sprintf(
+				'Lifecycle coverage is incomplete: observed %d of %d unique identifiers within the %d-item safety ceiling.',
+				count( $unique_identifiers ),
+				$expected_identifiers,
+				self::MAX_LIFECYCLE_IDENTIFIERS
+			);
+			$attempt['production_context'] = $diagnostics;
+			return $attempt;
+		}
+
+		if ( 0 === $expected_identifiers ) {
+			$diagnostics['processed']             = 0;
+			$diagnostics['active_claim']          = 0;
+			$diagnostics['reprocess_eligible']    = 0;
+			$diagnostics['selected_by_max_items'] = 0;
+			$diagnostics['production_eligible']   = 0;
+			$attempt['production_context']         = $diagnostics;
+			return $attempt;
 		}
 
 		$context = \DataMachine\Core\ExecutionContext::fromFlow(
@@ -356,7 +419,7 @@ class QualifyFingerprinter {
 			'universal_web_scraper'
 		);
 		$classification = $context->classifySourceItems(
-			$identifiers,
+			$unique_identifiers,
 			max( 0, (int) ( $flow_context['handler_config']['max_items'] ?? 0 ) )
 		);
 		$counts = (array) ( $classification['diagnostics'] ?? array() );
@@ -367,21 +430,63 @@ class QualifyFingerprinter {
 			}
 		}
 
-		$truncated = ! empty( $raw_result['truncation']['truncated'] );
-		$complete  = ! $truncated
-			&& count( array_unique( $identifiers ) ) >= (int) $diagnostics['unique_source'];
-
 		$diagnostics['processed']             = $processed;
 		$diagnostics['active_claim']          = (int) ( $counts['actively_claimed'] ?? 0 );
 		$diagnostics['reprocess_eligible']     = (int) ( $counts['processed_reprocess_eligible'] ?? 0 );
 		$diagnostics['selected_by_max_items'] = (int) ( $counts['selected'] ?? 0 );
-		$diagnostics['production_eligible']   = $complete ? (int) ( $counts['selected'] ?? 0 ) : null;
-		$diagnostics['complete']              = $complete;
-		$diagnostics['returned_identifiers']  = count( $identifiers );
-		$diagnostics['truncation']            = (array) ( $raw_result['truncation'] ?? array() );
+		$diagnostics['production_eligible']   = (int) ( $counts['selected'] ?? 0 );
 
 		$attempt['production_context'] = $diagnostics;
 		return $attempt;
+	}
+
+	/**
+	 * Derive canonical identifiers from the bounded structured inventory.
+	 *
+	 * Raw output validates the generated identities before callers may use the
+	 * generated tail beyond the generic raw ability's 100-packet ceiling.
+	 *
+	 * @param array $event_data     Scraper diagnostic event summaries.
+	 * @param array $handler_config Persisted scraper configuration.
+	 * @param int   $expected_count Reported unique structured event count.
+	 * @return string[] Canonical identifiers, or an empty array when unprovable.
+	 */
+	private static function diagnostic_identifiers( array $event_data, array $handler_config, int $expected_count ): array {
+		if ( $expected_count <= 0 || $expected_count > self::MAX_LIFECYCLE_IDENTIFIERS ) {
+			return array();
+		}
+		$items = is_array( $event_data['items'] ?? null ) ? $event_data['items'] : array();
+		if ( count( $items ) !== $expected_count
+			|| ! class_exists( '\\DataMachineEvents\\Utilities\\EventIdentifierGenerator' ) ) {
+			return array();
+		}
+
+		$venue_name = (string) ( $handler_config['venue_name'] ?? '' );
+		if ( ! empty( $handler_config['venue'] ) && is_numeric( $handler_config['venue'] ) && function_exists( 'get_term' ) ) {
+			$term = get_term( (int) $handler_config['venue'], 'venue' );
+			if ( is_object( $term ) && isset( $term->name ) ) {
+				$venue_name = (string) $term->name;
+			}
+		}
+		if ( '' === trim( $venue_name ) ) {
+			return array();
+		}
+
+		$identifiers = array();
+		foreach ( $items as $item ) {
+			$title      = (string) ( $item['title'] ?? '' );
+			$start_date = (string) ( $item['startDate'] ?? '' );
+			if ( '' === $title || '' === $start_date ) {
+				return array();
+			}
+			$identifiers[] = \DataMachineEvents\Utilities\EventIdentifierGenerator::generate(
+				$title,
+				$start_date,
+				$venue_name
+			);
+		}
+
+		return count( array_unique( $identifiers ) ) === $expected_count ? $identifiers : array();
 	}
 
 	/**

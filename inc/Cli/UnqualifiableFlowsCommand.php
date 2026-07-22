@@ -208,6 +208,9 @@ class UnqualifiableFlowsCommand {
 				'selected_by_max_items' => null,
 				'production_eligible' => null,
 				'context_supplied' => false,
+				'complete'         => false,
+				'identifier_source' => '',
+				'diagnostic_error' => '',
 				'repair_proposal' => null,
 				'action'      => 'none',
 			);
@@ -230,6 +233,9 @@ class UnqualifiableFlowsCommand {
 			$row['selected_by_max_items'] = $production['selected_by_max_items'] ?? null;
 			$row['production_eligible']  = $production['production_eligible'] ?? null;
 			$row['context_supplied']     = ! empty( $production['context_supplied'] );
+			$row['complete']             = true === ( $production['complete'] ?? false );
+			$row['identifier_source']    = (string) ( $production['identifier_source'] ?? '' );
+			$row['diagnostic_error']     = (string) ( $production['error'] ?? '' );
 			$row['repair_proposal']      = $result['repair_proposal'] ?? null;
 
 			if ( QualifyVerdict::QUALIFIED_STRUCTURED === $row['new_verdict'] ) {
@@ -276,7 +282,7 @@ class UnqualifiableFlowsCommand {
 		\WP_CLI\Utils\format_items(
 			$format,
 			$results,
-			array( 'flow_id', 'flow_name', 'new_verdict', 'raw_extracted', 'unique_source', 'processed', 'active_claim', 'reprocess_eligible', 'selected_by_max_items', 'production_eligible', 'action' )
+			array( 'flow_id', 'flow_name', 'new_verdict', 'raw_extracted', 'unique_source', 'processed', 'active_claim', 'reprocess_eligible', 'selected_by_max_items', 'production_eligible', 'complete', 'identifier_source', 'diagnostic_error', 'action' )
 		);
 
 		$paused      = array_filter( $results, fn( $r ) => 'paused' === $r['action'] );
@@ -314,12 +320,12 @@ class UnqualifiableFlowsCommand {
 	 * @return string CLI action.
 	 */
 	protected function classify_qualified_action( array $production, ?array $repair_proposal ): string {
+		if ( ! empty( $repair_proposal ) ) {
+			return 'repair_proposed';
+		}
 		if ( true === ( $production['complete'] ?? false )
 			&& 0 === ( $production['production_eligible'] ?? null ) ) {
 			return 'expected_zero';
-		}
-		if ( ! empty( $repair_proposal ) ) {
-			return 'repair_proposed';
 		}
 		return 'unexpected_pass';
 	}

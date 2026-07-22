@@ -219,19 +219,24 @@ class QualifyFingerprinter {
 	 * data-machine-events/test-event-scraper ability and inspecting the
 	 * result.
 	 *
-	 * @param string $url URL to test.
+	 * @param string     $url            URL to test.
+	 * @param array|null $handler_config Persisted handler configuration, when available.
 	 * @return array Attempt record.
 	 */
-	public static function run_extractor_attempt( string $url ): array {
+	public static function run_extractor_attempt( string $url, ?array $handler_config = null ): array {
 		$attempt = array(
-			'url'         => $url,
-			'events_url'  => $url,
-			'events'      => 0,
-			'ran'         => false,
-			'name'        => '',
-			'exists'      => true,
-			'matched'     => false,
-			'source_type' => '',
+			'url'                       => $url,
+			'events_url'                => $url,
+			'events'                    => 0,
+			'raw_extracted'             => 0,
+			'unique_source_events'      => 0,
+			'production_max_items'      => null,
+			'production_context'        => null,
+			'ran'                       => false,
+			'name'                      => '',
+			'exists'                    => true,
+			'matched'                   => false,
+			'source_type'               => '',
 		);
 
 		$ability = function_exists( 'wp_get_ability' )
@@ -244,7 +249,12 @@ class QualifyFingerprinter {
 			return $attempt;
 		}
 
-		$result = $ability->execute( array( 'target_url' => $url ) );
+		$ability_input = array( 'target_url' => $url );
+		if ( null !== $handler_config ) {
+			$ability_input['handler_config'] = $handler_config;
+		}
+
+		$result = $ability->execute( $ability_input );
 
 		if ( is_wp_error( $result ) ) {
 			$attempt['ran']  = true;
@@ -261,6 +271,11 @@ class QualifyFingerprinter {
 		$attempt['matched']     = ! empty( $result['success'] );
 		$attempt['source_type'] = $source_type ? $source_type : $payload_type;
 		$attempt['name']        = self::extractor_class_from_method( $extraction_method, $payload_type, $source_type );
+		$attempt['raw_extracted']        = (int) ( $extraction['extracted_packet_count'] ?? 0 );
+		$attempt['unique_source_events'] = (int) ( $extraction['unique_source_event_count'] ?? 0 );
+		$attempt['production_max_items'] = isset( $extraction['production_max_items'] )
+			? (int) $extraction['production_max_items']
+			: null;
 
 		// Count events for the extractor_attempts entry.
 		if ( ! empty( $result['success'] ) ) {
@@ -268,6 +283,104 @@ class QualifyFingerprinter {
 			$attempt['events'] = self::count_events( $event_data, $payload_type );
 		}
 
+		return $attempt;
+	}
+
+	/**
+	 * Classify source identifiers against a persisted flow without claiming or
+	 * marking any item. Raw handler output and the lifecycle query are bounded.
+	 *
+	 * @param array $attempt      Scraper attempt to enrich.
+	 * @param array $flow_context Persisted flow, step, config, and job scope.
+	 * @return array Enriched attempt.
+	 */
+	public static function add_production_eligibility( array $attempt, array $flow_context ): array {
+		$diagnostics = array(
+			'context_supplied'     => true,
+			'flow_id'              => (int) ( $flow_context['flow_id'] ?? 0 ),
+			'flow_step_id'         => (string) ( $flow_context['flow_step_id'] ?? '' ),
+			'job_id'               => (string) ( $flow_context['job_id'] ?? '' ),
+			'raw_extracted'         => (int) ( $attempt['raw_extracted'] ?? 0 ),
+			'unique_source'        => (int) ( $attempt['unique_source_events'] ?? 0 ),
+			'processed'            => null,
+			'active_claim'         => null,
+			'reprocess_eligible'    => null,
+			'selected_by_max_items' => null,
+			'production_eligible'  => null,
+			'complete'             => false,
+			'bounded'              => true,
+			'error'                => '',
+		);
+
+		$test_handler = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'datamachine/test-handler' ) : null;
+		if ( ! $test_handler || ! class_exists( '\\DataMachine\\Core\\ExecutionContext' ) ) {
+			$diagnostics['error']             = 'Production lifecycle diagnostics are unavailable.';
+			$attempt['production_context'] = $diagnostics;
+			return $attempt;
+		}
+
+		$raw_result = $test_handler->execute(
+			array(
+				'flow_id'     => (int) $flow_context['flow_id'],
+				'config'      => array(
+					'source_url' => (string) $attempt['url'],
+					'max_items'  => 100,
+				),
+				'limit'       => 100,
+				'output_mode' => 'raw',
+				'byte_limit'  => 5242880,
+			)
+		);
+
+		if ( is_wp_error( $raw_result ) || empty( $raw_result['success'] ) ) {
+			$diagnostics['error'] = is_wp_error( $raw_result )
+				? $raw_result->get_error_message()
+				: (string) ( $raw_result['error'] ?? 'Handler diagnostics failed.' );
+			$attempt['production_context'] = $diagnostics;
+			return $attempt;
+		}
+
+		$identifiers = array();
+		foreach ( (array) ( $raw_result['packets'] ?? array() ) as $packet ) {
+			$identifier = (string) ( $packet['metadata']['item_identifier'] ?? '' );
+			if ( '' !== $identifier ) {
+				$identifiers[] = $identifier;
+			}
+		}
+
+		$context = \DataMachine\Core\ExecutionContext::fromFlow(
+			(int) ( $flow_context['pipeline_id'] ?? 0 ),
+			(int) $flow_context['flow_id'],
+			(string) $flow_context['flow_step_id'],
+			(string) ( $flow_context['job_id'] ?? '' ),
+			'universal_web_scraper'
+		);
+		$classification = $context->classifySourceItems(
+			$identifiers,
+			max( 0, (int) ( $flow_context['handler_config']['max_items'] ?? 0 ) )
+		);
+		$counts = (array) ( $classification['diagnostics'] ?? array() );
+		$processed = 0;
+		foreach ( (array) ( $classification['classifications'] ?? array() ) as $item ) {
+			if ( ! empty( $item['processed'] ) ) {
+				++$processed;
+			}
+		}
+
+		$truncated = ! empty( $raw_result['truncation']['truncated'] );
+		$complete  = ! $truncated
+			&& count( array_unique( $identifiers ) ) >= (int) $diagnostics['unique_source'];
+
+		$diagnostics['processed']             = $processed;
+		$diagnostics['active_claim']          = (int) ( $counts['actively_claimed'] ?? 0 );
+		$diagnostics['reprocess_eligible']     = (int) ( $counts['processed_reprocess_eligible'] ?? 0 );
+		$diagnostics['selected_by_max_items'] = (int) ( $counts['selected'] ?? 0 );
+		$diagnostics['production_eligible']   = $complete ? (int) ( $counts['selected'] ?? 0 ) : null;
+		$diagnostics['complete']              = $complete;
+		$diagnostics['returned_identifiers']  = count( $identifiers );
+		$diagnostics['truncation']            = (array) ( $raw_result['truncation'] ?? array() );
+
+		$attempt['production_context'] = $diagnostics;
 		return $attempt;
 	}
 

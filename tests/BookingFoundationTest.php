@@ -150,6 +150,8 @@ final class BookingWpdb {
 	public $rows                    = array();
 	public $schemas                 = array();
 	public $schema_omit             = array();
+	public $schema_queries          = 0;
+	public $dropped_indexes         = array();
 	public $fail_reads              = false;
 	public $fail_activity_reads     = false;
 	public $fail_inserts            = false;
@@ -191,15 +193,24 @@ final class BookingWpdb {
 				$name    = 'PRIMARY KEY' === strtoupper( $index[1] ) ? 'PRIMARY' : $index[2];
 				$unique  = 'KEY' !== strtoupper( $index[1] );
 				$columns = array_map( 'trim', explode( ',', str_replace( '`', '', $index[3] ) ) );
-				if ( ! in_array( $name, $this->schema_omit[ $table ]['indexes'] ?? array(), true ) ) {
+				if ( ! isset( $this->schemas[ $table ]['indexes'][ $name ] ) && ! in_array( $name, $this->schema_omit[ $table ]['indexes'] ?? array(), true ) ) {
 					$this->schemas[ $table ]['indexes'][ $name ] = array(
 						'unique'  => $unique,
 						'columns' => $columns,
 					);
 				}
 			} elseif ( preg_match( '/^([a-z_]+)\s+(.+)$/', $line, $column ) && ! in_array( $column[1], $this->schema_omit[ $table ]['columns'] ?? array(), true ) ) {
-				preg_match( '/^(.+?)(?:\s+NOT NULL|\s+NULL|\s+DEFAULT|\s+AUTO_INCREMENT|$)/i', $column[2], $type );
-				$this->schemas[ $table ]['columns'][ $column[1] ] = strtolower( trim( $type[1] ) );
+				$definition = $column[2];
+				preg_match( '/^(.+?)(?:\s+NOT NULL|\s+NULL|\s+DEFAULT|\s+AUTO_INCREMENT|$)/i', $definition, $type );
+				preg_match( "/\sDEFAULT\s+(?:'([^']*)'|([^\s]+))/i", $definition, $default );
+				if ( ! isset( $this->schemas[ $table ]['columns'][ $column[1] ] ) ) {
+					$this->schemas[ $table ]['columns'][ $column[1] ] = array(
+						'Type'    => strtolower( trim( $type[1] ) ),
+						'Null'    => false !== stripos( $definition, 'NOT NULL' ) ? 'NO' : 'YES',
+						'Default' => isset( $default[1] ) && '' !== $default[1] ? $default[1] : ( $default[2] ?? null ),
+						'Extra'   => false !== stripos( $definition, 'AUTO_INCREMENT' ) ? 'auto_increment' : '',
+					);
+				}
 			}
 		}
 	}
@@ -234,6 +245,7 @@ final class BookingWpdb {
 
 	public function get_var( $query ) {
 		$this->last_error = '';
+		++$this->schema_queries;
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated schema read failure';
 			return null; }
@@ -284,16 +296,15 @@ final class BookingWpdb {
 			$this->last_error = 'simulated result read failure';
 			return null; }
 		if ( preg_match( '/SHOW COLUMNS FROM `([^`]+)`/', $query, $match ) ) {
+			++$this->schema_queries;
 			$rows = array();
-			foreach ( $this->schemas[ $match[1] ]['columns'] ?? array() as $name => $type ) {
-				$rows[] = array(
-					'Field' => $name,
-					'Type'  => $type,
-				);
+			foreach ( $this->schemas[ $match[1] ]['columns'] ?? array() as $name => $metadata ) {
+				$rows[] = array_merge( array( 'Field' => $name ), $metadata );
 			}
 			return $rows;
 		}
 		if ( preg_match( '/SHOW INDEX FROM `([^`]+)`/', $query, $match ) ) {
+			++$this->schema_queries;
 			$rows = array();
 			foreach ( $this->schemas[ $match[1] ]['indexes'] ?? array() as $name => $index ) {
 				foreach ( $index['columns'] as $position => $column ) {
@@ -369,6 +380,21 @@ final class BookingWpdb {
 	public function query( $query ) {
 		$this->last_query = $query;
 		$this->last_error = '';
+		if ( preg_match( '/ALTER TABLE `([^`]+)` DROP (?:INDEX `([^`]+)`|PRIMARY KEY)/', $query, $drop ) ) {
+			$name = ! empty( $drop[2] ) ? $drop[2] : 'PRIMARY';
+			unset( $this->schemas[ $drop[1] ]['indexes'][ $name ] );
+			if ( 'PRIMARY' === $name && preg_match( '/ADD PRIMARY KEY \(([^)]+)\)/', $query, $primary ) ) {
+				$this->schemas[ $drop[1] ]['indexes']['PRIMARY'] = array(
+					'unique'  => true,
+					'columns' => array_map( 'trim', explode( ',', str_replace( '`', '', $primary[1] ) ) ),
+				);
+			}
+			$this->dropped_indexes[] = array(
+				'table' => $drop[1],
+				'index' => $name,
+			);
+			return 1;
+		}
 		if ( $this->fail_updates ) {
 			$this->last_error = 'simulated update failure';
 			return false; }
@@ -484,20 +510,42 @@ final class BookingFoundationTest extends TestCase {
 		);
 	}
 
-	public function test_schema_stamps_only_verified_site_scoped_contract(): void {
+	public function test_schema_health_validates_attributes_and_site_scope(): void {
 		$this->assertTrue( BookingSchema::install() );
 		$this->assertSame( BookingSchema::SCHEMA_VERSION, get_option( BookingSchema::VERSION_OPTION ) );
 		$this->assertTrue( BookingSchema::health() );
-		$this->assertTrue( $GLOBALS['wpdb']->schemas['wp_7_ec_booking_activity']['indexes']['booking_idempotency']['unique'] );
-		$this->assertSame( array( 'booking_id', 'idempotency_key' ), $GLOBALS['wpdb']->schemas['wp_7_ec_booking_activity']['indexes']['booking_idempotency']['columns'] );
-		$GLOBALS['wpdb']->schemas['wp_7_ec_booking_activity']['indexes']['booking_idempotency']['columns'] = array( 'idempotency_key' );
-		$this->assertSame( 'booking_schema_index_missing', BookingSchema::health()->get_error_code() );
-		$GLOBALS['wpdb']->schemas['wp_7_ec_booking_activity']['indexes']['booking_idempotency']['columns'] = array( 'booking_id', 'idempotency_key' );
-		$GLOBALS['wpdb']->schemas['wp_7_ec_bookings']['columns']['status']                                 = 'text';
-		$this->assertSame( 'booking_schema_column_invalid', BookingSchema::health()->get_error_code() );
+
+		$columns                   =& $GLOBALS['wpdb']->schemas['wp_7_ec_bookings']['columns'];
+		$columns['status']['Type'] = 'text';
+		$this->assertSame( 'type', BookingSchema::health()->get_error_data()['attribute'] );
+		$columns['status']['Type'] = 'varchar(32)';
+		$columns['status']['Null'] = 'YES';
+		$this->assertSame( 'nullable', BookingSchema::health()->get_error_data()['attribute'] );
+		$columns['status']['Null']    = 'NO';
+		$columns['status']['Default'] = 'pending';
+		$this->assertSame( 'default', BookingSchema::health()->get_error_data()['attribute'] );
+		$columns['status']['Default']  = 'inquiry';
+		$columns['version']['Default'] = '2';
+		$this->assertSame( 'default', BookingSchema::health()->get_error_data()['attribute'] );
+		$columns['version']['Default'] = '1';
+		$columns['id']['Extra']        = '';
+		$this->assertSame( 'extra', BookingSchema::health()->get_error_data()['attribute'] );
+		$columns['id']['Extra'] = 'auto_increment';
+		$this->assertTrue( BookingSchema::health() );
+
 		$GLOBALS['wpdb']->prefix = 'wp_12_';
 		$this->assertSame( 'wp_12_ec_bookings', BookingSchema::bookings_table() );
 		$this->assertSame( 'booking_schema_table_missing', BookingSchema::health()->get_error_code() );
+	}
+
+	public function test_unrepairable_column_attributes_are_not_stamped(): void {
+		$this->assertTrue( BookingSchema::install() );
+		$GLOBALS['wpdb']->schemas['wp_7_ec_bookings']['columns']['status']['Null'] = 'YES';
+		$GLOBALS['ec_artist_test']['options'][ BookingSchema::VERSION_OPTION ]     = '';
+		$result = BookingSchema::maybe_install();
+		$this->assertSame( 'booking_schema_column_invalid', $result->get_error_code() );
+		$this->assertSame( 'nullable', $result->get_error_data()['attribute'] );
+		$this->assertSame( '', get_option( BookingSchema::VERSION_OPTION, '' ) );
 	}
 
 	public function test_partial_schema_is_not_stamped_and_repeat_install_repairs_it(): void {
@@ -510,6 +558,54 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertTrue( BookingSchema::maybe_install() );
 		$this->assertTrue( BookingSchema::health() );
 		$this->assertSame( BookingSchema::SCHEMA_VERSION, get_option( BookingSchema::VERSION_OPTION ) );
+	}
+
+	public function test_malformed_required_indexes_are_dropped_and_repaired(): void {
+		$this->assertTrue( BookingSchema::install() );
+		$bookings = 'wp_7_ec_bookings';
+		$activity = 'wp_7_ec_booking_activity';
+		$GLOBALS['wpdb']->schemas[ $bookings ]['indexes']['PRIMARY']['columns']             = array( 'id', 'public_id' );
+		$GLOBALS['wpdb']->schemas[ $bookings ]['indexes']['public_id']['unique']            = false;
+		$GLOBALS['wpdb']->schemas[ $activity ]['indexes']['booking_idempotency']['columns'] = array( 'idempotency_key' );
+		$GLOBALS['wpdb']->schemas[ $activity ]['indexes']['operator_extra']                 = array(
+			'unique'  => false,
+			'columns' => array( 'created_at' ),
+		);
+		$GLOBALS['ec_artist_test']['options'][ BookingSchema::VERSION_OPTION ]              = '';
+		$GLOBALS['wpdb']->dropped_indexes = array();
+
+		$this->assertTrue( BookingSchema::maybe_install() );
+		$this->assertTrue( BookingSchema::health() );
+		$this->assertSame( array( 'id' ), $GLOBALS['wpdb']->schemas[ $bookings ]['indexes']['PRIMARY']['columns'] );
+		$this->assertTrue( $GLOBALS['wpdb']->schemas[ $bookings ]['indexes']['public_id']['unique'] );
+		$this->assertSame( array( 'booking_id', 'idempotency_key' ), $GLOBALS['wpdb']->schemas[ $activity ]['indexes']['booking_idempotency']['columns'] );
+		$this->assertArrayHasKey( 'operator_extra', $GLOBALS['wpdb']->schemas[ $activity ]['indexes'] );
+		$this->assertSame(
+			array(
+				array(
+					'table' => $bookings,
+					'index' => 'PRIMARY',
+				),
+				array(
+					'table' => $bookings,
+					'index' => 'public_id',
+				),
+				array(
+					'table' => $activity,
+					'index' => 'booking_idempotency',
+				),
+			),
+			$GLOBALS['wpdb']->dropped_indexes
+		);
+	}
+
+	public function test_current_version_maybe_install_performs_no_schema_queries(): void {
+		$GLOBALS['ec_artist_test']['options'][ BookingSchema::VERSION_OPTION ] = BookingSchema::SCHEMA_VERSION;
+		$GLOBALS['wpdb']->schema_queries                                       = 0;
+		$GLOBALS['ec_artist_test']['dbdelta']                                  = array();
+		$this->assertTrue( BookingSchema::maybe_install() );
+		$this->assertSame( 0, $GLOBALS['wpdb']->schema_queries );
+		$this->assertSame( array(), $GLOBALS['ec_artist_test']['dbdelta'] );
 	}
 
 	public function test_missing_unique_index_and_schema_read_errors_remain_retryable(): void {

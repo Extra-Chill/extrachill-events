@@ -268,6 +268,7 @@ final class BookingWpdb {
 	public $fail_transaction_rollback         = false;
 	public $rollback_queries                  = 0;
 	public $after_membership_lock             = null;
+	public $after_booking_lock                = null;
 	public $after_venue_lock                  = null;
 	public $fail_venue_lock                   = false;
 	public $venue_lock_queries                = 0;
@@ -535,6 +536,11 @@ final class BookingWpdb {
 		$table = $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' );
 		if ( ! $is_activity && ! $is_hold && false !== strpos( $query, 'FOR UPDATE' ) ) {
 			++$this->booking_lock_queries;
+			if ( is_callable( $this->after_booking_lock ) ) {
+				$callback                 = $this->after_booking_lock;
+				$this->after_booking_lock = null;
+				$callback();
+			}
 		}
 		if ( preg_match( '/WHERE id = (\d+)/', $query, $match ) ) {
 			$row = $this->rows[ $table ][ (int) $match[1] ] ?? null;

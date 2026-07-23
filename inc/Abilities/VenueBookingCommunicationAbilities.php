@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/** Registers stable booking message, reply, callback, and read contracts. */
+/** Registers bounded outbound booking message and read contracts. */
 class VenueBookingCommunicationAbilities {
 
 	private static bool $registered = false;
@@ -74,40 +74,6 @@ class VenueBookingCommunicationAbilities {
 				'meta'                => $this->meta( true, true ),
 			)
 		);
-		wp_register_ability(
-			'extrachill/record-booking-email-reply',
-			array(
-				'label'               => __( 'Record Booking Email Reply', 'extrachill-events' ),
-				'description'         => __( 'Link a qualified inbound email reply to a booking and suppress follow-ups.', 'extrachill-events' ),
-				'category'            => 'extrachill-events',
-				'input_schema'        => $this->reply_schema(),
-				'output_schema'       => array(
-					'type'                 => 'object',
-					'additionalProperties' => true,
-				),
-				'execute_callback'    => array( $this, 'record_reply' ),
-				'permission_callback' => array( $this, 'can_access_booking' ),
-				'meta'                => $this->meta( false, true ),
-			)
-		);
-		wp_register_ability(
-			'extrachill/record-booking-message-delivery',
-			array(
-				'label'               => __( 'Record Booking Message Delivery', 'extrachill-events' ),
-				'description'         => __( 'Record idempotent sent or failed evidence from an email runtime.', 'extrachill-events' ),
-				'category'            => 'extrachill-events',
-				'input_schema'        => $this->delivery_schema(),
-				'output_schema'       => array(
-					'type'                 => 'object',
-					'additionalProperties' => false,
-					'properties'           => $this->state_properties(),
-					'required'             => array_keys( $this->state_properties() ),
-				),
-				'execute_callback'    => array( $this, 'record_delivery' ),
-				'permission_callback' => array( $this, 'can_access_intent' ),
-				'meta'                => $this->meta( false, true ),
-			)
-		);
 	}
 
 	public function send( array $input ) {
@@ -144,14 +110,6 @@ class VenueBookingCommunicationAbilities {
 		return $this->communications->list_for_booking( (int) $input['booking_id'], get_current_user_id() );
 	}
 
-	public function record_reply( array $input ) {
-		return $this->communications->record_reply( (int) $input['booking_id'], $input['participant'], $input['message_id'], $input['in_reply_to'] ?? null, get_current_user_id() );
-	}
-
-	public function record_delivery( array $input ) {
-		return $this->communications->record_delivery( (int) $input['intent_id'], $input['status'], $input['callback_id'], $input['provider_id'] ?? null, get_current_user_id() );
-	}
-
 	/** Register replay and fresh authorization for generic Data Machine approval. */
 	public function pending_action_handlers( $handlers ) {
 		$handlers                                    = is_array( $handlers ) ? $handlers : array();
@@ -172,11 +130,6 @@ class VenueBookingCommunicationAbilities {
 	public function can_access_booking( array $input ) {
 		$booking = $this->bookings->get( absint( $input['booking_id'] ?? 0 ) );
 		return is_array( $booking ) ? $this->authorization->authorize( get_current_user_id(), $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) : new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) );
-	}
-
-	public function can_access_intent( array $input ) {
-		$activity = ( new \ExtraChillEvents\Core\BookingActivityRepository() )->get( absint( $input['intent_id'] ?? 0 ) );
-		return is_array( $activity ) ? $this->can_access_booking( array( 'booking_id' => $activity['booking_id'] ) ) : new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) );
 	}
 
 	private function message_input_schema(): array {
@@ -228,10 +181,6 @@ class VenueBookingCommunicationAbilities {
 						'enum' => BookingRepository::STATUSES,
 					),
 				),
-				'in_reply_to'       => array(
-					'type'      => array( 'string', 'null' ),
-					'maxLength' => 191,
-				),
 				'approval'          => array(
 					'type'    => 'string',
 					'enum'    => array( 'direct', 'required' ),
@@ -254,70 +203,6 @@ class VenueBookingCommunicationAbilities {
 			),
 			'required'             => array( 'booking_id' ),
 			'additionalProperties' => false,
-		);
-	}
-
-	private function reply_schema(): array {
-		return array(
-			'type'                 => 'object',
-			'properties'           => array(
-				'booking_id'  => array(
-					'type'    => 'integer',
-					'minimum' => 1,
-				),
-				'participant' => array(
-					'type'   => 'string',
-					'format' => 'email',
-				),
-				'message_id'  => array(
-					'type'      => 'string',
-					'minLength' => 1,
-					'maxLength' => 191,
-				),
-				'in_reply_to' => array(
-					'type'      => array( 'string', 'null' ),
-					'maxLength' => 191,
-				),
-			),
-			'required'             => array( 'booking_id', 'participant', 'message_id' ),
-			'additionalProperties' => false,
-		);
-	}
-
-	private function delivery_schema(): array {
-		return array(
-			'type'                 => 'object',
-			'properties'           => array(
-				'intent_id'   => array(
-					'type'    => 'integer',
-					'minimum' => 1,
-				),
-				'status'      => array(
-					'type' => 'string',
-					'enum' => array( 'sent', 'failed' ),
-				),
-				'callback_id' => array(
-					'type'      => 'string',
-					'minLength' => 1,
-					'maxLength' => 191,
-				),
-				'provider_id' => array(
-					'type'      => array( 'string', 'null' ),
-					'maxLength' => 191,
-				),
-			),
-			'required'             => array( 'intent_id', 'status', 'callback_id' ),
-			'additionalProperties' => false,
-		);
-	}
-
-	private function state_properties(): array {
-		return array(
-			'intent_id'  => array( 'type' => 'integer' ),
-			'booking_id' => array( 'type' => 'integer' ),
-			'message_id' => array( 'type' => 'string' ),
-			'status'     => array( 'type' => 'string' ),
-			'action_id'  => array( 'type' => array( 'integer', 'null' ) ),
 		);
 	}
 

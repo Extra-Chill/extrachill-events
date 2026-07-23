@@ -216,10 +216,11 @@ class BookingHoldRepository {
 		if ( '' === $space_key || ! $this->valid_datetime( $start_at ) || ! $this->valid_datetime( $end_at ) || $end_at <= $start_at ) {
 			return new \WP_Error( 'invalid_booking_performance', __( 'A configured space and strict UTC performance range are required.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
+		$venue_id = (int) $booking['venue_term_id'];
 		return $this->with_lock(
 			$this->lock_name( $booking['venue_term_id'], $space_key ),
-			function () use ( $booking_id, $expected_version, $space_key, $start_at, $end_at, $actor_id ) {
-				$started = $this->begin_authorized( $booking_id, $actor_id );
+			function () use ( $booking_id, $expected_version, $space_key, $start_at, $end_at, $actor_id, $venue_id ) {
+				$started = $this->begin_authorized( $venue_id, $actor_id );
 				if ( is_wp_error( $started ) ) {
 					return $started;
 				}

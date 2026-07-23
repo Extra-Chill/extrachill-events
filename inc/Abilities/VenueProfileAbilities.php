@@ -73,7 +73,7 @@ class VenueProfileAbilities {
 					'required'             => array( 'venue_term_id' ),
 					'additionalProperties' => false,
 				),
-				'output_schema'       => $this->document_schema(),
+				'output_schema'       => $this->profile_schema(),
 				'execute_callback'    => array( $this, 'get_profile' ),
 				'permission_callback' => array( $this, 'can_access_venue' ),
 				'meta'                => array(
@@ -91,22 +91,24 @@ class VenueProfileAbilities {
 			'extrachill/update-venue-profile',
 			array(
 				'label'               => __( 'Update Venue Profile', 'extrachill-events' ),
-				'description'         => __( 'Atomically replace the member-editable venue profile at an expected revision.', 'extrachill-events' ),
+				'description'         => __( 'Update member-editable venue fields at an expected canonical revision.', 'extrachill-events' ),
 				'category'            => 'extrachill-events',
 				'input_schema'        => array(
 					'type'                 => 'object',
 					'properties'           => array(
 						'venue_term_id'     => $venue_property,
 						'expected_revision' => array(
-							'type'    => 'integer',
-							'minimum' => 0,
+							'type'      => 'string',
+							'pattern'   => '^[a-f0-9]{64}$',
+							'minLength' => 64,
+							'maxLength' => 64,
 						),
-						'profile'           => $this->profile_schema(),
+						'profile'           => $this->changes_schema(),
 					),
 					'required'             => array( 'venue_term_id', 'expected_revision', 'profile' ),
 					'additionalProperties' => false,
 				),
-				'output_schema'       => $this->document_schema(),
+				'output_schema'       => $this->mutation_schema(),
 				'execute_callback'    => array( $this, 'update_profile' ),
 				'permission_callback' => array( $this, 'can_access_venue' ),
 				'meta'                => array(
@@ -144,7 +146,7 @@ class VenueProfileAbilities {
 	public function get_profile( array $input ) {
 		$venue_term_id = absint( $input['venue_term_id'] ?? 0 );
 		$allowed       = $this->authorization->authorize( get_current_user_id(), $venue_term_id, VenueAuthorization::ACTION_ACCESS_VENUE );
-		return is_wp_error( $allowed ) ? $allowed : $this->profiles->get( $venue_term_id );
+		return is_wp_error( $allowed ) ? $allowed : $this->profiles->get( $venue_term_id, get_current_user_id() );
 	}
 
 	/**
@@ -157,71 +159,74 @@ class VenueProfileAbilities {
 		return $this->profiles->update(
 			absint( $input['venue_term_id'] ?? 0 ),
 			(array) ( $input['profile'] ?? array() ),
-			(int) ( $input['expected_revision'] ?? -1 ),
+			(string) ( $input['expected_revision'] ?? '' ),
 			get_current_user_id()
 		);
 	}
 
-	/** Return the strict member-editable profile schema. */
+	/** Return the canonical DME profile schema. */
 	private function profile_schema(): array {
-		$nullable_text = static function ( int $max_length ): array {
-			return array(
-				'type'      => 'string',
-				'maxLength' => $max_length,
-			);
-		};
+		$text = array( 'type' => 'string' );
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'name'        => array(
-					'type'      => 'string',
-					'minLength' => 1,
-					'maxLength' => 191,
-				),
-				'description' => $nullable_text( 10000 ),
-				'address'     => $nullable_text( 255 ),
-				'city'        => $nullable_text( 191 ),
-				'state'       => $nullable_text( 100 ),
-				'zip'         => $nullable_text( 32 ),
-				'country'     => $nullable_text( 100 ),
-				'phone'       => $nullable_text( 64 ),
-				'website'     => array(
-					'type'      => 'string',
-					'maxLength' => 2048,
-				),
-				'capacity'    => array(
-					'type'    => array( 'integer', 'null' ),
+				'term_id'     => array(
+					'type'    => 'integer',
 					'minimum' => 1,
-					'maximum' => 1000000,
+				),
+				'name'        => $text,
+				'description' => $text,
+				'address'     => $text,
+				'city'        => $text,
+				'state'       => $text,
+				'zip'         => $text,
+				'country'     => $text,
+				'phone'       => $text,
+				'website'     => $text,
+				'capacity'    => $text,
+				'revision'    => array(
+					'type'    => 'string',
+					'pattern' => '^[a-f0-9]{64}$',
 				),
 			),
-			'required'             => array( 'name', 'description', 'address', 'city', 'state', 'zip', 'country', 'phone', 'website', 'capacity' ),
+			'required'             => array( 'term_id', 'name', 'description', 'address', 'city', 'state', 'zip', 'country', 'phone', 'website', 'capacity', 'revision' ),
 			'additionalProperties' => false,
 		);
 	}
 
-	/** Return the stable versioned output schema. */
-	private function document_schema(): array {
+	/** Return the bounded partial-change input schema owned by DME. */
+	private function changes_schema(): array {
+		$text       = array( 'type' => 'string' );
+		$properties = array_fill_keys( array( 'name', 'description', 'address', 'city', 'state', 'zip', 'country', 'phone', 'website', 'capacity' ), $text );
+		return array(
+			'type'                 => 'object',
+			'properties'           => $properties,
+			'minProperties'        => 1,
+			'additionalProperties' => false,
+		);
+	}
+
+	/** Return the canonical DME mutation-result schema. */
+	private function mutation_schema(): array {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'version'            => array(
-					'type' => 'integer',
-					'enum' => array( VenueProfile::VERSION ),
-				),
-				'venue_term_id'      => array(
+				'success'        => array( 'type' => 'boolean' ),
+				'term_id'        => array(
 					'type'    => 'integer',
 					'minimum' => 1,
 				),
-				'revision'           => array(
-					'type'    => 'integer',
-					'minimum' => 0,
+				'updated_fields' => array(
+					'type'  => 'array',
+					'items' => array( 'type' => 'string' ),
 				),
-				'updated_by_user_id' => array( 'type' => array( 'integer', 'null' ) ),
-				'updated_at'         => array( 'type' => array( 'string', 'null' ) ),
-				'profile'            => $this->profile_schema(),
+				'revision'       => array(
+					'type'    => 'string',
+					'pattern' => '^[a-f0-9]{64}$',
+				),
+				'profile'        => $this->profile_schema(),
 			),
-			'required'             => array( 'version', 'venue_term_id', 'revision', 'updated_by_user_id', 'updated_at', 'profile' ),
+			'required'             => array( 'success', 'term_id', 'updated_fields', 'revision', 'profile' ),
 			'additionalProperties' => false,
 		);
 	}

@@ -122,13 +122,18 @@ class BookingAttachmentRepository {
 	/**
 	 * Find references to an object so reuse and physical deletion can be bounded.
 	 *
-	 * @param string $reference Opaque storage reference.
+	 * @param string $reference  Opaque storage reference.
+	 * @param bool   $for_update Whether to lock matching rows.
 	 */
-	public function list_by_storage_reference( string $reference ): array {
+	public function list_by_storage_reference( string $reference, bool $for_update = false ) {
 		global $wpdb;
 		$table = BookingSchema::attachments_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE storage_reference = %s AND state != 'purged'", $reference ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Trusted current-prefix table.
-		return '' === (string) $wpdb->last_error ? array_map( array( $this, 'hydrate' ), (array) $rows ) : array();
+		$lock  = $for_update ? ' FOR UPDATE' : '';
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE storage_reference = %s AND state != 'purged'{$lock}", $reference ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Trusted current-prefix table and optional aggregate lock.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_attachment_reference_read_failed', __( 'Attachment references could not be read safely.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
+		return array_map( array( $this, 'hydrate' ), (array) $rows );
 	}
 
 	/**
@@ -136,10 +141,13 @@ class BookingAttachmentRepository {
 	 *
 	 * @param string $cutoff UTC database datetime.
 	 */
-	public function list_retired_before( string $cutoff ): array {
+	public function list_retired_before( string $cutoff ) {
 		global $wpdb;
 		$table = BookingSchema::attachments_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state IN ('replaced', 'deleted') AND retired_at < %s ORDER BY retired_at ASC LIMIT 250", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Trusted current-prefix table.
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state IN ('replaced', 'deleted', 'abandoned', 'purging') AND retired_at < %s ORDER BY retired_at ASC LIMIT 250", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Trusted current-prefix table.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_attachment_cleanup_read_failed', __( 'Attachment cleanup candidates could not be read safely.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
 		return array_map( array( $this, 'hydrate' ), (array) $rows );
 	}
 
@@ -151,17 +159,20 @@ class BookingAttachmentRepository {
 	 */
 	public function retire( int $id, string $state ) {
 		global $wpdb;
-		if ( ! in_array( $state, array( 'replaced', 'deleted', 'purged' ), true ) ) {
+		if ( ! in_array( $state, array( 'replaced', 'deleted', 'abandoned', 'purging', 'purged' ), true ) ) {
 			return new \WP_Error( 'invalid_booking_attachment_state', __( 'The attachment state is not supported.', 'extrachill-events' ) );
 		}
 		$current = $this->get( $id );
+		if ( is_wp_error( $current ) ) {
+			return $current;
+		}
 		if ( ! is_array( $current ) ) {
 			return new \WP_Error( 'booking_attachment_not_found', __( 'The attachment was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
 		}
 		if ( $state === $current['state'] ) {
 			return $current;
 		}
-		if ( 'active' !== $current['state'] && 'purged' !== $state ) {
+		if ( 'active' !== $current['state'] && ! ( 'purging' === $current['state'] && 'purged' === $state ) && ! ( in_array( $current['state'], array( 'replaced', 'deleted', 'abandoned' ), true ) && 'purging' === $state ) ) {
 			return new \WP_Error( 'booking_attachment_inactive', __( 'Only active attachments can be replaced or deleted.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		$now     = gmdate( 'Y-m-d H:i:s' );

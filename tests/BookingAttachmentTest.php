@@ -11,6 +11,7 @@ use ExtraChillEvents\Core\BookingAttachmentRepository;
 use ExtraChillEvents\Core\BookingAttachmentService;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\BookingSchema;
+use ExtraChillEvents\Core\VenueAuthorization;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
@@ -89,8 +90,8 @@ final class BookingAttachmentTest extends TestCase {
 		);
 	}
 
-	private function service(): BookingAttachmentService {
-		return new BookingAttachmentService( null, null, null, null, $this->provider );
+	private function service( ?VenueAuthorization $authorization = null ): BookingAttachmentService {
+		return new BookingAttachmentService( null, null, null, null, $this->provider, $authorization ? $authorization : new BookingTestAuthorization() );
 	}
 
 	public function test_anonymous_attribution_and_idempotent_retry_do_not_duplicate_rows(): void {
@@ -114,7 +115,7 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertSame( array(), $this->provider->released );
 	}
 
-	public function test_authenticated_artist_reference_can_be_reused_but_anonymous_reuse_is_denied(): void {
+	public function test_cross_booking_reuse_fails_closed_without_canonical_artist_authority(): void {
 		$one     = $this->booking();
 		$two     = $this->booking();
 		$service = $this->service();
@@ -123,10 +124,11 @@ final class BookingAttachmentTest extends TestCase {
 			'uploader_user_id' => 12,
 		);
 		$this->assertIsArray( $service->attach( $this->input( $one, $user ) ) );
-		$this->assertIsArray( $service->attach( $this->input( $two, array_merge( $user, array( 'idempotency_key' => 'request-2' ) ) ) ) );
+		$result = $service->attach( $this->input( $two, array_merge( $user, array( 'idempotency_key' => 'request-2' ) ) ) );
+		$this->assertSame( 'booking_attachment_artist_unresolved', $result->get_error_code() );
 		$three  = $this->booking();
 		$result = $service->attach( $this->input( $three, array( 'idempotency_key' => 'request-3' ) ) );
-		$this->assertSame( 'booking_attachment_reuse_forbidden', $result->get_error_code() );
+		$this->assertSame( 'booking_attachment_artist_unresolved', $result->get_error_code() );
 	}
 
 	public function test_policy_rejects_mime_size_filename_and_tax_documents_and_releases_claims(): void {
@@ -180,7 +182,8 @@ final class BookingAttachmentTest extends TestCase {
 	public function test_replacement_and_deletion_preserve_audit_evidence_and_rollback_on_activity_failure(): void {
 		$booking = $this->booking();
 		$service = $this->service();
-		$first   = $service->attach( $this->input( $booking ) );
+		$user    = array( 'uploader_type' => 'user', 'uploader_user_id' => 12 );
+		$first   = $service->attach( $this->input( $booking, $user ) );
 		$second  = $service->replace(
 			$this->input(
 				$booking,
@@ -188,6 +191,8 @@ final class BookingAttachmentTest extends TestCase {
 					'attachment_id'     => $first['id'],
 					'storage_reference' => 'private_object_two_123456',
 					'idempotency_key'   => 'replacement-1',
+					'uploader_type'      => 'user',
+					'uploader_user_id'   => 12,
 				)
 			)
 		);
@@ -220,7 +225,8 @@ final class BookingAttachmentTest extends TestCase {
 		$service->delete( $booking['id'], $file['id'], 12 );
 		$table = BookingSchema::attachments_table();
 		$GLOBALS['wpdb']->rows[ $table ][ $file['id'] ]['retired_at'] = '2020-01-01 00:00:00';
-		$result = $service->cleanup( 1 );
+		$cleanup_policy = array( 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } );
+		$result = $service->cleanup( $cleanup_policy );
 		$this->assertSame( 1, $result['purged'] );
 		$this->assertSame( array( 'private_object_one_123456' ), $this->provider->retired );
 
@@ -237,7 +243,97 @@ final class BookingAttachmentTest extends TestCase {
 		$service->delete( $booking['id'], $contract['id'], 12 );
 		$GLOBALS['wpdb']->rows[ $table ][ $contract['id'] ]['retired_at']                     = '2020-01-01 00:00:00';
 		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ]['status'] = 'confirmed';
-		$this->assertSame( 0, $service->cleanup( 1 )['purged'] );
+		$this->assertSame( 0, $service->cleanup( $cleanup_policy )['purged'] );
 		$this->assertSame( 'deleted', ( new BookingAttachmentRepository() )->get( $contract['id'] )['state'] );
+	}
+
+	public function test_cleanup_requires_policy_and_database_uncertainty_fails_closed(): void {
+		$service = $this->service();
+		$this->assertSame( 'booking_attachment_cleanup_policy_required', $service->cleanup()->get_error_code() );
+		$GLOBALS['wpdb']->fail_reads = true;
+		$result = $service->cleanup( array( 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } ) );
+		$this->assertSame( 'booking_attachment_cleanup_read_failed', $result->get_error_code() );
+		$this->assertSame( array(), $this->provider->retired );
+	}
+
+	public function test_cleanup_reference_read_failure_never_retires_bytes(): void {
+		$booking = $this->booking();
+		$service = $this->service();
+		$file    = $service->attach( $this->input( $booking ) );
+		$service->delete( $booking['id'], $file['id'], 12 );
+		$GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ][ $file['id'] ]['retired_at'] = '2020-01-01 00:00:00';
+		$GLOBALS['wpdb']->fail_attachment_reference_reads = true;
+		$result = $service->cleanup( array( 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } ) );
+		$this->assertSame( 'booking_attachment_reference_read_failed', $result->get_error_code() );
+		$this->assertSame( array(), $this->provider->retired );
+	}
+
+	public function test_revoked_membership_is_rechecked_under_lock(): void {
+		$booking       = $this->booking();
+		$authorization = new BookingTestAuthorization();
+		$GLOBALS['wpdb']->after_membership_lock = static function () use ( $authorization ): void {
+			$authorization->allowed['12:55'] = false;
+		};
+		$result = $this->service( $authorization )->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
+		$this->assertCount( 1, $this->provider->released );
+	}
+
+	public function test_failed_claim_compensation_is_never_silently_ignored(): void {
+		$booking = $this->booking();
+		$this->provider->objects['bad_mime_object_123456789'] = $this->metadata( 'press-kit.pdf', 'image/jpeg' );
+		$this->provider->fail_release = true;
+		$result = $this->service()->attach( $this->input( $booking, array( 'storage_reference' => 'bad_mime_object_123456789' ) ) );
+		$this->assertSame( 'booking_attachment_claim_compensation_failed', $result->get_error_code() );
+		$this->assertSame( 'invalid_booking_attachment_type', $result->get_error_data()['cause'] );
+	}
+
+	public function test_partial_retirement_leaves_recoverable_purging_state(): void {
+		$booking = $this->booking();
+		$service = $this->service();
+		$file    = $service->attach( $this->input( $booking ) );
+		$service->delete( $booking['id'], $file['id'], 12 );
+		$GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ][ $file['id'] ]['retired_at'] = '2020-01-01 00:00:00';
+		$this->provider->fail_retire = true;
+		$result = $service->cleanup( array( 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } ) );
+		$this->assertSame( 'simulated_retirement_failure', $result->get_error_code() );
+		$this->assertSame( 'purging', ( new BookingAttachmentRepository() )->get( $file['id'] )['state'] );
+	}
+
+	public function test_cleanup_rechecks_active_references_inside_reference_lock(): void {
+		$booking = $this->booking();
+		$service = $this->service();
+		$file    = $service->attach( $this->input( $booking ) );
+		$service->delete( $booking['id'], $file['id'], 12 );
+		$table = BookingSchema::attachments_table();
+		$GLOBALS['wpdb']->rows[ $table ][ $file['id'] ]['retired_at'] = '2020-01-01 00:00:00';
+		$GLOBALS['wpdb']->after_reference_lock = static function () use ( $table, $file ): void {
+			$row                    = $file;
+			$row['id']              = 99;
+			$row['booking_id']      = $file['booking_id'];
+			$row['state']           = 'active';
+			$row['idempotency_key'] = 'concurrent-active';
+			$GLOBALS['wpdb']->rows[ $table ][99] = $row;
+		};
+		$result = $service->cleanup( array( 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } ) );
+		$this->assertSame( 0, $result['purged'] );
+		$this->assertSame( array(), $this->provider->retired );
+	}
+
+	public function test_download_handoff_reauthorizes_membership_and_consumes_once(): void {
+		$booking       = $this->booking();
+		$authorization = new BookingTestAuthorization();
+		$service       = $this->service( $authorization );
+		$attachment    = $service->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$descriptor    = $service->download_descriptor( $booking['id'], $attachment['id'], 12 );
+		$this->assertStringNotContainsString( $attachment['storage_reference'], $descriptor['stream_token'] );
+
+		$authorization->allowed['12:55'] = false;
+		$this->assertSame( 'venue_action_forbidden', $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12 )->get_error_code() );
+		$authorization->allowed['12:55'] = true;
+		$stream = $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12 );
+		$this->assertIsResource( $stream );
+		fclose( $stream );
+		$this->assertSame( 'booking_private_stream_invalid', $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12 )->get_error_code() );
 	}
 }

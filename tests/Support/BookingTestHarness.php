@@ -223,6 +223,7 @@ final class BookingWpdb {
 	public $dropped_indexes           = array();
 	public $fail_reads                = false;
 	public $fail_activity_reads       = false;
+	public $fail_attachment_reference_reads = false;
 	public $fail_inserts              = false;
 	public $fail_updates              = false;
 	public $fail_engine_repair        = false;
@@ -243,6 +244,8 @@ final class BookingWpdb {
 	public $after_venue_lock          = null;
 	public $fail_venue_lock           = false;
 	public $venue_lock_queries        = 0;
+	public $reference_locks           = array();
+	public $after_reference_lock      = null;
 	public $transaction_active        = false;
 	public $natural_key_reads_in_transaction = 0;
 	private $transaction_snapshot     = null;
@@ -373,6 +376,19 @@ final class BookingWpdb {
 
 	public function get_var( $query ) {
 		$this->last_error = '';
+		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', 10\)/", $query, $match ) ) {
+			$this->reference_locks[ stripslashes( $match[1] ) ] = true;
+			if ( is_callable( $this->after_reference_lock ) ) {
+				$callback                   = $this->after_reference_lock;
+				$this->after_reference_lock = null;
+				$callback();
+			}
+			return 1;
+		}
+		if ( preg_match( "/SELECT RELEASE_LOCK\('([^']+)'\)/", $query, $match ) ) {
+			unset( $this->reference_locks[ stripslashes( $match[1] ) ] );
+			return 1;
+		}
 		if ( preg_match( '/SELECT term_id FROM .* WHERE term_id = (\d+) FOR UPDATE/', $query, $match ) ) {
 			++$this->venue_lock_queries;
 			if ( $this->fail_venue_lock ) {
@@ -466,6 +482,10 @@ final class BookingWpdb {
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated result read failure';
 			return null; }
+		if ( $this->fail_attachment_reference_reads && false !== strpos( $query, 'ec_booking_attachments' ) && false !== strpos( $query, 'storage_reference =' ) ) {
+			$this->last_error = 'simulated attachment reference read failure';
+			return null;
+		}
 		if ( preg_match( '/SHOW COLUMNS FROM `([^`]+)`/', $query, $match ) ) {
 			++$this->schema_queries;
 			$rows = array();
@@ -544,12 +564,12 @@ final class BookingWpdb {
 				)
 			);
 		}
-		if ( $is_attachment && false !== strpos( $query, "state IN ('replaced', 'deleted')" ) ) {
+		if ( $is_attachment && false !== strpos( $query, "state IN ('replaced', 'deleted', 'abandoned', 'purging')" ) ) {
 			$rows = array_values(
 				array_filter(
 					$rows,
 					static function ( $row ) {
-						return in_array( $row['state'], array( 'replaced', 'deleted' ), true );
+						return in_array( $row['state'], array( 'replaced', 'deleted', 'abandoned', 'purging' ), true );
 					}
 				)
 			);
@@ -762,6 +782,9 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	public $claims   = array();
 	public $released = array();
 	public $retired  = array();
+	public $fail_release = false;
+	public $fail_retire  = false;
+	public $handoffs = array();
 	public function stage( string $source_path, string $filename, string $purpose ) {
 		unset( $source_path, $filename, $purpose );
 		return new WP_Error( 'not_implemented' );
@@ -773,20 +796,25 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	}
 	public function release_claim( string $storage_reference, string $claim_key ) {
 		$this->released[] = array( $storage_reference, $claim_key );
-		return true;
+		return $this->fail_release ? new WP_Error( 'simulated_claim_release_failure' ) : true;
 	}
-	public function download_descriptor( string $storage_reference ) {
+	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
+		$token = bin2hex( random_bytes( 32 ) );
+		$this->handoffs[ $token ] = array( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key );
 		return isset( $this->objects[ $storage_reference ] ) ? array(
-			'stream_token' => 'token-' . $storage_reference,
+			'stream_token' => $token,
 			'expires_at'   => '2026-08-01T00:05:00Z',
 		) : new WP_Error( 'private_object_missing' );
 	}
-	public function open_stream( string $stream_token ) {
-		unset( $stream_token );
-		return new WP_Error( 'not_implemented' );
+	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose ) {
+		$handoff = $this->handoffs[ $stream_token ] ?? null;
+		unset( $this->handoffs[ $stream_token ] );
+		return is_array( $handoff ) && $handoff[1] === $attachment_public_id && $handoff[2] === $actor_id && $handoff[3] === $purpose
+			? fopen( 'php://temp', 'rb+' )
+			: new WP_Error( 'booking_private_stream_invalid' );
 	}
 	public function retire( string $storage_reference ) {
 		$this->retired[] = $storage_reference;
-		return true;
+		return $this->fail_retire ? new WP_Error( 'simulated_retirement_failure' ) : true;
 	}
 }

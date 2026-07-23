@@ -43,16 +43,23 @@ interface BookingPrivateFileProvider {
 	/**
 	 * Return an authorized stream handoff without a public URL or filesystem path.
 	 *
-	 * @param string $storage_reference Opaque object reference.
+	 * @param string $storage_reference    Opaque object reference.
+	 * @param string $attachment_public_id Authorized attachment identity.
+	 * @param int    $actor_id             Authorized user identity.
+	 * @param string $purpose              Authorized download purpose.
+	 * @param string $claim_key            Exact active attachment claim.
 	 */
-	public function download_descriptor( string $storage_reference );
+	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key );
 
 	/**
 	 * Open a previously authorized internal stream token.
 	 *
-	 * @param string $stream_token Signed stream token.
+	 * @param string $stream_token         Opaque one-time handoff.
+	 * @param string $attachment_public_id Authorized attachment identity.
+	 * @param int    $actor_id             Currently authorized user identity.
+	 * @param string $purpose              Authorized download purpose.
 	 */
-	public function open_stream( string $stream_token );
+	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose );
 
 	/**
 	 * Permanently retire one exact private object.

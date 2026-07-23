@@ -16,6 +16,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 
 	private const OBJECT_PATTERN = '/^[a-f0-9]{64}$/';
 	private const TOKEN_TTL      = 300;
+	private const CLAIM_TTL      = 3600;
 
 	/** Private storage root.
 	 *
@@ -34,6 +35,11 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 * @var \WP_Error|null
 	 */
 	private $configuration_error;
+	/** Root device/inode identity pinned at construction.
+	 *
+	 * @var array|null
+	 */
+	private $root_identity;
 
 	/**
 	 * Validate the configured root and initialize private subdirectories.
@@ -49,8 +55,9 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			$this->configuration_error = $validated;
 			return;
 		}
-		$this->root = $validated;
-		foreach ( array( $this->objects_directory(), $this->temporary_directory() ) as $directory ) {
+		$this->root          = $validated;
+		$this->root_identity = lstat( $validated );
+		foreach ( array( $this->objects_directory(), $this->temporary_directory(), $this->handoffs_directory() ) as $directory ) {
 			if ( ! $this->ensure_private_directory( $directory ) ) {
 				$this->configuration_error = new \WP_Error( 'booking_private_storage_unwritable', __( 'Private booking storage could not initialize secure directories.', 'extrachill-events' ), array( 'status' => 503 ) );
 				$this->root                = '';
@@ -61,7 +68,22 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 
 	/** Return whether this provider is safe to use. */
 	public function is_ready(): bool {
-		return '' !== $this->root && null === $this->configuration_error;
+		if ( '' === $this->root || null !== $this->configuration_error || ! is_array( $this->root_identity ) ) {
+			return false;
+		}
+		$current     = lstat( $this->root );
+		$permissions = fileperms( $this->root );
+		$owner       = fileowner( $this->root );
+		return is_array( $current )
+			&& $current['dev'] === $this->root_identity['dev']
+			&& $current['ino'] === $this->root_identity['ino']
+			&& ! is_link( $this->root )
+			&& false !== $permissions
+			&& 0 === ( $permissions & 0022 )
+			&& 0 === ( $permissions & 0007 )
+			&& function_exists( 'posix_geteuid' )
+			&& false !== $owner
+			&& (int) posix_geteuid() === (int) $owner;
 	}
 
 	/** Return the fail-closed configuration result. */
@@ -162,6 +184,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				'purpose'      => $purpose,
 				'scan_status'  => $scan_status,
 				'claims'       => array(),
+				'state'        => 'ready',
 				'created_at'   => gmdate( 'Y-m-d H:i:s' ),
 			);
 			if ( ! $this->write_metadata_atomic( $metadata_path, $record ) ) {
@@ -200,11 +223,15 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				if ( '' !== $purpose && $purpose !== $record['purpose'] ) {
 					return new \WP_Error( 'booking_private_purpose_mismatch', __( 'The private object was admitted for a different purpose.', 'extrachill-events' ) );
 				}
-				if ( ! in_array( $claim_key, $record['claims'], true ) ) {
-					$record['claims'][] = $claim_key;
-					if ( ! $this->write_metadata_atomic( $this->metadata_path( $storage_reference ), $record ) ) {
-						return new \WP_Error( 'booking_private_claim_failed', __( 'The private object claim could not be persisted.', 'extrachill-events' ) );
-					}
+				if ( 'ready' !== $record['state'] ) {
+					return new \WP_Error( 'booking_private_object_retiring', __( 'The private object is being retired and cannot accept claims.', 'extrachill-events' ), array( 'status' => 409 ) );
+				}
+				$record['claims'][ $claim_key ] = array(
+					'state'      => 'active',
+					'updated_at' => gmdate( 'Y-m-d H:i:s' ),
+				);
+				if ( ! $this->write_metadata_atomic( $this->metadata_path( $storage_reference ), $record ) ) {
+					return new \WP_Error( 'booking_private_claim_failed', __( 'The private object claim could not be persisted.', 'extrachill-events' ) );
 				}
 				return $this->public_metadata( $record );
 			}
@@ -219,78 +246,110 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 */
 	public function release_claim( string $storage_reference, string $claim_key ) {
 		if ( ! $this->is_ready() || ! $this->valid_reference( $storage_reference ) ) {
-			return false;
+			return new \WP_Error( 'booking_private_reference_invalid', __( 'The private object reference is invalid.', 'extrachill-events' ) );
 		}
 		return $this->with_object_lock(
 			$storage_reference,
 			function () use ( $storage_reference, $claim_key ) {
 				$record = $this->read_record( $storage_reference );
 				if ( is_wp_error( $record ) ) {
-					return false;
+					return $record;
 				}
-				$record['claims'] = array_values( array_diff( $record['claims'], array( $claim_key ) ) );
-				return $this->write_metadata_atomic( $this->metadata_path( $storage_reference ), $record );
+				if ( ! isset( $record['claims'][ $claim_key ] ) ) {
+					return true;
+				}
+				$record['claims'][ $claim_key ] = array(
+					'state'      => 'abandoned',
+					'updated_at' => gmdate( 'Y-m-d H:i:s' ),
+				);
+				return $this->write_metadata_atomic( $this->metadata_path( $storage_reference ), $record )
+					? true
+					: new \WP_Error( 'booking_private_claim_compensation_failed', __( 'The failed private object claim could not be marked for recovery.', 'extrachill-events' ) );
 			}
 		);
 	}
 
 	/**
-	 * Return a short-lived signed internal stream token.
+	 * Return a short-lived opaque one-time stream handoff.
 	 *
-	 * @param string $storage_reference Opaque object reference.
+	 * @param string $storage_reference    Opaque object reference.
+	 * @param string $attachment_public_id Authorized attachment identity.
+	 * @param int    $actor_id             Authorized user identity.
+	 * @param string $purpose              Authorized purpose.
+	 * @param string $claim_key            Exact active claim.
 	 */
-	public function download_descriptor( string $storage_reference ) {
-		$record = $this->read_record( $storage_reference );
-		if ( is_wp_error( $record ) ) {
-			return $record;
-		}
-		if ( empty( $record['claims'] ) ) {
-			return new \WP_Error( 'booking_private_object_unclaimed', __( 'The private object has not been attached to a booking.', 'extrachill-events' ), array( 'status' => 409 ) );
-		}
-		$expires   = time() + self::TOKEN_TTL;
-		$payload   = $this->base64url_encode(
-			wp_json_encode(
-				array(
-					'object_id' => $storage_reference,
-					'expires'   => $expires,
-					'nonce'     => bin2hex( random_bytes( 16 ) ),
-				)
-			)
-		);
-		$signature = hash_hmac( 'sha256', $payload, wp_salt( 'auth' ) );
-		return array(
-			'stream_token' => $payload . '.' . $signature,
-			'expires_at'   => gmdate( 'c', $expires ),
+	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
+		return $this->with_object_lock(
+			$storage_reference,
+			function () use ( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key ) {
+				$record = $this->read_record( $storage_reference );
+				if ( is_wp_error( $record ) ) {
+					return $record;
+				}
+				if ( 'ready' !== $record['state'] || 'active' !== ( $record['claims'][ $claim_key ]['state'] ?? '' ) || $purpose !== $record['purpose'] || '' === $attachment_public_id || $actor_id < 1 ) {
+					return new \WP_Error( 'booking_private_handoff_forbidden', __( 'The private object is not available for this attachment.', 'extrachill-events' ), array( 'status' => 403 ) );
+				}
+				$token   = bin2hex( random_bytes( 32 ) );
+				$expires = time() + self::TOKEN_TTL;
+				$handoff = array(
+					'version'              => 1,
+					'object_id'            => $storage_reference,
+					'attachment_public_id' => $attachment_public_id,
+					'actor_id'             => $actor_id,
+					'purpose'              => $purpose,
+					'claim_key'            => $claim_key,
+					'expires'              => $expires,
+				);
+				if ( ! $this->write_metadata_atomic( $this->handoff_path( $token ), $handoff ) ) {
+					return new \WP_Error( 'booking_private_handoff_failed', __( 'The private stream handoff could not be persisted.', 'extrachill-events' ) );
+				}
+				return array(
+					'stream_token' => $token,
+					'expires_at'   => gmdate( 'c', $expires ),
+				);
+			}
 		);
 	}
 
 	/**
-	 * Open a signed stream token without exposing its backing path.
+	 * Consume one opaque handoff and open its exact immutable bytes.
 	 *
-	 * @param string $stream_token Signed stream token.
+	 * @param string $stream_token         Opaque one-time handoff.
+	 * @param string $attachment_public_id Authorized attachment identity.
+	 * @param int    $actor_id             Currently authorized user.
+	 * @param string $purpose              Authorized purpose.
 	 */
-	public function open_stream( string $stream_token ) {
-		if ( 2048 < strlen( $stream_token ) ) {
+	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose ) {
+		if ( ! $this->valid_reference( $stream_token ) ) {
 			return new \WP_Error( 'booking_private_stream_invalid', __( 'The private stream token is invalid.', 'extrachill-events' ), array( 'status' => 403 ) );
 		}
-		$parts = explode( '.', $stream_token, 2 );
-		if ( 2 !== count( $parts ) || ! hash_equals( hash_hmac( 'sha256', $parts[0], wp_salt( 'auth' ) ), $parts[1] ) ) {
+		$handoff_path = $this->handoff_path( $stream_token );
+		$consuming    = $handoff_path . '.consuming';
+		if ( ! $this->is_contained( $handoff_path ) || is_link( $handoff_path ) || ! is_file( $handoff_path ) || ! rename( $handoff_path, $consuming ) ) {
 			return new \WP_Error( 'booking_private_stream_invalid', __( 'The private stream token is invalid.', 'extrachill-events' ), array( 'status' => 403 ) );
 		}
-		$decoded = json_decode( $this->base64url_decode( $parts[0] ), true );
-		if ( ! is_array( $decoded ) || ! $this->valid_reference( (string) ( $decoded['object_id'] ?? '' ) ) || time() >= (int) ( $decoded['expires'] ?? 0 ) ) {
+		$contents = file_get_contents( $consuming );
+		$decoded  = false !== $contents ? json_decode( $contents, true ) : null;
+		if ( ! unlink( $consuming ) ) {
+			return new \WP_Error( 'booking_private_handoff_consume_failed', __( 'The private stream handoff could not be consumed safely.', 'extrachill-events' ) );
+		}
+		if ( ! is_array( $decoded ) || time() >= (int) ( $decoded['expires'] ?? 0 ) || ! hash_equals( (string) ( $decoded['attachment_public_id'] ?? '' ), $attachment_public_id ) || (int) ( $decoded['actor_id'] ?? 0 ) !== $actor_id || ! hash_equals( (string) ( $decoded['purpose'] ?? '' ), $purpose ) ) {
 			return new \WP_Error( 'booking_private_stream_expired', __( 'The private stream token is invalid or expired.', 'extrachill-events' ), array( 'status' => 403 ) );
 		}
-		$record = $this->read_record( $decoded['object_id'] );
-		if ( is_wp_error( $record ) ) {
-			return $record;
-		}
-		$blob_path = realpath( $this->blob_path( $decoded['object_id'] ) );
-		if ( false === $blob_path || ! $this->is_contained( $blob_path ) ) {
-			return new \WP_Error( 'booking_private_object_missing', __( 'The private object was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
-		}
-		$stream = fopen( $blob_path, 'rb' );
-		return false === $stream ? new \WP_Error( 'booking_private_stream_failed', __( 'The private object could not be opened.', 'extrachill-events' ) ) : $stream;
+		$reference = (string) ( $decoded['object_id'] ?? '' );
+		return $this->with_object_lock(
+			$reference,
+			function () use ( $reference, $decoded ) {
+				$record = $this->read_record( $reference );
+				if ( is_wp_error( $record ) ) {
+					return $record;
+				}
+				if ( 'ready' !== $record['state'] || 'active' !== ( $record['claims'][ (string) ( $decoded['claim_key'] ?? '' ) ]['state'] ?? '' ) ) {
+					return new \WP_Error( 'booking_private_stream_revoked', __( 'The private stream handoff has been revoked.', 'extrachill-events' ), array( 'status' => 403 ) );
+				}
+				return $this->open_verified_blob( $reference, $record );
+			}
+		);
 	}
 
 	/**
@@ -300,20 +359,30 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 */
 	public function retire( string $storage_reference ) {
 		if ( ! $this->is_ready() || ! $this->valid_reference( $storage_reference ) ) {
-			return false;
+			return new \WP_Error( 'booking_private_reference_invalid', __( 'The private object reference is invalid.', 'extrachill-events' ) );
 		}
 		return $this->with_object_lock(
 			$storage_reference,
 			function () use ( $storage_reference ) {
 				$blob     = $this->blob_path( $storage_reference );
 				$metadata = $this->metadata_path( $storage_reference );
-				$success  = true;
-				foreach ( array( $blob, $metadata ) as $path ) {
-					if ( file_exists( $path ) && ! unlink( $path ) ) {
-						$success = false;
+				if ( file_exists( $metadata ) ) {
+					$record = $this->read_record_allow_missing_blob( $storage_reference );
+					if ( is_wp_error( $record ) ) {
+						return $record;
+					}
+					$record['state'] = 'retiring';
+					if ( ! $this->write_metadata_atomic( $metadata, $record ) ) {
+						return new \WP_Error( 'booking_private_retirement_tombstone_failed', __( 'Private object retirement could not be made recoverable.', 'extrachill-events' ) );
 					}
 				}
-				return $success;
+				if ( file_exists( $blob ) && ! unlink( $blob ) ) {
+					return new \WP_Error( 'booking_private_retirement_partial', __( 'Private object retirement remains incomplete and recoverable.', 'extrachill-events' ) );
+				}
+				if ( file_exists( $metadata ) && ! unlink( $metadata ) ) {
+					return new \WP_Error( 'booking_private_retirement_partial', __( 'Private object retirement remains incomplete and recoverable.', 'extrachill-events' ) );
+				}
+				return true;
 			}
 		);
 	}
@@ -342,6 +411,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			}
 			$is_temporary      = 0 === strpos( $path, $this->temporary_directory() . DIRECTORY_SEPARATOR );
 			$is_metadata_temp  = 0 === strpos( $file->getFilename(), '.metadata-' );
+			$is_handoff        = 0 === strpos( $path, $this->handoffs_directory() . DIRECTORY_SEPARATOR );
 			$is_orphan_blob    = '.blob' === substr( $path, -5 ) && ! file_exists( substr( $path, 0, -5 ) . '.json' );
 			$is_orphan_sidecar = '.json' === substr( $path, -5 ) && ! file_exists( substr( $path, 0, -5 ) . '.blob' );
 			if ( '.json' === substr( $path, -5 ) && ! $is_orphan_sidecar ) {
@@ -354,7 +424,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 					continue;
 				}
 			}
-			if ( ( $is_temporary || $is_metadata_temp || $is_orphan_blob || $is_orphan_sidecar ) && file_exists( $path ) && unlink( $path ) ) {
+			if ( ( $is_temporary || $is_handoff || $is_metadata_temp || $is_orphan_blob || $is_orphan_sidecar ) && file_exists( $path ) && unlink( $path ) ) {
 				++$deleted;
 			}
 		}
@@ -372,7 +442,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			$reference,
 			function () use ( $reference, $cutoff ) {
 				$record = $this->read_record( $reference );
-				if ( is_wp_error( $record ) || ! empty( $record['claims'] ) || filemtime( $this->metadata_path( $reference ) ) > $cutoff ) {
+				if ( is_wp_error( $record ) || $this->has_live_claims( $record, $cutoff ) || filemtime( $this->metadata_path( $reference ) ) > $cutoff ) {
 					return 0;
 				}
 				$deleted = 0;
@@ -404,8 +474,12 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			return new \WP_Error( 'booking_private_storage_unsafe', __( 'The configured private storage root is unwritable or resolves through a symlink.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$permissions = fileperms( $real );
-		if ( false === $permissions || 0 !== ( $permissions & 0007 ) ) {
-			return new \WP_Error( 'booking_private_storage_permissions', __( 'The private storage root must not grant access to other system users.', 'extrachill-events' ), array( 'status' => 503 ) );
+		$owner       = fileowner( $real );
+		if ( ! function_exists( 'posix_geteuid' ) || false === $owner || (int) posix_geteuid() !== (int) $owner ) {
+			return new \WP_Error( 'booking_private_storage_owner', __( 'The private storage root must be owned by the current process user.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		if ( false === $permissions || 0 !== ( $permissions & 0022 ) || 0 !== ( $permissions & 0007 ) ) {
+			return new \WP_Error( 'booking_private_storage_permissions', __( 'The private storage root must not be writable by a group or accessible by other system users.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 
 		$blocked = array(
@@ -490,7 +564,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		}
 		$contents = file_get_contents( $metadata_path );
 		$record   = false !== $contents ? json_decode( $contents, true ) : null;
-		if ( ! is_array( $record ) || 1 !== (int) ( $record['version'] ?? 0 ) || ( $record['object_id'] ?? '' ) !== $reference || ! is_array( $record['claims'] ?? null ) ) {
+		if ( ! is_array( $record ) || 1 !== (int) ( $record['version'] ?? 0 ) || ( $record['object_id'] ?? '' ) !== $reference || ! is_array( $record['claims'] ?? null ) || ! in_array( ( $record['state'] ?? '' ), array( 'ready', 'retiring' ), true ) ) {
 			return new \WP_Error( 'booking_private_metadata_invalid', __( 'The private object metadata is invalid.', 'extrachill-events' ) );
 		}
 		$size = filesize( $blob_path );
@@ -512,6 +586,74 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			return new \WP_Error( 'booking_private_metadata_invalid', __( 'The private object metadata is invalid.', 'extrachill-events' ) );
 		}
 		return $record;
+	}
+
+	/**
+	 * Read recoverable retirement metadata even after the blob is gone.
+	 *
+	 * @param string $reference Object reference.
+	 */
+	private function read_record_allow_missing_blob( string $reference ) {
+		if ( file_exists( $this->blob_path( $reference ) ) ) {
+			return $this->read_record( $reference );
+		}
+		$metadata = $this->metadata_path( $reference );
+		if ( is_link( $metadata ) || ! is_file( $metadata ) || ! $this->is_contained( (string) realpath( $metadata ) ) ) {
+			return new \WP_Error( 'booking_private_object_missing', __( 'The private object was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
+		}
+		$contents = file_get_contents( $metadata );
+		$record   = false !== $contents ? json_decode( $contents, true ) : null;
+		return is_array( $record ) && ( $record['object_id'] ?? '' ) === $reference && 'retiring' === ( $record['state'] ?? '' )
+			? $record
+			: new \WP_Error( 'booking_private_metadata_invalid', __( 'The private object metadata is invalid.', 'extrachill-events' ) );
+	}
+
+	/**
+	 * Open a blob and verify that the opened inode is still the validated path.
+	 *
+	 * @param string $reference Object reference.
+	 * @param array  $record    Trusted metadata.
+	 */
+	private function open_verified_blob( string $reference, array $record ) {
+		$candidate = $this->blob_path( $reference );
+		$real      = realpath( $candidate );
+		if ( false === $real || is_link( $candidate ) || ! $this->is_contained( $real ) ) {
+			return new \WP_Error( 'booking_private_object_missing', __( 'The private object was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
+		}
+		$stream = fopen( $candidate, 'rb' );
+		if ( false === $stream ) {
+			return new \WP_Error( 'booking_private_stream_failed', __( 'The private object could not be opened.', 'extrachill-events' ) );
+		}
+		$opened  = fstat( $stream );
+		$current = lstat( $candidate );
+		$hash    = hash_init( 'sha256' );
+		$hashed  = hash_update_stream( $hash, $stream );
+		$digest  = hash_final( $hash );
+		if ( false === $opened || false === $current || $opened['dev'] !== $current['dev'] || $opened['ino'] !== $current['ino'] || 0100000 !== ( $opened['mode'] & 0170000 ) || false === $hashed || ! hash_equals( (string) $record['content_hash'], $digest ) ) {
+			fclose( $stream );
+			return new \WP_Error( 'booking_private_object_corrupt', __( 'The private object changed before it could be opened safely.', 'extrachill-events' ) );
+		}
+		rewind( $stream );
+		return $stream;
+	}
+
+	/**
+	 * Return whether an object has an active or not-yet-expired abandoned claim.
+	 *
+	 * @param array $record Stored object record.
+	 * @param int   $cutoff Operator-supplied cleanup cutoff.
+	 */
+	private function has_live_claims( array $record, int $cutoff ): bool {
+		foreach ( $record['claims'] as $claim ) {
+			if ( ! is_array( $claim ) || 'active' === ( $claim['state'] ?? '' ) ) {
+				return true;
+			}
+			$updated = strtotime( (string) ( $claim['updated_at'] ?? '' ) );
+			if ( false === $updated || $updated > min( $cutoff, time() - self::CLAIM_TTL ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -588,6 +730,20 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		return $this->root . '/.tmp';
 	}
 
+	/** Return the one-time handoff directory. */
+	private function handoffs_directory(): string {
+		return $this->root . '/.handoffs';
+	}
+
+	/**
+	 * Return one opaque handoff sidecar path.
+	 *
+	 * @param string $token Opaque handoff token.
+	 */
+	private function handoff_path( string $token ): string {
+		return $this->handoffs_directory() . '/' . hash( 'sha256', $token ) . '.json';
+	}
+
 	/**
 	 * Return one sharded object directory.
 	 *
@@ -643,23 +799,5 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		$root_path = rtrim( str_replace( '\\', '/', $root_path ), '/' );
 		$child     = str_replace( '\\', '/', $child );
 		return $root_path === $child || 0 === strpos( $child, $root_path . '/' );
-	}
-
-	/**
-	 * Encode a URL-safe token segment.
-	 *
-	 * @param string $value Raw value.
-	 */
-	private function base64url_encode( string $value ): string {
-		return rtrim( strtr( base64_encode( $value ), '+/', '-_' ), '=' );
-	}
-
-	/**
-	 * Decode a URL-safe token segment.
-	 *
-	 * @param string $value Encoded value.
-	 */
-	private function base64url_decode( string $value ): string {
-		return (string) base64_decode( strtr( $value, '-_', '+/' ), true );
 	}
 }

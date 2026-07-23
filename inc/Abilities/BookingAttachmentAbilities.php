@@ -52,8 +52,8 @@ class BookingAttachmentAbilities {
 	public function __construct( ?BookingAttachmentRepository $attachments = null, ?BookingRepository $bookings = null, ?BookingAttachmentService $service = null, ?VenueAuthorization $authorization = null ) {
 		$this->attachments   = $attachments ? $attachments : new BookingAttachmentRepository();
 		$this->bookings      = $bookings ? $bookings : new BookingRepository();
-		$this->service       = $service ? $service : new BookingAttachmentService( $this->attachments, $this->bookings );
 		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
+		$this->service       = $service ? $service : new BookingAttachmentService( $this->attachments, $this->bookings, null, null, null, $this->authorization );
 		add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
 	}
 
@@ -155,7 +155,7 @@ class BookingAttachmentAbilities {
 	 * @param array $input Ability input.
 	 */
 	public function download( array $input ) {
-		return $this->service->download_descriptor( (int) $input['booking_id'], (int) $input['attachment_id'] );
+		return $this->service->download_descriptor( (int) $input['booking_id'], (int) $input['attachment_id'], get_current_user_id() );
 	}
 
 	/**

@@ -49,6 +49,16 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		mkdir( $permissive, 0707 );
 		chmod( $permissive, 0707 );
 		$this->assertSame( 'booking_private_storage_permissions', ( new LocalBookingPrivateFileProvider( $permissive ) )->configuration_error()->get_error_code() );
+		$group_writable = $this->base . '/group-writable';
+		mkdir( $group_writable, 0720 );
+		chmod( $group_writable, 0720 );
+		$this->assertSame( 'booking_private_storage_permissions', ( new LocalBookingPrivateFileProvider( $group_writable ) )->configuration_error()->get_error_code() );
+		if ( function_exists( 'posix_geteuid' ) && 0 === posix_geteuid() ) {
+			$wrong_owner = $this->base . '/wrong-owner';
+			mkdir( $wrong_owner, 0700 );
+			chown( $wrong_owner, 65534 );
+			$this->assertSame( 'booking_private_storage_owner', ( new LocalBookingPrivateFileProvider( $wrong_owner ) )->configuration_error()->get_error_code() );
+		}
 
 		$unwritable = $this->base . '/unwritable';
 		mkdir( $unwritable, 0500 );
@@ -77,6 +87,15 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$result = $provider->stage( $this->source( 'escape.txt', 'escape' ), 'escape.txt', 'epk' );
 		$this->assertSame( 'booking_private_stage_failed', $result->get_error_code() );
 		$this->assertSame( array(), $this->files_in( $outside ) );
+	}
+
+	public function test_runtime_root_swap_fails_closed(): void {
+		$provider = new LocalBookingPrivateFileProvider( $this->root );
+		$moved    = $this->base . '/original-private';
+		rename( $this->root, $moved );
+		mkdir( $this->root, 0700 );
+		$result = $provider->stage( $this->source( 'swap.txt', 'swap' ), 'swap.txt', 'epk' );
+		$this->assertSame( 'booking_private_storage_unavailable', $result->get_error_code() );
 	}
 
 	public function test_stage_generates_opaque_id_and_server_derived_metadata_with_private_permissions(): void {
@@ -146,17 +165,20 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$provider  = new LocalBookingPrivateFileProvider( $this->root );
 		$reference = $provider->stage( $source, 'press.txt', 'press_release' );
 		$provider->claim( $reference, 'booking:1:press', 'press_release' );
-		$descriptor = $provider->download_descriptor( $reference );
+		$claim_key  = 'booking:1:press';
+		$descriptor = $provider->download_descriptor( $reference, 'attachment-public-id', 12, 'press_release', $claim_key );
 		$this->assertArrayHasKey( 'stream_token', $descriptor );
 		$this->assertArrayNotHasKey( 'path', $descriptor );
 		$this->assertArrayNotHasKey( 'url', $descriptor );
 		$this->assertStringNotContainsString( $this->root, wp_json_encode( $descriptor ) );
+		$this->assertStringNotContainsString( $reference, wp_json_encode( $descriptor ) );
 
-		$stream = $provider->open_stream( $descriptor['stream_token'] );
+		$stream = $provider->open_stream( $descriptor['stream_token'], 'attachment-public-id', 12, 'press_release' );
 		$this->assertIsResource( $stream );
 		$this->assertSame( 'private bytes', stream_get_contents( $stream ) );
 		fclose( $stream );
-		$this->assertSame( 'booking_private_stream_invalid', $provider->open_stream( $descriptor['stream_token'] . 'tampered' )->get_error_code() );
+		$this->assertSame( 'booking_private_stream_invalid', $provider->open_stream( $descriptor['stream_token'], 'attachment-public-id', 12, 'press_release' )->get_error_code() );
+		$this->assertSame( 'booking_private_stream_invalid', $provider->open_stream( $descriptor['stream_token'] . 'tampered', 'attachment-public-id', 12, 'press_release' )->get_error_code() );
 	}
 
 	public function test_byte_tampering_fails_integrity_checks(): void {
@@ -165,7 +187,7 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$blob      = $this->files_ending_in( '.blob' )[0];
 		file_put_contents( $blob, 'tampered' );
 		$this->assertSame( 'booking_private_object_corrupt', $provider->claim( $reference, 'booking:1:tampered', 'other_private_evidence' )->get_error_code() );
-		$this->assertSame( 'booking_private_object_corrupt', $provider->download_descriptor( $reference )->get_error_code() );
+		$this->assertSame( 'booking_private_object_corrupt', $provider->download_descriptor( $reference, 'attachment-public-id', 12, 'other_private_evidence', 'booking:1:tampered' )->get_error_code() );
 	}
 
 	public function test_claim_is_idempotent_and_exact_retirement_preserves_other_objects(): void {
@@ -214,6 +236,36 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		}
 		$this->assertSame( 2, $provider->cleanup_provisional( 0 ) );
 		$this->assertSame( 'booking_private_object_missing', $provider->claim( $reference, 'booking:1:late', 'epk' )->get_error_code() );
+	}
+
+	public function test_released_claim_revokes_handoff_and_abandoned_claim_is_bounded(): void {
+		$provider  = new LocalBookingPrivateFileProvider( $this->root );
+		$reference = $provider->stage( $this->source( 'abandoned.txt', 'abandoned' ), 'abandoned.txt', 'epk' );
+		$claim_key = 'booking:1:abandoned';
+		$provider->claim( $reference, $claim_key, 'epk' );
+		$handoff = $provider->download_descriptor( $reference, 'attachment-public-id', 12, 'epk', $claim_key );
+		$this->assertTrue( $provider->release_claim( $reference, $claim_key ) );
+		$this->assertSame( 'booking_private_stream_revoked', $provider->open_stream( $handoff['stream_token'], 'attachment-public-id', 12, 'epk' )->get_error_code() );
+
+		$metadata_path = $this->files_ending_in( '.json' )[0];
+		$metadata      = json_decode( file_get_contents( $metadata_path ), true );
+		$metadata['claims'][ $claim_key ]['updated_at'] = '2020-01-01 00:00:00';
+		file_put_contents( $metadata_path, wp_json_encode( $metadata ) );
+		touch( $metadata_path, time() - 10 );
+		touch( $this->files_ending_in( '.blob' )[0], time() - 10 );
+		$this->assertSame( 2, $provider->cleanup_provisional( 0 ) );
+	}
+
+	public function test_retirement_resumes_after_blob_was_already_removed(): void {
+		$provider  = new LocalBookingPrivateFileProvider( $this->root );
+		$reference = $provider->stage( $this->source( 'partial.txt', 'partial' ), 'partial.txt', 'epk' );
+		$metadata_path = $this->files_ending_in( '.json' )[0];
+		$metadata      = json_decode( file_get_contents( $metadata_path ), true );
+		$metadata['state'] = 'retiring';
+		file_put_contents( $metadata_path, wp_json_encode( $metadata ) );
+		unlink( $this->files_ending_in( '.blob' )[0] );
+		$this->assertTrue( $provider->retire( $reference ) );
+		$this->assertFileDoesNotExist( $metadata_path );
 	}
 
 	private function source( string $filename, string $contents ): string {

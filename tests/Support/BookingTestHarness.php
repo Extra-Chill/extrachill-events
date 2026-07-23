@@ -295,6 +295,10 @@ final class BookingWpdb {
 		return null === $this->database_now ? gmdate( 'Y-m-d H:i:s' ) : $this->database_now;
 	}
 
+	public function esc_like( $text ) {
+		return addcslashes( $text, '_%\\' );
+	}
+
 	public function prepare( $query, ...$args ) {
 		if ( 1 === count( $args ) && is_array( $args[0] ) ) {
 			$args = $args[0]; }

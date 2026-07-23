@@ -139,8 +139,10 @@ class BookingActivityRepository {
 		if ( is_wp_error( $booking_id ) ) {
 			return $booking_id;
 		}
-		$table = BookingSchema::activity_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND (kind LIKE 'booking_message_%%' OR kind LIKE 'booking_reminder_%%') ORDER BY occurred_at ASC, id ASC", $booking_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Complete narrow booking correspondence state.
+		$table            = BookingSchema::activity_table();
+		$message_pattern  = $wpdb->esc_like( 'booking_message_' ) . '%';
+		$reminder_pattern = $wpdb->esc_like( 'booking_reminder_' ) . '%';
+		$rows             = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND (kind LIKE %s OR kind LIKE %s) ORDER BY occurred_at ASC, id ASC", $booking_id, $message_pattern, $reminder_pattern ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Complete narrow booking correspondence state.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_communication_state_read_failed', __( 'Booking communication state could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}

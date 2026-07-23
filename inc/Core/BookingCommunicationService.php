@@ -14,9 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Records booking correspondence before delegating delivery to Data Machine. */
 class BookingCommunicationService {
 
-	public const REMINDER_HOOK  = 'extrachill_events_dispatch_booking_reminder';
-	public const SCHEDULER_GROUP = 'extrachill-events-booking-reminders';
-	public const TEMPLATES      = array( 'operator_message', 'follow_up', 'hold_expiring' );
+	public const REMINDER_HOOK     = 'extrachill_events_dispatch_booking_reminder';
+	public const SCHEDULER_GROUP   = 'extrachill-events-booking-reminders';
+	public const TEMPLATES         = array( 'operator_message', 'follow_up', 'hold_expiring' );
 	public const TERMINAL_STATUSES = array( 'declined', 'withdrawn', 'cancelled', 'completed' );
 
 	/** @var BookingRepository */
@@ -52,7 +52,7 @@ class BookingCommunicationService {
 	public static function dispatch_scheduled( int $activity_id ): void {
 		$result = ( new self() )->dispatch_reminder( $activity_id );
 		if ( is_wp_error( $result ) ) {
-			throw new \RuntimeException( $result->get_error_message() );
+			throw new \RuntimeException( $result->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is consumed by Action Scheduler, not rendered.
 		}
 	}
 
@@ -210,8 +210,8 @@ class BookingCommunicationService {
 		if ( true !== $claimed ) {
 			return $claimed;
 		}
-		$data = $intent['payload']['data'];
-		$body = $this->render_body( $data['template'], $data['message'] );
+		$data  = $intent['payload']['data'];
+		$body  = $this->render_body( $data['template'], $data['message'] );
 		$input = array(
 			'to'           => $data['recipient'],
 			'cc'           => $data['cc'],
@@ -229,7 +229,15 @@ class BookingCommunicationService {
 			$result  = $ability ? $ability->execute( $input ) : new \WP_Error( 'booking_email_ability_unavailable' );
 		}
 		if ( is_wp_error( $result ) || ! is_array( $result ) || empty( $result['success'] ) || empty( $result['action_id'] ) ) {
-			$event = $this->append_state( $intent, 'booking_message_failed', 'queue', array( 'retryable' => true, 'error' => is_wp_error( $result ) ? $result->get_error_code() : ( $result['error'] ?? 'invalid_result' ) ) );
+			$event = $this->append_state(
+				$intent,
+				'booking_message_failed',
+				'queue',
+				array(
+					'retryable' => true,
+					'error'     => is_wp_error( $result ) ? $result->get_error_code() : ( $result['error'] ?? 'invalid_result' ),
+				)
+			);
 			return is_wp_error( $event ) ? $event : new \WP_Error( 'booking_message_queue_failed', __( 'Data Machine did not accept the booking message.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$event = $this->append_state( $intent, 'booking_message_queued', 'queued', array( 'action_id' => (int) $result['action_id'] ), (string) $result['action_id'] );
@@ -267,7 +275,11 @@ class BookingCommunicationService {
 				'channel'         => 'email',
 				'external_id'     => $provider_id,
 				'idempotency_key' => 'booking-delivery-callback:' . mb_substr( sanitize_text_field( $callback_id ), 0, 150 ),
-				'payload'         => array( 'intent_id' => $intent_id, 'status' => $status, 'provider_id' => $provider_id ),
+				'payload'         => array(
+					'intent_id'   => $intent_id,
+					'status'      => $status,
+					'provider_id' => $provider_id,
+				),
 			)
 		);
 		if ( is_wp_error( $event ) ) {
@@ -310,7 +322,11 @@ class BookingCommunicationService {
 				'channel'         => 'email',
 				'external_id'     => mb_substr( sanitize_text_field( $message_id ), 0, 191 ),
 				'idempotency_key' => 'booking-reply:' . hash( 'sha256', $message_id ),
-				'payload'         => array( 'participant' => $participant, 'message_id' => $message_id, 'in_reply_to' => $in_reply_to ),
+				'payload'         => array(
+					'participant' => $participant,
+					'message_id'  => $message_id,
+					'in_reply_to' => $in_reply_to,
+				),
 			)
 		);
 		if ( is_wp_error( $event ) ) {
@@ -386,7 +402,7 @@ class BookingCommunicationService {
 			$payload['status'] = 'failed';
 		}
 		$attempt = 1;
-		$rows = $this->activity->communication_state_rows( $intent['booking_id'] );
+		$rows    = $this->activity->communication_state_rows( $intent['booking_id'] );
 		if ( is_wp_error( $rows ) ) {
 			return $rows;
 		}
@@ -404,18 +420,36 @@ class BookingCommunicationService {
 				'channel'         => 'email',
 				'external_id'     => $external_id,
 				'idempotency_key' => sprintf( 'booking-message:%d:%s:%d', $intent['id'], $stage, $attempt ),
-				'payload'         => array_merge( array( 'intent_id' => $intent['id'], 'stage' => $stage, 'attempt' => $attempt ), $payload ),
+				'payload'         => array_merge(
+					array(
+						'intent_id' => $intent['id'],
+						'stage'     => $stage,
+						'attempt'   => $attempt,
+					),
+					$payload
+				),
 			)
 		);
 	}
 
 	private function state_for_intent( array $intent ) {
-		$state = array( 'intent_id' => $intent['id'], 'booking_id' => $intent['booking_id'], 'message_id' => $intent['payload']['data']['message_id'], 'status' => 'requested', 'action_id' => null );
+		$state = array(
+			'intent_id'  => $intent['id'],
+			'booking_id' => $intent['booking_id'],
+			'message_id' => $intent['payload']['data']['message_id'],
+			'status'     => 'requested',
+			'action_id'  => null,
+		);
 		$rows  = $this->activity->communication_state_rows( $intent['booking_id'] );
 		if ( is_wp_error( $rows ) ) {
 			return $rows;
 		}
-		usort( $rows, static function ( array $left, array $right ): int { return $left['id'] <=> $right['id']; } );
+		usort(
+			$rows,
+			static function ( array $left, array $right ): int {
+				return $left['id'] <=> $right['id'];
+			}
+		);
 		foreach ( $rows as $row ) {
 			if ( (int) ( $row['payload']['data']['intent_id'] ?? 0 ) !== (int) $intent['id'] ) {
 				continue;
@@ -454,7 +488,7 @@ class BookingCommunicationService {
 	/** Serialize the external side effect and leave a durable retry boundary. */
 	private function claim_side_effect( array $intent, string $stage, array $allowed_statuses ) {
 		global $wpdb;
-		if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Side-effect claim transaction boundary.
 			return new \WP_Error( 'booking_communication_transaction_start_failed', __( 'The booking communication transaction could not start.', 'extrachill-events' ) );
 		}
 		$this->transaction_active = true;
@@ -531,7 +565,16 @@ class BookingCommunicationService {
 
 	private function request_hash( array $request, int $actor_id ): string {
 		ksort( $request );
-		return hash_hmac( 'sha256', wp_json_encode( array( 'actor_id' => $actor_id, 'request' => $request ) ), wp_salt( 'auth' ) );
+		return hash_hmac(
+			'sha256',
+			wp_json_encode(
+				array(
+					'actor_id' => $actor_id,
+					'request'  => $request,
+				)
+			),
+			wp_salt( 'auth' )
+		);
 	}
 
 	private function valid_datetime( string $value ): bool {
@@ -541,12 +584,12 @@ class BookingCommunicationService {
 
 	private function begin_authorized( int $venue_id, int $actor_id ) {
 		global $wpdb;
-		if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Authorization transaction boundary.
 			return new \WP_Error( 'booking_communication_transaction_start_failed', __( 'The booking communication transaction could not start.', 'extrachill-events' ) );
 		}
 		$this->transaction_active = true;
-		$table  = BookingSchema::memberships_table();
-		$locked = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $venue_id ), ARRAY_A );
+		$table                    = BookingSchema::memberships_table();
+		$locked                   = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $venue_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact venue authority lock.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return $this->rollback( new \WP_Error( 'booking_communication_authorization_lock_failed', __( 'Venue booking authority could not be locked.', 'extrachill-events' ) ) );
 		}
@@ -556,7 +599,7 @@ class BookingCommunicationService {
 
 	private function commit() {
 		global $wpdb;
-		$result                   = $wpdb->query( 'COMMIT' );
+		$result                   = $wpdb->query( 'COMMIT' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate transaction boundary.
 		$this->transaction_active = false;
 		return false === $result ? new \WP_Error( 'booking_communication_commit_uncertain', __( 'The booking communication transaction outcome is uncertain.', 'extrachill-events' ) ) : true;
 	}
@@ -564,7 +607,7 @@ class BookingCommunicationService {
 	private function rollback( \WP_Error $error ) {
 		global $wpdb;
 		if ( $this->transaction_active ) {
-			$wpdb->query( 'ROLLBACK' );
+			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate transaction boundary.
 			$this->transaction_active = false;
 		}
 		return $error;

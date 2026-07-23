@@ -45,7 +45,10 @@ class VenueBookingCommunicationAbilities {
 				'description'         => __( 'Record and delegate an immediate booking message or lifecycle-aware reminder.', 'extrachill-events' ),
 				'category'            => 'extrachill-events',
 				'input_schema'        => $this->message_input_schema(),
-				'output_schema'       => array( 'type' => 'object', 'additionalProperties' => true ),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'additionalProperties' => true,
+				),
 				'execute_callback'    => array( $this, 'send' ),
 				'permission_callback' => array( $this, 'can_access_booking' ),
 				'meta'                => $this->meta( false, true ),
@@ -58,7 +61,14 @@ class VenueBookingCommunicationAbilities {
 				'description'         => __( 'Read the authorized durable correspondence ledger for one booking.', 'extrachill-events' ),
 				'category'            => 'extrachill-events',
 				'input_schema'        => $this->booking_id_schema(),
-				'output_schema'       => array( 'type' => 'array', 'maxItems' => 200, 'items' => array( 'type' => 'object', 'additionalProperties' => true ) ),
+				'output_schema'       => array(
+					'type'     => 'array',
+					'maxItems' => 200,
+					'items'    => array(
+						'type'                 => 'object',
+						'additionalProperties' => true,
+					),
+				),
 				'execute_callback'    => array( $this, 'list_communications' ),
 				'permission_callback' => array( $this, 'can_access_booking' ),
 				'meta'                => $this->meta( true, true ),
@@ -71,7 +81,10 @@ class VenueBookingCommunicationAbilities {
 				'description'         => __( 'Link a qualified inbound email reply to a booking and suppress follow-ups.', 'extrachill-events' ),
 				'category'            => 'extrachill-events',
 				'input_schema'        => $this->reply_schema(),
-				'output_schema'       => array( 'type' => 'object', 'additionalProperties' => true ),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'additionalProperties' => true,
+				),
 				'execute_callback'    => array( $this, 'record_reply' ),
 				'permission_callback' => array( $this, 'can_access_booking' ),
 				'meta'                => $this->meta( false, true ),
@@ -84,7 +97,12 @@ class VenueBookingCommunicationAbilities {
 				'description'         => __( 'Record idempotent sent or failed evidence from an email runtime.', 'extrachill-events' ),
 				'category'            => 'extrachill-events',
 				'input_schema'        => $this->delivery_schema(),
-				'output_schema'       => array( 'type' => 'object', 'additionalProperties' => false, 'properties' => $this->state_properties(), 'required' => array_keys( $this->state_properties() ) ),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'additionalProperties' => false,
+					'properties'           => $this->state_properties(),
+					'required'             => array_keys( $this->state_properties() ),
+				),
 				'execute_callback'    => array( $this, 'record_delivery' ),
 				'permission_callback' => array( $this, 'can_access_intent' ),
 				'meta'                => $this->meta( false, true ),
@@ -101,12 +119,21 @@ class VenueBookingCommunicationAbilities {
 			}
 			return \DataMachine\Engine\AI\Actions\PendingActionHelper::stage(
 				array(
-					'kind'         => 'extrachill_send_booking_message',
-					'summary'      => sprintf( 'Send booking email to %s.', $input['recipient'] ),
-					'apply_input'  => $input,
-					'preview_data' => array( 'booking_id' => $input['booking_id'], 'recipient' => $input['recipient'], 'subject' => $input['subject'], 'message' => $input['message'], 'send_at' => $input['send_at'] ?? null ),
-					'user_id'      => get_current_user_id(),
-					'authorization' => array( 'operation' => 'send_booking_message', 'target' => array( 'booking_id' => $input['booking_id'] ) ),
+					'kind'          => 'extrachill_send_booking_message',
+					'summary'       => sprintf( 'Send booking email to %s.', $input['recipient'] ),
+					'apply_input'   => $input,
+					'preview_data'  => array(
+						'booking_id' => $input['booking_id'],
+						'recipient'  => $input['recipient'],
+						'subject'    => $input['subject'],
+						'message'    => $input['message'],
+						'send_at'    => $input['send_at'] ?? null,
+					),
+					'user_id'       => get_current_user_id(),
+					'authorization' => array(
+						'operation' => 'send_booking_message',
+						'target'    => array( 'booking_id' => $input['booking_id'] ),
+					),
 				)
 			);
 		}
@@ -127,7 +154,7 @@ class VenueBookingCommunicationAbilities {
 
 	/** Register replay and fresh authorization for generic Data Machine approval. */
 	public function pending_action_handlers( $handlers ) {
-		$handlers = is_array( $handlers ) ? $handlers : array();
+		$handlers                                    = is_array( $handlers ) ? $handlers : array();
 		$handlers['extrachill_send_booking_message'] = array(
 			'apply'       => function ( array $input ) {
 				return $this->communications->request( $input, get_current_user_id() );
@@ -156,17 +183,60 @@ class VenueBookingCommunicationAbilities {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'booking_id'        => array( 'type' => 'integer', 'minimum' => 1 ),
-				'idempotency_key'   => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 120 ),
-				'template'          => array( 'type' => 'string', 'enum' => BookingCommunicationService::TEMPLATES ),
-				'recipient'         => array( 'type' => 'string', 'format' => 'email', 'maxLength' => 255 ),
-				'subject'           => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
-				'message'           => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 10000 ),
-				'reply_to'          => array( 'type' => 'string', 'format' => 'email', 'maxLength' => 255 ),
-				'send_at'           => array( 'type' => array( 'string', 'null' ), 'pattern' => '^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$' ),
-				'expected_statuses' => array( 'type' => 'array', 'uniqueItems' => true, 'items' => array( 'type' => 'string', 'enum' => BookingRepository::STATUSES ) ),
-				'in_reply_to'       => array( 'type' => array( 'string', 'null' ), 'maxLength' => 191 ),
-				'approval'          => array( 'type' => 'string', 'enum' => array( 'direct', 'required' ), 'default' => 'direct' ),
+				'booking_id'        => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'idempotency_key'   => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 120,
+				),
+				'template'          => array(
+					'type' => 'string',
+					'enum' => BookingCommunicationService::TEMPLATES,
+				),
+				'recipient'         => array(
+					'type'      => 'string',
+					'format'    => 'email',
+					'maxLength' => 255,
+				),
+				'subject'           => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 200,
+				),
+				'message'           => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 10000,
+				),
+				'reply_to'          => array(
+					'type'      => 'string',
+					'format'    => 'email',
+					'maxLength' => 255,
+				),
+				'send_at'           => array(
+					'type'    => array( 'string', 'null' ),
+					'pattern' => '^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$',
+				),
+				'expected_statuses' => array(
+					'type'        => 'array',
+					'uniqueItems' => true,
+					'items'       => array(
+						'type' => 'string',
+						'enum' => BookingRepository::STATUSES,
+					),
+				),
+				'in_reply_to'       => array(
+					'type'      => array( 'string', 'null' ),
+					'maxLength' => 191,
+				),
+				'approval'          => array(
+					'type'    => 'string',
+					'enum'    => array( 'direct', 'required' ),
+					'default' => 'direct',
+				),
 			),
 			'required'             => array( 'booking_id', 'idempotency_key', 'template', 'recipient', 'subject', 'message', 'reply_to' ),
 			'additionalProperties' => false,
@@ -174,32 +244,91 @@ class VenueBookingCommunicationAbilities {
 	}
 
 	private function booking_id_schema(): array {
-		return array( 'type' => 'object', 'properties' => array( 'booking_id' => array( 'type' => 'integer', 'minimum' => 1 ) ), 'required' => array( 'booking_id' ), 'additionalProperties' => false );
+		return array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'booking_id' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+			),
+			'required'             => array( 'booking_id' ),
+			'additionalProperties' => false,
+		);
 	}
 
 	private function reply_schema(): array {
 		return array(
-			'type' => 'object',
-			'properties' => array( 'booking_id' => array( 'type' => 'integer', 'minimum' => 1 ), 'participant' => array( 'type' => 'string', 'format' => 'email' ), 'message_id' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 191 ), 'in_reply_to' => array( 'type' => array( 'string', 'null' ), 'maxLength' => 191 ) ),
-			'required' => array( 'booking_id', 'participant', 'message_id' ),
+			'type'                 => 'object',
+			'properties'           => array(
+				'booking_id'  => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'participant' => array(
+					'type'   => 'string',
+					'format' => 'email',
+				),
+				'message_id'  => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 191,
+				),
+				'in_reply_to' => array(
+					'type'      => array( 'string', 'null' ),
+					'maxLength' => 191,
+				),
+			),
+			'required'             => array( 'booking_id', 'participant', 'message_id' ),
 			'additionalProperties' => false,
 		);
 	}
 
 	private function delivery_schema(): array {
 		return array(
-			'type' => 'object',
-			'properties' => array( 'intent_id' => array( 'type' => 'integer', 'minimum' => 1 ), 'status' => array( 'type' => 'string', 'enum' => array( 'sent', 'failed' ) ), 'callback_id' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 191 ), 'provider_id' => array( 'type' => array( 'string', 'null' ), 'maxLength' => 191 ) ),
-			'required' => array( 'intent_id', 'status', 'callback_id' ),
+			'type'                 => 'object',
+			'properties'           => array(
+				'intent_id'   => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'status'      => array(
+					'type' => 'string',
+					'enum' => array( 'sent', 'failed' ),
+				),
+				'callback_id' => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 191,
+				),
+				'provider_id' => array(
+					'type'      => array( 'string', 'null' ),
+					'maxLength' => 191,
+				),
+			),
+			'required'             => array( 'intent_id', 'status', 'callback_id' ),
 			'additionalProperties' => false,
 		);
 	}
 
 	private function state_properties(): array {
-		return array( 'intent_id' => array( 'type' => 'integer' ), 'booking_id' => array( 'type' => 'integer' ), 'message_id' => array( 'type' => 'string' ), 'status' => array( 'type' => 'string' ), 'action_id' => array( 'type' => array( 'integer', 'null' ) ) );
+		return array(
+			'intent_id'  => array( 'type' => 'integer' ),
+			'booking_id' => array( 'type' => 'integer' ),
+			'message_id' => array( 'type' => 'string' ),
+			'status'     => array( 'type' => 'string' ),
+			'action_id'  => array( 'type' => array( 'integer', 'null' ) ),
+		);
 	}
 
-	private function meta( bool $readonly, bool $idempotent ): array {
-		return array( 'show_in_rest' => true, 'annotations' => array( 'readonly' => $readonly, 'idempotent' => $idempotent, 'destructive' => ! $readonly ) );
+	private function meta( bool $is_readonly, bool $idempotent ): array {
+		return array(
+			'show_in_rest' => true,
+			'annotations'  => array(
+				'readonly'    => $is_readonly,
+				'idempotent'  => $idempotent,
+				'destructive' => ! $is_readonly,
+			),
+		);
 	}
 }

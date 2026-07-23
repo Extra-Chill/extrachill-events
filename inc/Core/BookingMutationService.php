@@ -165,7 +165,7 @@ class BookingMutationService {
 
 	/** Normalize the strict complete draft-deal document. */
 	public static function normalize_deal_document( array $document ) {
-		$fields = array( 'version', 'type', 'guarantee_cents', 'revenue_share_basis_points', 'revenue_share_basis', 'currency', 'capacity', 'advance_ticket_price_cents', 'door_ticket_price_cents', 'ticket_fee_cents', 'tickets_on_sale_at', 'additional_terms' );
+		$fields = array( 'version', 'type', 'guarantee_cents', 'revenue_share_basis_points', 'revenue_share_basis', 'currency', 'capacity', 'advance_ticket_price_cents', 'door_ticket_price_cents', 'ticket_fee_cents', 'tickets_on_sale_at', 'ticket_url', 'additional_terms' );
 		if ( array_diff( $fields, array_keys( $document ) ) || array_diff( array_keys( $document ), $fields ) || 1 !== $document['version'] ) {
 			return new \WP_Error( 'invalid_booking_deal', __( 'The complete version 1 deal document is required.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
@@ -205,6 +205,10 @@ class BookingMutationService {
 		if ( null !== $on_sale && ! self::valid_datetime( $on_sale ) ) {
 			return new \WP_Error( 'invalid_booking_deal', __( 'The ticket on-sale time must be a UTC datetime.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
+		$ticket_url = $document['ticket_url'];
+		if ( null !== $ticket_url && ( ! is_string( $ticket_url ) || false === filter_var( $ticket_url, FILTER_VALIDATE_URL ) || ! preg_match( '#^https?://#i', $ticket_url ) ) ) {
+			return new \WP_Error( 'invalid_booking_deal', __( 'The ticket URL must be a valid HTTP or HTTPS URL.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
 		$terms = $document['additional_terms'];
 		if ( null !== $terms && ! is_string( $terms ) ) {
 			return new \WP_Error( 'invalid_booking_deal', __( 'Additional terms must be a string or null.', 'extrachill-events' ), array( 'status' => 400 ) );
@@ -221,6 +225,7 @@ class BookingMutationService {
 			'door_ticket_price_cents'    => $document['door_ticket_price_cents'],
 			'ticket_fee_cents'           => $document['ticket_fee_cents'],
 			'tickets_on_sale_at'         => $on_sale,
+			'ticket_url'                 => $ticket_url,
 			'additional_terms'           => null === $terms || '' === sanitize_textarea_field( $terms ) ? null : mb_substr( sanitize_textarea_field( $terms ), 0, 10000 ),
 		);
 	}

@@ -97,6 +97,7 @@ final class BookingMutationTest extends TestCase {
 				'door_ticket_price_cents'    => 2500,
 				'ticket_fee_cents'           => 300,
 				'tickets_on_sale_at'         => '2030-01-01 15:00:00',
+				'ticket_url'                  => 'https://tickets.example.com/test-band',
 				'additional_terms'           => 'Merch is 100% artist.',
 			),
 			$overrides
@@ -234,7 +235,7 @@ final class BookingMutationTest extends TestCase {
 			$booking = $this->booking( $status );
 			$this->assertSame( 'booking_mutation_status_forbidden', $service->update_deal( $booking['id'], 1, $this->deal(), 12 )->get_error_code(), $status );
 		}
-		foreach ( array( array( 'revenue_share_basis_points' => 10001 ), array( 'currency' => 'US1' ), array( 'capacity' => 0 ), array( 'guarantee_cents' => -1 ), array( 'tickets_on_sale_at' => 'soon' ) ) as $invalid ) {
+		foreach ( array( array( 'revenue_share_basis_points' => 10001 ), array( 'currency' => 'US1' ), array( 'capacity' => 0 ), array( 'guarantee_cents' => -1 ), array( 'tickets_on_sale_at' => 'soon' ), array( 'ticket_url' => 'javascript:alert(1)' ) ) as $invalid ) {
 			$this->assertSame( 'invalid_booking_deal', BookingMutationService::normalize_deal_document( $this->deal( $invalid ) )->get_error_code() );
 		}
 		$this->assertSame( 'invalid_booking_deal', BookingMutationService::normalize_deal_document( $this->deal( array( 'currency' => 123 ) ) )->get_error_code() );

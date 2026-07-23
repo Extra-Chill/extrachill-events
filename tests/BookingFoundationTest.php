@@ -742,6 +742,7 @@ final class BookingFoundationTest extends TestCase {
 								'door_ticket_price_cents' => null,
 								'ticket_fee_cents'        => null,
 								'tickets_on_sale_at'      => null,
+								'ticket_url'               => null,
 								'additional_terms'        => null,
 							),
 						),
@@ -786,6 +787,7 @@ final class BookingFoundationTest extends TestCase {
 				'door_ticket_price_cents'    => null,
 				'ticket_fee_cents'           => null,
 				'tickets_on_sale_at'         => null,
+				'ticket_url'                  => null,
 				'additional_terms'           => null,
 			),
 		);

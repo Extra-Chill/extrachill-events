@@ -634,12 +634,17 @@ class VenueBookingAbilities {
 				'door_ticket_price_cents'    => $nullable_money,
 				'ticket_fee_cents'           => $nullable_money,
 				'tickets_on_sale_at'         => $this->nullable_datetime_schema(),
+				'ticket_url'                 => array(
+					'type'      => array( 'string', 'null' ),
+					'format'    => 'uri',
+					'maxLength' => 2048,
+				),
 				'additional_terms'           => array(
 					'type'      => array( 'string', 'null' ),
 					'maxLength' => 10000,
 				),
 			),
-			'required'             => array( 'version', 'type', 'guarantee_cents', 'revenue_share_basis_points', 'revenue_share_basis', 'currency', 'capacity', 'advance_ticket_price_cents', 'door_ticket_price_cents', 'ticket_fee_cents', 'tickets_on_sale_at', 'additional_terms' ),
+			'required'             => array( 'version', 'type', 'guarantee_cents', 'revenue_share_basis_points', 'revenue_share_basis', 'currency', 'capacity', 'advance_ticket_price_cents', 'door_ticket_price_cents', 'ticket_fee_cents', 'tickets_on_sale_at', 'ticket_url', 'additional_terms' ),
 			'additionalProperties' => false,
 		);
 	}

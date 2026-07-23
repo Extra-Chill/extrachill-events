@@ -88,6 +88,7 @@ final class BookingHoldTest extends TestCase {
 						'door_ticket_price_cents'    => null,
 						'ticket_fee_cents'           => null,
 						'tickets_on_sale_at'         => null,
+						'ticket_url'                  => null,
 						'additional_terms'           => null,
 					),
 					'space_key'            => $space,

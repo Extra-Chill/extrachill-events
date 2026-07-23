@@ -40,6 +40,11 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 * @var array|null
 	 */
 	private $root_identity;
+	/** Pinned one-time handoff directory identity.
+	 *
+	 * @var array|null
+	 */
+	private $handoffs_identity;
 
 	/**
 	 * Validate the configured root and initialize private subdirectories.
@@ -64,6 +69,7 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				return;
 			}
 		}
+		$this->handoffs_identity = lstat( $this->handoffs_directory() );
 	}
 
 	/** Return whether this provider is safe to use. */
@@ -269,6 +275,43 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		);
 	}
 
+	/** Return internal active/abandoned claims for explicit reconciliation. */
+	public function inspect_claims() {
+		if ( ! $this->is_ready() ) {
+			return $this->configuration_error();
+		}
+		$claims   = array();
+		$iterator = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->objects_directory(), \FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $iterator as $file ) {
+			if ( ! $file->isFile() || $file->isLink() || '.json' !== substr( $file->getFilename(), -5 ) ) {
+				continue;
+			}
+			$reference = substr( $file->getFilename(), 0, -5 );
+			if ( ! $this->valid_reference( $reference ) ) {
+				continue;
+			}
+			$record = $this->read_record( $reference );
+			if ( is_wp_error( $record ) ) {
+				$recoverable = $this->read_record_allow_missing_blob( $reference );
+				if ( is_array( $recoverable ) && 'retiring' === ( $recoverable['state'] ?? '' ) ) {
+					continue;
+				}
+			}
+			if ( is_wp_error( $record ) ) {
+				return $record;
+			}
+			foreach ( $record['claims'] as $claim_key => $claim ) {
+				$claims[] = array(
+					'storage_reference' => $reference,
+					'claim_key'         => (string) $claim_key,
+					'state'             => (string) ( $claim['state'] ?? '' ),
+					'updated_at'        => (string) ( $claim['updated_at'] ?? '' ),
+				);
+			}
+		}
+		return $claims;
+	}
+
 	/**
 	 * Return a short-lived opaque one-time stream handoff.
 	 *
@@ -279,6 +322,9 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 * @param string $claim_key            Exact active claim.
 	 */
 	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
+		if ( ! $this->handoffs_directory_is_safe() ) {
+			return new \WP_Error( 'booking_private_handoff_directory_unsafe', __( 'The private handoff directory changed unexpectedly.', 'extrachill-events' ) );
+		}
 		return $this->with_object_lock(
 			$storage_reference,
 			function () use ( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key ) {
@@ -325,12 +371,15 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		}
 		$handoff_path = $this->handoff_path( $stream_token );
 		$consuming    = $handoff_path . '.consuming';
-		if ( ! $this->is_contained( $handoff_path ) || is_link( $handoff_path ) || ! is_file( $handoff_path ) || ! rename( $handoff_path, $consuming ) ) {
+		if ( ! $this->handoffs_directory_is_safe() || ! $this->is_contained( $handoff_path ) || is_link( $handoff_path ) || ! is_file( $handoff_path ) || ! rename( $handoff_path, $consuming ) ) {
 			return new \WP_Error( 'booking_private_stream_invalid', __( 'The private stream token is invalid.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
+		if ( ! $this->handoffs_directory_is_safe() || is_link( $consuming ) || ! is_file( $consuming ) ) {
+			return new \WP_Error( 'booking_private_handoff_directory_unsafe', __( 'The private handoff directory changed unexpectedly.', 'extrachill-events' ) );
 		}
 		$contents = file_get_contents( $consuming );
 		$decoded  = false !== $contents ? json_decode( $contents, true ) : null;
-		if ( ! unlink( $consuming ) ) {
+		if ( ! $this->handoffs_directory_is_safe() || ! unlink( $consuming ) ) {
 			return new \WP_Error( 'booking_private_handoff_consume_failed', __( 'The private stream handoff could not be consumed safely.', 'extrachill-events' ) );
 		}
 		if ( ! is_array( $decoded ) || time() >= (int) ( $decoded['expires'] ?? 0 ) || ! hash_equals( (string) ( $decoded['attachment_public_id'] ?? '' ), $attachment_public_id ) || (int) ( $decoded['actor_id'] ?? 0 ) !== $actor_id || ! hash_equals( (string) ( $decoded['purpose'] ?? '' ), $purpose ) ) {
@@ -393,11 +442,16 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 * This method is intentionally not scheduled until issue #336 approves
 	 * retention, backups, and operational ownership.
 	 *
-	 * @param int $minimum_age Minimum age in seconds.
+	 * @param array $policy Explicit minimum age and legal-hold callback.
 	 */
-	public function cleanup_provisional( int $minimum_age = 3600 ) {
+	public function cleanup_provisional( array $policy = array() ) {
 		if ( ! $this->is_ready() ) {
 			return $this->configuration_error();
+		}
+		$minimum_age = absint( $policy['minimum_age'] ?? 0 );
+		$legal_hold  = $policy['legal_hold_callback'] ?? null;
+		if ( $minimum_age < self::CLAIM_TTL || ! is_callable( $legal_hold ) ) {
+			return new \WP_Error( 'booking_private_provisional_cleanup_policy_required', __( 'Provisional cleanup requires an explicit approved retention and legal-hold policy.', 'extrachill-events' ) );
 		}
 		$cutoff   = time() - max( 0, $minimum_age );
 		$deleted  = 0;
@@ -417,14 +471,21 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			if ( '.json' === substr( $path, -5 ) && ! $is_orphan_sidecar ) {
 				$reference = substr( $file->getFilename(), 0, -5 );
 				if ( $this->valid_reference( $reference ) ) {
-					$unclaimed = $this->cleanup_unclaimed_object( $reference, $cutoff );
+					$unclaimed = $this->cleanup_unclaimed_object( $reference, $cutoff, $legal_hold );
+					if ( is_wp_error( $unclaimed ) ) {
+						return $unclaimed;
+					}
 					if ( is_int( $unclaimed ) ) {
 						$deleted += $unclaimed;
 					}
 					continue;
 				}
 			}
-			if ( ( $is_temporary || $is_handoff || $is_metadata_temp || $is_orphan_blob || $is_orphan_sidecar ) && file_exists( $path ) && unlink( $path ) ) {
+			$held = $legal_hold( $is_handoff ? 'handoff' : 'provisional', gmdate( 'c', $file->getMTime() ) );
+			if ( is_wp_error( $held ) ) {
+				return $held;
+			}
+			if ( false === $held && ( $is_temporary || $is_handoff || $is_metadata_temp || $is_orphan_blob || $is_orphan_sidecar ) && file_exists( $path ) && unlink( $path ) ) {
 				++$deleted;
 			}
 		}
@@ -434,15 +495,23 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	/**
 	 * Delete a complete unclaimed object under its claim lock.
 	 *
-	 * @param string $reference Object reference.
-	 * @param int    $cutoff    Maximum modification timestamp.
+	 * @param string   $reference  Object reference.
+	 * @param int      $cutoff     Maximum modification timestamp.
+	 * @param callable $legal_hold Approved legal-hold callback.
 	 */
-	private function cleanup_unclaimed_object( string $reference, int $cutoff ) {
+	private function cleanup_unclaimed_object( string $reference, int $cutoff, callable $legal_hold ) {
 		return $this->with_object_lock(
 			$reference,
-			function () use ( $reference, $cutoff ) {
+			function () use ( $reference, $cutoff, $legal_hold ) {
 				$record = $this->read_record( $reference );
 				if ( is_wp_error( $record ) || $this->has_live_claims( $record, $cutoff ) || filemtime( $this->metadata_path( $reference ) ) > $cutoff ) {
+					return 0;
+				}
+				$held = $legal_hold( 'object', $this->public_metadata( $record ) );
+				if ( is_wp_error( $held ) ) {
+					return $held;
+				}
+				if ( false !== $held ) {
 					return 0;
 				}
 				$deleted = 0;
@@ -663,7 +732,8 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 * @param array  $record Metadata record.
 	 */
 	private function write_metadata_atomic( string $path, array $record ): bool {
-		if ( ! $this->is_contained( $path ) || ! $this->ensure_private_directory( dirname( $path ) ) ) {
+		$is_handoff = dirname( $path ) === $this->handoffs_directory();
+		if ( ( $is_handoff && ! $this->handoffs_directory_is_safe() ) || ! $this->is_contained( $path ) || ! $this->ensure_private_directory( dirname( $path ) ) ) {
 			return false;
 		}
 		$temporary = tempnam( dirname( $path ), '.metadata-' );
@@ -671,11 +741,17 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 			return false;
 		}
 		$encoded = wp_json_encode( $record );
-		$written = false !== $encoded && false !== file_put_contents( $temporary, $encoded, LOCK_EX ) && chmod( $temporary, 0600 ) && rename( $temporary, $path );
+		$written = false !== $encoded && false !== file_put_contents( $temporary, $encoded, LOCK_EX ) && chmod( $temporary, 0600 );
+		if ( $written && ( ( ! $is_handoff || $this->handoffs_directory_is_safe() ) && rename( $temporary, $path ) ) ) {
+			return true;
+		}
 		if ( ! $written && file_exists( $temporary ) ) {
 			unlink( $temporary );
 		}
-		return $written;
+		if ( file_exists( $temporary ) ) {
+			unlink( $temporary );
+		}
+		return false;
 	}
 
 	/**
@@ -742,6 +818,30 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 	 */
 	private function handoff_path( string $token ): string {
 		return $this->handoffs_directory() . '/' . hash( 'sha256', $token ) . '.json';
+	}
+
+	/** Revalidate the pinned handoff parent immediately before mutation. */
+	private function handoffs_directory_is_safe(): bool {
+		if ( ! $this->is_ready() || ! is_array( $this->handoffs_identity ) ) {
+			return false;
+		}
+		$directory   = $this->handoffs_directory();
+		$current     = lstat( $directory );
+		$real        = realpath( $directory );
+		$permissions = fileperms( $directory );
+		$owner       = fileowner( $directory );
+		return is_array( $current )
+			&& false !== $real
+			&& $real === $directory
+			&& ! is_link( $directory )
+			&& $current['dev'] === $this->handoffs_identity['dev']
+			&& $current['ino'] === $this->handoffs_identity['ino']
+			&& false !== $permissions
+			&& 0 === ( $permissions & 0022 )
+			&& 0 === ( $permissions & 0007 )
+			&& function_exists( 'posix_geteuid' )
+			&& false !== $owner
+			&& (int) posix_geteuid() === (int) $owner;
 	}
 
 	/**

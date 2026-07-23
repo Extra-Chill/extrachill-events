@@ -276,7 +276,7 @@ final class BookingAttachmentTest extends TestCase {
 		};
 		$result = $this->service( $authorization )->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
 		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
-		$this->assertCount( 1, $this->provider->released );
+		$this->assertCount( 0, $this->provider->released );
 	}
 
 	public function test_failed_claim_compensation_is_never_silently_ignored(): void {
@@ -335,5 +335,104 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertIsResource( $stream );
 		fclose( $stream );
 		$this->assertSame( 'booking_private_stream_invalid', $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12 )->get_error_code() );
+	}
+
+	public function test_global_lock_order_and_site_scoped_claim_identity_are_deterministic(): void {
+		$booking = $this->booking();
+		$result  = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 'membership:55', 'booking:1', 'reference' ), array_slice( $GLOBALS['wpdb']->lock_sequence, -3 ) );
+		$this->assertStringStartsWith( 'site:7:table:wp_7_ec_booking_attachments:booking:1:request:', $this->provider->claims[0][1] );
+		$this->assertSame( array(), $GLOBALS['wpdb']->reference_locks );
+	}
+
+	public function test_delete_download_and_cleanup_keep_the_same_global_lock_order(): void {
+		$booking = $this->booking();
+		$service = $this->service();
+		$user    = array( 'uploader_type' => 'user', 'uploader_user_id' => 12 );
+		$file    = $service->attach( $this->input( $booking, $user ) );
+
+		$GLOBALS['wpdb']->lock_sequence = array();
+		$service->download_descriptor( $booking['id'], $file['id'], 12 );
+		$this->assertSame( array( 'membership:55', 'booking:1', 'reference' ), $GLOBALS['wpdb']->lock_sequence );
+
+		$GLOBALS['wpdb']->lock_sequence = array();
+		$service->delete( $booking['id'], $file['id'], 12 );
+		$this->assertSame( array( 'membership:55', 'booking:1', 'reference' ), $GLOBALS['wpdb']->lock_sequence );
+
+		$GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ][ $file['id'] ]['retired_at'] = '2020-01-01 00:00:00';
+		$GLOBALS['wpdb']->lock_sequence = array();
+		$service->cleanup( array( 'actor_id' => 12, 'retention_days' => 1, 'legal_hold_callback' => static function (): bool { return false; } ) );
+		$this->assertSame(
+			array( 'membership:55', 'booking:1', 'reference', 'membership:55', 'booking:1', 'reference' ),
+			$GLOBALS['wpdb']->lock_sequence
+		);
+		$this->assertSame( array(), $GLOBALS['wpdb']->reference_locks );
+	}
+
+	public function test_throwable_rolls_back_transaction_and_releases_reference_lock(): void {
+		$booking = $this->booking();
+		$this->provider->throw_claim = true;
+		$result = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'booking_attachment_transaction_exception', $result->get_error_code() );
+		$this->assertFalse( $GLOBALS['wpdb']->transaction_active );
+		$this->assertSame( array(), $GLOBALS['wpdb']->reference_locks );
+		$this->assertSame( 1, $GLOBALS['wpdb']->rollback_queries );
+	}
+
+	public function test_uncertain_commit_attempts_rollback_and_releases_reference_lock(): void {
+		$booking = $this->booking();
+		$GLOBALS['wpdb']->fail_transaction_commit = true;
+		$result = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'booking_attachment_transaction_commit_uncertain', $result->get_error_code() );
+		$this->assertTrue( $result->get_error_data()['rollback_confirmed'] );
+		$this->assertFalse( $GLOBALS['wpdb']->transaction_active );
+		$this->assertSame( array(), $GLOBALS['wpdb']->reference_locks );
+		$this->assertSame( 1, $GLOBALS['wpdb']->rollback_queries );
+	}
+
+	public function test_reconciliation_marks_crash_orphan_abandoned_without_deleting_bytes(): void {
+		$booking   = $this->booking();
+		$claim_key = 'site:7:table:wp_7_ec_booking_attachments:booking:' . $booking['id'] . ':request:' . hash( 'sha256', 'crashed-request' );
+		$this->provider->claim( 'private_object_one_123456', $claim_key, 'epk' );
+		$record_key = 'private_object_one_123456|' . $claim_key;
+		$this->provider->claim_records[ $record_key ]['updated_at'] = '2020-01-01 00:00:00';
+		$policy = array( 'actor_id' => 12, 'minimum_age' => 3600, 'repair' => false );
+		$report = $this->service()->reconcile( $policy );
+		$this->assertCount( 1, $report['orphan_claims'] );
+		$this->assertSame( array(), $this->provider->retired );
+		$policy['repair'] = true;
+		$repaired = $this->service()->reconcile( $policy );
+		$this->assertSame( 1, $repaired['repaired_claims'] );
+		$this->assertSame( 'abandoned', $this->provider->claim_records[ $record_key ]['state'] );
+		$this->assertSame( array(), $this->provider->retired );
+	}
+
+	public function test_reconciliation_completes_replacement_after_process_crash(): void {
+		$booking = $this->booking();
+		$service = $this->service();
+		$user    = array( 'uploader_type' => 'user', 'uploader_user_id' => 12 );
+		$prior   = $service->attach( $this->input( $booking, $user ) );
+		$new     = $service->attach(
+			$this->input(
+				$booking,
+				array_merge(
+					$user,
+					array(
+						'storage_reference'      => 'private_object_two_123456',
+						'idempotency_key'        => 'crashed-replacement',
+						'replaces_attachment_id' => $prior['id'],
+					)
+				)
+			)
+		);
+		$GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ][ $new['id'] ]['created_at'] = '2020-01-01 00:00:00';
+		$report = $service->reconcile( array( 'actor_id' => 12, 'minimum_age' => 3600, 'repair' => false ) );
+		$this->assertCount( 1, $report['incomplete_replacements'] );
+		$this->assertSame( 'active', ( new BookingAttachmentRepository() )->get( $prior['id'] )['state'] );
+		$repaired = $service->reconcile( array( 'actor_id' => 12, 'minimum_age' => 3600, 'repair' => true ) );
+		$this->assertSame( 1, $repaired['repaired_replacements'] );
+		$this->assertSame( 'replaced', ( new BookingAttachmentRepository() )->get( $prior['id'] )['state'] );
+		$this->assertSame( 'active', ( new BookingAttachmentRepository() )->get( $new['id'] )['state'] );
 	}
 }

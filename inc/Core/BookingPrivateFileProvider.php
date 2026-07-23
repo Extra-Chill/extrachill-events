@@ -41,6 +41,13 @@ interface BookingPrivateFileProvider {
 	public function release_claim( string $storage_reference, string $claim_key );
 
 	/**
+	 * Inspect claim lifecycle for explicit domain reconciliation.
+	 *
+	 * This internal result may contain opaque references and must never be exposed.
+	 */
+	public function inspect_claims();
+
+	/**
 	 * Return an authorized stream handoff without a public URL or filesystem path.
 	 *
 	 * @param string $storage_reference    Opaque object reference.

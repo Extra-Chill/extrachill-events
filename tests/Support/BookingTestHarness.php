@@ -245,6 +245,7 @@ final class BookingWpdb {
 	public $fail_venue_lock           = false;
 	public $venue_lock_queries        = 0;
 	public $reference_locks           = array();
+	public $lock_sequence             = array();
 	public $after_reference_lock      = null;
 	public $transaction_active        = false;
 	public $natural_key_reads_in_transaction = 0;
@@ -378,6 +379,7 @@ final class BookingWpdb {
 		$this->last_error = '';
 		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', 10\)/", $query, $match ) ) {
 			$this->reference_locks[ stripslashes( $match[1] ) ] = true;
+			$this->lock_sequence[] = 'reference';
 			if ( is_callable( $this->after_reference_lock ) ) {
 				$callback                   = $this->after_reference_lock;
 				$this->after_reference_lock = null;
@@ -442,6 +444,9 @@ final class BookingWpdb {
 		}
 		$table = $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : $this->prefix . 'ec_bookings' );
 		if ( preg_match( '/WHERE id = (\d+)/', $query, $match ) ) {
+			if ( false !== strpos( $query, 'FOR UPDATE' ) && false !== strpos( $query, 'ec_bookings' ) ) {
+				$this->lock_sequence[] = 'booking:' . (int) $match[1];
+			}
 			return $this->rows[ $table ][ (int) $match[1] ] ?? null; }
 		if ( preg_match( "/WHERE public_id = '([^']+)'/", $query, $match ) ) {
 			foreach ( $this->rows[ $table ] ?? array() as $row ) {
@@ -495,6 +500,9 @@ final class BookingWpdb {
 			return $rows;
 		}
 		if ( false !== strpos( $query, 'ec_venue_members' ) && false !== strpos( $query, 'FOR UPDATE' ) ) {
+			if ( preg_match( '/venue_term_id = (\d+)/', $query, $venue ) ) {
+				$this->lock_sequence[] = 'membership:' . (int) $venue[1];
+			}
 			if ( is_callable( $this->after_membership_lock ) ) {
 				$callback                    = $this->after_membership_lock;
 				$this->after_membership_lock = null;
@@ -570,6 +578,26 @@ final class BookingWpdb {
 					$rows,
 					static function ( $row ) {
 						return in_array( $row['state'], array( 'replaced', 'deleted', 'abandoned', 'purging' ), true );
+					}
+				)
+			);
+		}
+		if ( $is_attachment && false !== strpos( $query, "state = 'active'" ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) {
+						return 'active' === $row['state'];
+					}
+				)
+			);
+		}
+		if ( $is_attachment && false !== strpos( $query, 'replaces_attachment_id IS NOT NULL' ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) {
+						return null !== $row['replaces_attachment_id'];
 					}
 				)
 			);
@@ -785,18 +813,35 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	public $fail_release = false;
 	public $fail_retire  = false;
 	public $handoffs = array();
+	public $claim_records = array();
+	public $throw_claim = false;
 	public function stage( string $source_path, string $filename, string $purpose ) {
 		unset( $source_path, $filename, $purpose );
 		return new WP_Error( 'not_implemented' );
 	}
 	public function claim( string $storage_reference, string $claim_key, string $purpose = '' ) {
 		unset( $purpose );
+		if ( $this->throw_claim ) {
+			throw new RuntimeException( 'simulated provider crash' );
+		}
 		$this->claims[] = array( $storage_reference, $claim_key );
+		$this->claim_records[ $storage_reference . '|' . $claim_key ] = array(
+			'storage_reference' => $storage_reference,
+			'claim_key'         => $claim_key,
+			'state'             => 'active',
+			'updated_at'        => gmdate( 'Y-m-d H:i:s' ),
+		);
 		return $this->objects[ $storage_reference ] ?? new WP_Error( 'private_object_missing' );
 	}
 	public function release_claim( string $storage_reference, string $claim_key ) {
 		$this->released[] = array( $storage_reference, $claim_key );
+		if ( isset( $this->claim_records[ $storage_reference . '|' . $claim_key ] ) ) {
+			$this->claim_records[ $storage_reference . '|' . $claim_key ]['state'] = 'abandoned';
+		}
 		return $this->fail_release ? new WP_Error( 'simulated_claim_release_failure' ) : true;
+	}
+	public function inspect_claims() {
+		return array_values( $this->claim_records );
 	}
 	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
 		$token = bin2hex( random_bytes( 32 ) );

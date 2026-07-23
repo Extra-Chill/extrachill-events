@@ -98,6 +98,25 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$this->assertSame( 'booking_private_storage_unavailable', $result->get_error_code() );
 	}
 
+	public function test_handoff_parent_replacement_fails_closed(): void {
+		if ( ! function_exists( 'symlink' ) ) {
+			$this->markTestSkipped( 'Symlinks are unavailable.' );
+		}
+		$provider  = new LocalBookingPrivateFileProvider( $this->root );
+		$reference = $provider->stage( $this->source( 'handoff.txt', 'handoff' ), 'handoff.txt', 'epk' );
+		$claim_key = 'site:7:table:wp_7_ec_booking_attachments:booking:1:request:' . hash( 'sha256', 'handoff' );
+		$provider->claim( $reference, $claim_key, 'epk' );
+		$descriptor = $provider->download_descriptor( $reference, 'attachment-public-id', 12, 'epk', $claim_key );
+		$moved      = $this->root . '/.handoffs-original';
+		$outside    = $this->base . '/handoffs-escape';
+		mkdir( $outside, 0700 );
+		rename( $this->root . '/.handoffs', $moved );
+		symlink( $outside, $this->root . '/.handoffs' );
+		$this->assertSame( 'booking_private_handoff_directory_unsafe', $provider->download_descriptor( $reference, 'other-id', 12, 'epk', $claim_key )->get_error_code() );
+		$this->assertSame( 'booking_private_stream_invalid', $provider->open_stream( $descriptor['stream_token'], 'attachment-public-id', 12, 'epk' )->get_error_code() );
+		$this->assertSame( array(), $this->files_in( $outside ) );
+	}
+
 	public function test_stage_generates_opaque_id_and_server_derived_metadata_with_private_permissions(): void {
 		$source    = $this->source( 'press-kit.txt', 'booking press kit' );
 		$provider  = new LocalBookingPrivateFileProvider( $this->root );
@@ -217,11 +236,12 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		file_put_contents( $sidecar, '{}' );
 		file_put_contents( $metadata_temp, '{}' );
 		file_put_contents( $temp, 'temporary' );
-		touch( $orphan, time() - 10 );
-		touch( $sidecar, time() - 10 );
-		touch( $metadata_temp, time() - 10 );
-		touch( $temp, time() - 10 );
-		$this->assertSame( 4, $provider->cleanup_provisional( 0 ) );
+		touch( $orphan, time() - 7200 );
+		touch( $sidecar, time() - 7200 );
+		touch( $metadata_temp, time() - 7200 );
+		touch( $temp, time() - 7200 );
+		$this->assertSame( 'booking_private_provisional_cleanup_policy_required', $provider->cleanup_provisional()->get_error_code() );
+		$this->assertSame( 4, $provider->cleanup_provisional( $this->cleanup_policy() ) );
 		$this->assertFileDoesNotExist( $orphan );
 		$this->assertFileDoesNotExist( $sidecar );
 		$this->assertFileDoesNotExist( $metadata_temp );
@@ -232,9 +252,9 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$provider  = new LocalBookingPrivateFileProvider( $this->root );
 		$reference = $provider->stage( $this->source( 'unclaimed.txt', 'unclaimed' ), 'unclaimed.txt', 'epk' );
 		foreach ( array_merge( $this->files_ending_in( '.blob' ), $this->files_ending_in( '.json' ) ) as $path ) {
-			touch( $path, time() - 10 );
+			touch( $path, time() - 7200 );
 		}
-		$this->assertSame( 2, $provider->cleanup_provisional( 0 ) );
+		$this->assertSame( 2, $provider->cleanup_provisional( $this->cleanup_policy() ) );
 		$this->assertSame( 'booking_private_object_missing', $provider->claim( $reference, 'booking:1:late', 'epk' )->get_error_code() );
 	}
 
@@ -251,9 +271,9 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$metadata      = json_decode( file_get_contents( $metadata_path ), true );
 		$metadata['claims'][ $claim_key ]['updated_at'] = '2020-01-01 00:00:00';
 		file_put_contents( $metadata_path, wp_json_encode( $metadata ) );
-		touch( $metadata_path, time() - 10 );
-		touch( $this->files_ending_in( '.blob' )[0], time() - 10 );
-		$this->assertSame( 2, $provider->cleanup_provisional( 0 ) );
+		touch( $metadata_path, time() - 7200 );
+		touch( $this->files_ending_in( '.blob' )[0], time() - 7200 );
+		$this->assertSame( 2, $provider->cleanup_provisional( $this->cleanup_policy() ) );
 	}
 
 	public function test_retirement_resumes_after_blob_was_already_removed(): void {
@@ -272,6 +292,15 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$path = $this->incoming . '/' . $filename;
 		file_put_contents( $path, $contents );
 		return $path;
+	}
+
+	private function cleanup_policy(): array {
+		return array(
+			'minimum_age'        => 3600,
+			'legal_hold_callback' => static function (): bool {
+				return false;
+			},
+		);
 	}
 
 	private function files_ending_in( string $suffix ): array {

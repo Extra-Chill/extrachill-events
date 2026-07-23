@@ -152,6 +152,21 @@ class BookingAttachmentRepository {
 	}
 
 	/**
+	 * List active replacement rows whose prior retirement may have crashed.
+	 *
+	 * @param string $cutoff UTC database datetime.
+	 */
+	public function list_active_replacements_before( string $cutoff ) {
+		global $wpdb;
+		$table = BookingSchema::attachments_table();
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state = 'active' AND replaces_attachment_id IS NOT NULL AND created_at < %s ORDER BY created_at ASC, id ASC LIMIT 250", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit reconciliation candidates.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_attachment_reconciliation_read_failed', __( 'Incomplete attachment replacements could not be inspected.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
+		return array_map( array( $this, 'hydrate' ), (array) $rows );
+	}
+
+	/**
 	 * Apply a one-way lifecycle state transition.
 	 *
 	 * @param int    $id    Attachment ID.

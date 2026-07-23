@@ -123,6 +123,9 @@ class VenueAuthorization {
 		if ( ! is_array( $membership ) ) {
 			return $this->denied();
 		}
+		if ( self::STATUS_ACTIVE !== ( $membership['status'] ?? '' ) ) {
+			return $this->denied();
+		}
 		if ( self::ACTION_MANAGE_MEMBERS === $action && ! $membership['is_owner'] ) {
 			return $this->denied();
 		}

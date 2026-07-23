@@ -70,7 +70,7 @@ class BookingHoldRepository {
 		}
 		global $wpdb;
 		$table = BookingSchema::holds_table();
-		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND venue_term_id = %d AND space_key = %s AND start_at = %s AND end_at = %s AND status = 'active' AND expires_at <= UTC_TIMESTAMP() ORDER BY id DESC LIMIT 1", $booking['id'], $booking['venue_term_id'], $booking['space_key'], $booking['requested_start_at'], $booking['requested_end_at'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Detects only the elapsed exact selected hold by database time.
+		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT *, UTC_TIMESTAMP() AS database_now FROM {$table} WHERE booking_id = %d AND venue_term_id = %d AND space_key = %s AND start_at = %s AND end_at = %s AND status = 'active' AND expires_at <= UTC_TIMESTAMP() ORDER BY id DESC LIMIT 1", $booking['id'], $booking['venue_term_id'], $booking['space_key'], $booking['requested_start_at'], $booking['requested_end_at'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Detects only the elapsed exact selected hold by database time.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_hold_reconciliation_failed', __( 'The held booking could not be reconciled.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}
@@ -274,8 +274,12 @@ class BookingHoldRepository {
 				}
 
 				global $wpdb;
-				$now       = gmdate( 'Y-m-d H:i:s' );
-				$expires   = gmdate( 'Y-m-d H:i:s', time() + ( (int) $config['hold_ttl_minutes'] * MINUTE_IN_SECONDS ) );
+				$clock = $wpdb->get_row( $wpdb->prepare( 'SELECT UTC_TIMESTAMP() AS current_at, DATE_ADD(UTC_TIMESTAMP(), INTERVAL %d MINUTE) AS expires_at', (int) $config['hold_ttl_minutes'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- MySQL time defines the complete hold lifetime.
+				if ( '' !== (string) $wpdb->last_error || ! is_array( $clock ) || empty( $clock['current_at'] ) || empty( $clock['expires_at'] ) ) {
+					return $this->rollback( new \WP_Error( 'booking_hold_clock_read_failed', __( 'The booking hold expiration could not be calculated.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) );
+				}
+				$now       = $clock['current_at'];
+				$expires   = $clock['expires_at'];
 				$bookings  = BookingSchema::bookings_table();
 				$increment = $wpdb->query( $wpdb->prepare( "UPDATE {$bookings} SET version = version + 1, updated_at = %s WHERE id = %d AND version = %d", $now, $booking_id, $expected_booking_version ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate optimistic mutation.
 				if ( false === $increment ) {
@@ -323,7 +327,15 @@ class BookingHoldRepository {
 				if ( is_wp_error( $event ) ) {
 					return $this->rollback( $event );
 				}
-				$hold      = $this->hydrate( array_merge( $row, array( 'id' => $hold_id ) ) );
+				$hold      = $this->hydrate(
+					array_merge(
+						$row,
+						array(
+							'id'           => $hold_id,
+							'database_now' => $now,
+						)
+					)
+				);
 				$committed = $this->commit();
 				if ( is_wp_error( $committed ) ) {
 					return $committed;
@@ -372,8 +384,11 @@ class BookingHoldRepository {
 				if ( is_wp_error( $hold ) || ! is_array( $hold ) ) {
 					return $this->rollback( is_wp_error( $hold ) ? $hold : new \WP_Error( 'booking_hold_not_found', __( 'The booking hold was not found.', 'extrachill-events' ) ) );
 				}
-				$effective = $this->hydrate( $hold );
-				if ( 'active' !== $effective['status'] ) {
+				$elapsed = $this->hold_is_elapsed( $hold_id );
+				if ( is_wp_error( $elapsed ) ) {
+					return $this->rollback( $elapsed );
+				}
+				if ( 'active' !== $hold['status'] || $elapsed ) {
 					return $this->rollback( new \WP_Error( 'booking_hold_reconcile_after_release_lock', 'internal' ) );
 				}
 				if ( (int) $hold['version'] !== $expected_version ) {
@@ -474,7 +489,7 @@ class BookingHoldRepository {
 	private function raw_get( int $hold_id ) {
 		global $wpdb;
 		$table = BookingSchema::holds_table();
-		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d LIMIT 1", $hold_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Current-prefix private table.
+		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT *, UTC_TIMESTAMP() AS database_now FROM {$table} WHERE id = %d LIMIT 1", $hold_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Current-prefix private table with authoritative clock.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_hold_read_failed', __( 'The booking hold could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}
@@ -529,7 +544,7 @@ class BookingHoldRepository {
 		$values[] = $limit;
 		$values[] = $offset;
 		$table    = BookingSchema::holds_table();
-		$sql      = "SELECT * FROM {$table} WHERE " . implode( ' AND ', $where ) . ' ORDER BY created_at DESC, id DESC LIMIT %d OFFSET %d'; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Clauses are internal.
+		$sql      = "SELECT *, UTC_TIMESTAMP() AS database_now FROM {$table} WHERE " . implode( ' AND ', $where ) . ' ORDER BY created_at DESC, id DESC LIMIT %d OFFSET %d'; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Clauses are internal.
 		$rows     = $wpdb->get_results( $wpdb->prepare( $sql, $values ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Values prepared.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return $this->rollback( new \WP_Error( 'booking_hold_list_failed', __( 'Booking holds could not be listed.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) );
@@ -750,7 +765,7 @@ class BookingHoldRepository {
 	private function matching_active_hold( array $booking ) {
 		global $wpdb;
 		$table = BookingSchema::holds_table();
-		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND venue_term_id = %d AND space_key = %s AND start_at = %s AND end_at = %s AND status = 'active' AND expires_at > UTC_TIMESTAMP() ORDER BY id DESC LIMIT 1", $booking['id'], $booking['venue_term_id'], $booking['space_key'], $booking['requested_start_at'], $booking['requested_end_at'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact persisted selection by database time.
+		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT *, UTC_TIMESTAMP() AS database_now FROM {$table} WHERE booking_id = %d AND venue_term_id = %d AND space_key = %s AND start_at = %s AND end_at = %s AND status = 'active' AND expires_at > UTC_TIMESTAMP() ORDER BY id DESC LIMIT 1", $booking['id'], $booking['venue_term_id'], $booking['space_key'], $booking['requested_start_at'], $booking['requested_end_at'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact persisted selection by database time.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_hold_read_failed', __( 'The booking hold could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}
@@ -860,6 +875,9 @@ class BookingHoldRepository {
 			return true;
 		}
 		$latest = $this->raw_get( $hold_id );
+		if ( is_wp_error( $latest ) ) {
+			return $latest;
+		}
 		if ( is_array( $latest ) && (int) $latest['version'] === $expected_version && 'active' === $latest['status'] ) {
 			return new \WP_Error( 'booking_hold_expired_during_confirmation', __( 'The booking hold expired before confirmation completed.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
@@ -976,10 +994,14 @@ class BookingHoldRepository {
 	}
 
 	private function hydrate( array $row, bool $effective = true ): array {
+		$database_now = $row['database_now'] ?? null;
+		if ( $effective ) {
+			unset( $row['database_now'] );
+		}
 		foreach ( array( 'id', 'booking_id', 'venue_term_id', 'version', 'created_by_user_id', 'released_by_user_id', 'converted_by_user_id' ) as $field ) {
 			$row[ $field ] = isset( $row[ $field ] ) ? (int) $row[ $field ] : null;
 		}
-		if ( $effective && 'active' === $row['status'] && $row['expires_at'] <= gmdate( 'Y-m-d H:i:s' ) ) {
+		if ( $effective && null !== $database_now && 'active' === $row['status'] && $row['expires_at'] <= $database_now ) {
 			$row['status']     = 'expired';
 			$row['expired_at'] = null === $row['expired_at'] ? $row['expires_at'] : $row['expired_at'];
 		}

@@ -13,6 +13,7 @@ use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\BookingSchema;
 use ExtraChillEvents\Core\VenueBookingConfig;
+use ExtraChillEvents\Core\VenueAuthorization;
 use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
@@ -207,6 +208,30 @@ final class BookingHoldTest extends TestCase {
 		$this->assertSame( 'expired', $holds->expire( $id )['status'] );
 		$this->assertSame( 'expired', $holds->expire( $id )['status'] );
 		$this->assertSame( 2, $holds->get( $id )['version'] );
+	}
+
+	public function test_hold_lifetime_and_effective_expiry_use_database_time(): void {
+		$GLOBALS['wpdb']->database_now = '2034-01-01 00:00:00';
+
+		$holds   = $this->holds();
+		$booking = $this->booking( '2034-08-01 20:00:00', '2034-08-01 23:00:00' );
+		$created = $holds->create( $booking['id'], 1, 12 );
+		$this->assertSame( '2034-01-01 00:00:00', $created['hold']['created_at'] );
+		$this->assertSame( '2034-01-01 00:30:00', $created['hold']['expires_at'] );
+
+		$GLOBALS['wpdb']->database_now = '2034-01-01 00:30:00';
+		$this->assertSame( 'expired', $holds->get( $created['hold']['id'] )['status'] );
+		$this->assertSame( 'booking_hold_not_active', $holds->release( $created['hold']['id'], 1, 12, 'database expiry' )->get_error_code() );
+	}
+
+	public function test_hold_creation_returns_database_clock_errors(): void {
+		$holds   = $this->holds();
+		$booking = $this->booking( '2034-09-01 20:00:00', '2034-09-01 23:00:00' );
+		$GLOBALS['wpdb']->fail_clock_reads = true;
+
+		$result = $holds->create( $booking['id'], 1, 12 );
+		$this->assertSame( 'booking_hold_clock_read_failed', $result->get_error_code() );
+		$this->assertSame( 1, ( new BookingRepository() )->get( $booking['id'] )['version'] );
 	}
 
 	public function test_elapsed_holds_are_effectively_expired_in_get_list_and_release(): void {
@@ -561,6 +586,7 @@ final class BookingHoldTest extends TestCase {
 	}
 
 	public function test_mutations_deny_lock_current_revoked_membership(): void {
+		$GLOBALS['ec_artist_test']['options'][ BookingSchema::VERSION_OPTION ] = BookingSchema::SCHEMA_VERSION;
 		$authorization = new BookingTestAuthorization();
 		$authorization->require_locked_membership = true;
 		$holds         = new BookingHoldRepository( null, null, $authorization );
@@ -568,27 +594,33 @@ final class BookingHoldTest extends TestCase {
 		$booking       = $this->booking( '2031-11-01 20:00:00', '2031-11-01 23:00:00' );
 		$membership_table = BookingSchema::memberships_table();
 		$GLOBALS['wpdb']->rows[ $membership_table ][1] = array(
-			'id'                  => 1,
-			'venue_term_id'       => 55,
-			'user_id'             => 12,
-			'status'              => 'active',
+			'id'                 => 1,
+			'venue_term_id'      => 55,
+			'user_id'            => 12,
+			'is_owner'           => 1,
+			'status'             => VenueAuthorization::STATUS_ACTIVE,
+			'version'            => 1,
+			'created_by_user_id' => 12,
+			'created_at'         => '2030-01-01 00:00:00',
+			'updated_at'         => '2030-01-01 00:00:00',
+			'revoked_at'         => null,
 		);
 		$revoke = static function () use ( $membership_table ) {
-			$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'revoked';
+			$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = VenueAuthorization::STATUS_REVOKED;
 		};
 		$GLOBALS['wpdb']->after_membership_lock = $revoke;
 		$this->assertSame( 'venue_action_forbidden', $holds->create( $booking['id'], 1, 12 )->get_error_code() );
 
-		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = VenueAuthorization::STATUS_ACTIVE;
 		$created = $holds->create( $booking['id'], 1, 12 );
 		$GLOBALS['wpdb']->after_membership_lock = $revoke;
 		$this->assertSame( 'venue_action_forbidden', $holds->release( $created['hold']['id'], 1, 12, 'revoked' )->get_error_code() );
 
-		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = VenueAuthorization::STATUS_ACTIVE;
 		$GLOBALS['wpdb']->after_membership_lock = $revoke;
 		$this->assertSame( 'venue_action_forbidden', $lifecycle->transition( $booking['id'], 'held', 2, 12 )->get_error_code() );
 
-		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = VenueAuthorization::STATUS_ACTIVE;
 		$lifecycle->transition( $booking['id'], 'held', 2, 12 );
 		$GLOBALS['wpdb']->after_membership_lock = $revoke;
 		$this->assertSame( 'venue_action_forbidden', $lifecycle->transition( $booking['id'], 'confirmed', 3, 12 )->get_error_code() );
@@ -683,6 +715,22 @@ final class BookingHoldTest extends TestCase {
 		$this->assertSame( 'held', ( new BookingRepository() )->get( $booking['id'] )['status'] );
 		$this->assertSame( 3, ( new BookingRepository() )->get( $booking['id'] )['version'] );
 		$this->assertSame( 'active', $GLOBALS['wpdb']->rows[ BookingSchema::holds_table() ][ $created['hold']['id'] ]['status'] );
+	}
+
+	public function test_confirmation_propagates_conversion_diagnostic_read_errors(): void {
+		$holds     = $this->holds();
+		$lifecycle = new BookingLifecycle( null, null, null, null, $holds );
+		$booking   = $this->booking( '2032-12-01 20:00:00', '2032-12-01 23:00:00' );
+		$created   = $holds->create( $booking['id'], 1, 12 );
+		$lifecycle->transition( $booking['id'], 'held', 2, 12 );
+		$GLOBALS['wpdb']->elapse_hold_before_conversion_update = $created['hold']['id'];
+		$GLOBALS['wpdb']->fail_read_after_conversion_update    = true;
+
+		$result = $lifecycle->transition( $booking['id'], 'confirmed', 3, 12 );
+		$this->assertSame( 'booking_hold_read_failed', $result->get_error_code() );
+		$GLOBALS['wpdb']->reads_before_failure = null;
+		$this->assertSame( 'held', ( new BookingRepository() )->get( $booking['id'] )['status'] );
+		$this->assertSame( 3, ( new BookingRepository() )->get( $booking['id'] )['version'] );
 	}
 
 	public function test_leaving_held_releases_remaining_active_holds(): void {

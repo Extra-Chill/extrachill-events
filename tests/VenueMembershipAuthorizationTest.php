@@ -7,11 +7,13 @@
 
 use ExtraChillEvents\Abilities\VenueMembershipAbilities;
 use ExtraChillEvents\Abilities\VenueBookingConfigAbilities;
+use ExtraChillEvents\Abilities\VenueProfileAbilities;
 use ExtraChillEvents\Core\BookingSchema;
 use ExtraChillEvents\Core\VenueAuthorization;
 use ExtraChillEvents\Core\VenueBookingConfig;
 use ExtraChillEvents\Core\VenueMembershipRepository;
 use ExtraChillEvents\Core\VenueMembershipService;
+use ExtraChillEvents\Core\VenueProfile;
 use PHPUnit\Framework\TestCase;
 
 if ( ! defined( 'ARRAY_A' ) ) {
@@ -54,6 +56,23 @@ if ( ! function_exists( 'sanitize_key' ) ) {
 if ( ! function_exists( 'sanitize_text_field' ) ) {
 	function sanitize_text_field( $value ) {
 		return trim( strip_tags( (string) $value ) ); }
+}
+if ( ! function_exists( 'wp_kses_post' ) ) {
+	function wp_kses_post( $value ) {
+		return strip_tags( (string) $value, '<p><br><strong><em><a>' ); }
+}
+if ( ! function_exists( 'esc_url_raw' ) ) {
+	function esc_url_raw( $value, $protocols = null ) {
+		unset( $protocols );
+		return filter_var( trim( (string) $value ), FILTER_VALIDATE_URL ) ? trim( (string) $value ) : ''; }
+}
+if ( ! function_exists( 'get_current_blog_id' ) ) {
+	function get_current_blog_id() {
+		return $GLOBALS['venue_membership_test']['current_blog_id']; }
+}
+if ( ! function_exists( 'ec_get_blog_id' ) ) {
+	function ec_get_blog_id( $site ) {
+		return 'events' === $site ? 7 : 0; }
 }
 if ( ! function_exists( 'get_term' ) ) {
 	function get_term( $term_id, $taxonomy = '' ) {
@@ -102,6 +121,58 @@ if ( ! function_exists( 'get_term_meta' ) ) {
 		return $GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] ?? '';
 	}
 }
+if ( ! function_exists( 'update_term_meta' ) ) {
+	function update_term_meta( $term_id, $key, $value ) {
+		if ( VenueProfile::STATE_META_KEY === $key && ! empty( $GLOBALS['venue_membership_test']['fail_profile_state'] ) ) {
+			return false;
+		}
+		$GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] = $value;
+		return 1;
+	}
+}
+if ( ! function_exists( 'delete_term_meta' ) ) {
+	function delete_term_meta( $term_id, $key ) {
+		if ( ! isset( $GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] ) ) {
+			return false;
+		}
+		unset( $GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] );
+		return true;
+	}
+}
+if ( ! function_exists( 'add_term_meta' ) ) {
+	function add_term_meta( $term_id, $key, $value, $unique = false ) {
+		unset( $unique );
+		if ( VenueProfile::HISTORY_META_KEY === $key && ! empty( $GLOBALS['venue_membership_test']['fail_profile_audit'] ) ) {
+			return false;
+		}
+		$GLOBALS['venue_membership_test']['term_history'][ $term_id ][ $key ][] = $value;
+		return count( $GLOBALS['venue_membership_test']['term_history'][ $term_id ][ $key ] );
+	}
+}
+if ( ! function_exists( 'wp_update_term' ) ) {
+	function wp_update_term( $term_id, $taxonomy, $updates ) {
+		$term = $GLOBALS['venue_membership_test']['terms'][ $term_id ] ?? null;
+		if ( ! $term || $taxonomy !== $term->taxonomy ) {
+			return new WP_Error( 'invalid_term' );
+		}
+		foreach ( array( 'name', 'description' ) as $field ) {
+			if ( array_key_exists( $field, $updates ) ) {
+				$term->{$field} = $updates[ $field ];
+			}
+		}
+		return array( 'term_id' => $term_id );
+	}
+}
+if ( ! function_exists( 'clean_term_cache' ) ) {
+	function clean_term_cache( $term_id, $taxonomy = '' ) {
+		$GLOBALS['venue_membership_test']['term_cache_deletes'][] = array( $term_id, $taxonomy );
+	}
+}
+if ( ! function_exists( 'extrachill_events_invalidate_location_venue_cache' ) ) {
+	function extrachill_events_invalidate_location_venue_cache( int $term_id ) {
+		$GLOBALS['venue_membership_test']['location_cache_deletes'][] = $term_id;
+	}
+}
 if ( ! function_exists( 'do_action' ) ) {
 	function do_action( $hook, ...$args ) {
 		$GLOBALS['venue_membership_test']['fired_actions'][ $hook ][] = $args;
@@ -131,6 +202,7 @@ if ( ! function_exists( 'maybe_unserialize' ) ) {
 final class VenueMembershipWpdb {
 	public $prefix                = 'wp_7_';
 	public $terms                 = 'wp_7_terms';
+	public $term_taxonomy         = 'wp_7_term_taxonomy';
 	public $termmeta              = 'wp_7_termmeta';
 	public $insert_id             = 0;
 	public $last_error            = '';
@@ -141,8 +213,11 @@ final class VenueMembershipWpdb {
 	private $snapshot             = null;
 	private $meta_snapshot        = null;
 	private $history_snapshot     = null;
+	private $terms_snapshot       = null;
 	private $meta_values          = array();
 	private $meta_values_snapshot = array();
+	private $meta_records         = array();
+	private $meta_records_snapshot = array();
 
 	public function prepare( $query, ...$args ) {
 		if ( 1 === count( $args ) && is_array( $args[0] ) ) {
@@ -170,10 +245,22 @@ final class VenueMembershipWpdb {
 				$this->last_error = 'simulated config audit failure';
 				return false;
 			}
+			if ( VenueProfile::STATE_META_KEY === $row['meta_key'] && ! empty( $GLOBALS['venue_membership_test']['fail_profile_state'] ) ) {
+				$this->last_error = 'simulated profile state failure';
+				return false;
+			}
+			if ( VenueProfile::HISTORY_META_KEY === $row['meta_key'] && ! empty( $GLOBALS['venue_membership_test']['fail_profile_audit'] ) ) {
+				$this->last_error = 'simulated profile audit failure';
+				return false;
+			}
 			$this->insert_id                       = max( 101, $this->insert_id + 1 );
 			$this->meta_values[ $this->insert_id ] = $row['meta_value'];
+			$this->meta_records[ $this->insert_id ] = array(
+				'term_id'  => (int) $row['term_id'],
+				'meta_key' => $row['meta_key'],
+			);
 			$value                                 = maybe_unserialize( $row['meta_value'] );
-			if ( VenueBookingConfig::HISTORY_META_KEY === $row['meta_key'] ) {
+			if ( in_array( $row['meta_key'], array( VenueBookingConfig::HISTORY_META_KEY, VenueProfile::HISTORY_META_KEY ), true ) ) {
 				$GLOBALS['venue_membership_test']['term_history'][ $row['term_id'] ][ $row['meta_key'] ][] = $value;
 			} else {
 				$GLOBALS['venue_membership_test']['term_meta'][ $row['term_id'] ][ $row['meta_key'] ] = $value;
@@ -206,6 +293,10 @@ final class VenueMembershipWpdb {
 				return null;
 			}
 			$this->meta_values[100] = maybe_serialize( $value );
+			$this->meta_records[100] = array(
+				'term_id'  => (int) $meta_match[1],
+				'meta_key' => stripslashes( $meta_match[2] ),
+			);
 			return array(
 				'meta_id'    => 100,
 				'meta_value' => $this->meta_values[100],
@@ -313,7 +404,9 @@ final class VenueMembershipWpdb {
 			$this->snapshot             = $this->rows;
 			$this->meta_snapshot        = $GLOBALS['venue_membership_test']['term_meta'];
 			$this->history_snapshot     = $GLOBALS['venue_membership_test']['term_history'];
+			$this->terms_snapshot       = unserialize( serialize( $GLOBALS['venue_membership_test']['terms'] ) );
 			$this->meta_values_snapshot = $this->meta_values;
+			$this->meta_records_snapshot = $this->meta_records;
 			if ( is_callable( $this->after_start ) ) {
 				$callback          = $this->after_start;
 				$this->after_start = null;
@@ -321,7 +414,9 @@ final class VenueMembershipWpdb {
 				$this->snapshot             = $this->rows;
 				$this->meta_snapshot        = $GLOBALS['venue_membership_test']['term_meta'];
 				$this->history_snapshot     = $GLOBALS['venue_membership_test']['term_history'];
+				$this->terms_snapshot       = unserialize( serialize( $GLOBALS['venue_membership_test']['terms'] ) );
 				$this->meta_values_snapshot = $this->meta_values;
+				$this->meta_records_snapshot = $this->meta_records;
 			}
 			return 1;
 		}
@@ -329,18 +424,24 @@ final class VenueMembershipWpdb {
 			$this->rows                                       = $this->snapshot;
 			$GLOBALS['venue_membership_test']['term_meta']    = $this->meta_snapshot;
 			$GLOBALS['venue_membership_test']['term_history'] = $this->history_snapshot;
+			$GLOBALS['venue_membership_test']['terms']        = $this->terms_snapshot;
 			$this->meta_values                                = $this->meta_values_snapshot;
+			$this->meta_records                               = $this->meta_records_snapshot;
 			$this->snapshot                                   = null;
 			$this->meta_snapshot                              = null;
 			$this->history_snapshot                           = null;
+			$this->terms_snapshot                             = null;
 			$this->meta_values_snapshot                       = array();
+			$this->meta_records_snapshot                      = array();
 			return 1;
 		}
 		if ( 'COMMIT' === $query ) {
 			$this->snapshot             = null;
 			$this->meta_snapshot        = null;
 			$this->history_snapshot     = null;
+			$this->terms_snapshot       = null;
 			$this->meta_values_snapshot = array();
+			$this->meta_records_snapshot = array();
 			return 1;
 		}
 		if ( ! preg_match( '/WHERE venue_term_id = (\d+) AND user_id = (\d+) AND version = (\d+)/', $query, $match ) ) {
@@ -370,16 +471,41 @@ final class VenueMembershipWpdb {
 	public function update( $table, $data, $where, $format = null, $where_format = null ) {
 		unset( $format, $where_format );
 		$this->last_error = '';
+		if ( $this->terms === $table && isset( $where['term_id'], $data['name'] ) ) {
+			$GLOBALS['venue_membership_test']['terms'][ (int) $where['term_id'] ]->name = $data['name'];
+			return 1;
+		}
+		if ( $this->term_taxonomy === $table && isset( $where['term_id'], $data['description'] ) ) {
+			$GLOBALS['venue_membership_test']['terms'][ (int) $where['term_id'] ]->description = $data['description'];
+			return 1;
+		}
 		if ( $this->termmeta !== $table || ! isset( $where['meta_id'], $data['meta_value'] ) ) {
 			return false;
 		}
-		if ( ! empty( $GLOBALS['venue_membership_test']['fail_config_save'] ) ) {
+		$meta_id = (int) $where['meta_id'];
+		$record  = $this->meta_records[ $meta_id ] ?? null;
+		if ( ! is_array( $record ) ) {
+			return false;
+		}
+		if ( ! empty( $GLOBALS['venue_membership_test']['fail_config_save'] ) || ( VenueProfile::STATE_META_KEY === $record['meta_key'] && ! empty( $GLOBALS['venue_membership_test']['fail_profile_state'] ) ) ) {
 			$this->last_error = 'simulated config write failure';
 			return false;
 		}
-		$meta_id                       = (int) $where['meta_id'];
 		$this->meta_values[ $meta_id ] = $data['meta_value'];
-		$GLOBALS['venue_membership_test']['term_meta'][55][ VenueBookingConfig::META_KEY ] = maybe_unserialize( $data['meta_value'] );
+		$GLOBALS['venue_membership_test']['term_meta'][ $record['term_id'] ][ $record['meta_key'] ] = maybe_unserialize( $data['meta_value'] );
+		return 1;
+	}
+
+	public function delete( $table, $where, $where_format = null ) {
+		unset( $where_format );
+		$this->last_error = '';
+		$meta_id          = (int) ( $where['meta_id'] ?? 0 );
+		$record           = $this->meta_records[ $meta_id ] ?? null;
+		if ( $this->termmeta !== $table || ! is_array( $record ) ) {
+			return false;
+		}
+		unset( $GLOBALS['venue_membership_test']['term_meta'][ $record['term_id'] ][ $record['meta_key'] ] );
+		unset( $this->meta_values[ $meta_id ], $this->meta_records[ $meta_id ] );
 		return 1;
 	}
 
@@ -395,20 +521,26 @@ require_once dirname( __DIR__ ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueMembershipService.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueBookingConfig.php';
+require_once dirname( __DIR__ ) . '/inc/Core/VenueProfile.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueMembershipAbilities.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueBookingConfigAbilities.php';
+require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 
 final class VenueMembershipAuthorizationTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['venue_membership_test'] = array(
 			'terms'             => array(
 				55 => (object) array(
-					'term_id'  => 55,
-					'taxonomy' => 'venue',
+					'term_id'     => 55,
+					'taxonomy'    => 'venue',
+					'name'        => 'The Royal American',
+					'description' => 'Neighborhood venue.',
 				),
 				56 => (object) array(
-					'term_id'  => 56,
-					'taxonomy' => 'venue',
+					'term_id'     => 56,
+					'taxonomy'    => 'venue',
+					'name'        => 'Music Farm',
+					'description' => '',
 				),
 				57 => (object) array(
 					'term_id'  => 57,
@@ -435,6 +567,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 			),
 			'feature_available' => true,
 			'current_user_id'   => 1,
+			'current_blog_id'   => 7,
 			'actions'           => array(),
 			'abilities'         => array(),
 			'options'           => array( BookingSchema::VERSION_OPTION => BookingSchema::SCHEMA_VERSION ),
@@ -442,8 +575,12 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 			'term_history'      => array(),
 			'fired_actions'     => array(),
 			'cache_deletes'     => array(),
+			'term_cache_deletes' => array(),
+			'location_cache_deletes' => array(),
 			'fail_config_save'  => false,
 			'fail_config_audit' => false,
+			'fail_profile_state' => false,
+			'fail_profile_audit' => false,
 		);
 		$GLOBALS['wpdb']                  = new VenueMembershipWpdb();
 	}
@@ -753,5 +890,174 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'booking_config_audit_failed', $failed->get_error_code() );
 		$this->assertSame( array(), $GLOBALS['venue_membership_test']['term_meta'] );
 		$this->assertSame( array( 55, 'term_meta' ), $GLOBALS['venue_membership_test']['cache_deletes'][0] );
+	}
+
+	public function test_profile_abilities_authorize_exact_active_venue_members(): void {
+		$this->create_member( 55, 2, true );
+		$this->create_member( 55, 3, false );
+		$this->create_member( 56, 4, true, VenueAuthorization::STATUS_INVITED );
+		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
+
+		$abilities = new VenueProfileAbilities();
+		$abilities->register();
+		$get    = $GLOBALS['venue_membership_test']['abilities']['extrachill/get-venue-profile'];
+		$update = $GLOBALS['venue_membership_test']['abilities']['extrachill/update-venue-profile'];
+
+		$this->assertTrue( call_user_func( $get['permission_callback'], array( 'venue_term_id' => 55 ) ) );
+		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['permission_callback'], array( 'venue_term_id' => 56 ) )->get_error_code() );
+		$this->assertSame( 'venue_action_forbidden', call_user_func( $update['permission_callback'], array( 'venue_term_id' => 56 ) )->get_error_code() );
+		$this->assertSame( 'extrachill-events', $get['category'] );
+		$this->assertTrue( $get['meta']['annotations']['readonly'] );
+		$this->assertTrue( $update['meta']['annotations']['destructive'] );
+		$this->assertFalse( $get['input_schema']['additionalProperties'] );
+		$this->assertFalse( $update['input_schema']['properties']['profile']['additionalProperties'] );
+
+		$GLOBALS['venue_membership_test']['current_user_id'] = 4;
+		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 56 ) )->get_error_code() );
+		$GLOBALS['venue_membership_test']['current_user_id'] = 1;
+		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) )->get_error_code() );
+	}
+
+	public function test_profile_read_write_roundtrip_stale_write_and_audit_boundary(): void {
+		$this->create_member( 55, 2, true );
+		$GLOBALS['venue_membership_test']['current_user_id'] = 2;
+		$GLOBALS['venue_membership_test']['term_meta'][55]   = array(
+			'_venue_address'     => '970 Morrison Drive',
+			'_venue_city'        => 'Charleston',
+			'_venue_state'       => 'SC',
+			'_venue_zip'         => '29403',
+			'_venue_country'     => 'US',
+			'_venue_phone'       => '843-555-1212',
+			'_venue_website'     => 'https://theroyalamerican.com',
+			'_venue_capacity'    => '300',
+			'_venue_coordinates' => '32.801,-79.943',
+			'_venue_timezone'    => 'America/New_York',
+			'_ec_priority_venue' => '1',
+		);
+		$abilities = new VenueProfileAbilities();
+		$abilities->register();
+		$get        = $GLOBALS['venue_membership_test']['abilities']['extrachill/get-venue-profile'];
+		$update     = $GLOBALS['venue_membership_test']['abilities']['extrachill/update-venue-profile'];
+
+		$current = call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) );
+		$this->assertSame( 0, $current['revision'] );
+		$this->assertSame( 300, $current['profile']['capacity'] );
+		$this->assertArrayNotHasKey( 'coordinates', $current['profile'] );
+		$this->assertArrayNotHasKey( 'timezone', $current['profile'] );
+		$this->assertArrayNotHasKey( '_ec_priority_venue', $current['profile'] );
+
+		$replacement                = $current['profile'];
+		$replacement['description'] = '<p>Independent venue and neighborhood bar.</p>';
+		$replacement['address']     = '970 Morrison Dr';
+		$replacement['phone']       = '';
+		$replacement['capacity']    = 350;
+		$saved                      = call_user_func(
+			$update['execute_callback'],
+			array(
+				'venue_term_id'     => 55,
+				'expected_revision' => 0,
+				'profile'           => $replacement,
+			)
+		);
+
+		$this->assertSame( 1, $saved['revision'] );
+		$this->assertSame( 2, $saved['updated_by_user_id'] );
+		$this->assertSame( $replacement, $saved['profile'] );
+		$this->assertArrayNotHasKey( '_venue_phone', $GLOBALS['venue_membership_test']['term_meta'][55] );
+		$this->assertArrayNotHasKey( '_venue_coordinates', $GLOBALS['venue_membership_test']['term_meta'][55] );
+		$this->assertSame( 'America/New_York', $GLOBALS['venue_membership_test']['term_meta'][55]['_venue_timezone'] );
+		$this->assertSame( '1', $GLOBALS['venue_membership_test']['term_meta'][55]['_ec_priority_venue'] );
+		$this->assertSame( array( 55 ), $GLOBALS['venue_membership_test']['location_cache_deletes'] );
+
+		$history = $GLOBALS['venue_membership_test']['term_history'][55][ VenueProfile::HISTORY_META_KEY ];
+		$this->assertCount( 1, $history );
+		$this->assertSame( 2, $history[0]['actor_user_id'] );
+		$this->assertSame( array( 'description', 'address', 'phone', 'capacity' ), $history[0]['changed_fields'] );
+		$this->assertArrayNotHasKey( 'profile', $history[0] );
+		$this->assertArrayNotHasKey( 'previous', $history[0] );
+
+		$roundtrip = call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) );
+		$this->assertSame( $saved, $roundtrip );
+		$stale = call_user_func(
+			$update['execute_callback'],
+			array(
+				'venue_term_id'     => 55,
+				'expected_revision' => 0,
+				'profile'           => $replacement,
+			)
+		);
+		$this->assertSame( 'venue_profile_revision_conflict', $stale->get_error_code() );
+		$this->assertSame( 1, $stale->get_error_data()['current_revision'] );
+		$this->assertCount( 1, $GLOBALS['venue_membership_test']['term_history'][55][ VenueProfile::HISTORY_META_KEY ] );
+	}
+
+	public function test_profile_validation_rejects_unknown_missing_and_invalid_values_atomically(): void {
+		$this->create_member( 55, 2, true );
+		$profiles = new VenueProfile();
+		$current  = $profiles->get( 55 );
+		$profile  = $current['profile'];
+
+		$unknown             = $profile;
+		$unknown['timezone'] = 'UTC';
+		$this->assertSame( 'invalid_venue_profile_fields', $profiles->update( 55, $unknown, 0, 2 )->get_error_code() );
+		$missing = $profile;
+		unset( $missing['city'] );
+		$this->assertSame( 'invalid_venue_profile_fields', $profiles->update( 55, $missing, 0, 2 )->get_error_code() );
+		$invalid_website            = $profile;
+		$invalid_website['website'] = 'javascript:alert(1)';
+		$this->assertSame( 'invalid_venue_profile_value', $profiles->update( 55, $invalid_website, 0, 2 )->get_error_code() );
+		$invalid_capacity             = $profile;
+		$invalid_capacity['capacity'] = 0;
+		$this->assertSame( 'invalid_venue_profile_value', $profiles->update( 55, $invalid_capacity, 0, 2 )->get_error_code() );
+		$this->assertArrayNotHasKey( VenueProfile::STATE_META_KEY, $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
+		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
+	}
+
+	public function test_profile_update_reauthorizes_and_audit_failure_rolls_back_every_field(): void {
+		$this->create_member( 55, 2, true );
+		$profiles    = new VenueProfile();
+		$replacement = $profiles->get( 55 )['profile'];
+		$replacement['name']    = 'Updated Name';
+		$replacement['website'] = 'https://example.com';
+
+		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
+			foreach ( $wpdb->rows['wp_7_ec_venue_members'] as &$row ) {
+				if ( 2 === (int) $row['user_id'] ) {
+					$row['status'] = VenueAuthorization::STATUS_REVOKED;
+				}
+			}
+			unset( $row );
+		};
+		$denied = $profiles->update( 55, $replacement, 0, 2 );
+		$this->assertSame( 'venue_action_forbidden', $denied->get_error_code() );
+		$this->assertSame( 'The Royal American', $GLOBALS['venue_membership_test']['terms'][55]->name );
+
+		foreach ( $GLOBALS['wpdb']->rows['wp_7_ec_venue_members'] as &$row ) {
+			if ( 2 === (int) $row['user_id'] ) {
+				$row['status'] = VenueAuthorization::STATUS_ACTIVE;
+			}
+		}
+		unset( $row );
+		$GLOBALS['venue_membership_test']['fail_profile_audit'] = true;
+		$failed = $profiles->update( 55, $replacement, 0, 2 );
+		$this->assertSame( 'venue_profile_audit_failed', $failed->get_error_code() );
+		$this->assertSame( 'The Royal American', $GLOBALS['venue_membership_test']['terms'][55]->name );
+		$this->assertArrayNotHasKey( '_venue_website', $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
+		$this->assertArrayNotHasKey( VenueProfile::STATE_META_KEY, $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['fired_actions'] );
+	}
+
+	public function test_profile_requires_canonical_events_site_and_does_not_change_resolution_inputs_on_noop(): void {
+		$this->create_member( 55, 2, true );
+		$profiles = new VenueProfile();
+		$current  = $profiles->get( 55 );
+		$noop     = $profiles->update( 55, $current['profile'], 0, 2 );
+		$this->assertSame( 0, $noop['revision'] );
+		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
+		$this->assertSame( 'The Royal American', get_term( 55, 'venue' )->name );
+
+		$GLOBALS['venue_membership_test']['current_blog_id'] = 1;
+		$this->assertSame( 'canonical_events_site_required', $profiles->get( 55 )->get_error_code() );
+		$this->assertSame( 'canonical_events_site_required', $profiles->update( 55, $current['profile'], 0, 2 )->get_error_code() );
 	}
 }

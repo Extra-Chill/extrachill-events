@@ -1,0 +1,301 @@
+<?php
+/**
+ * Booking communication and reminder tests.
+ *
+ * @package ExtraChillEvents\Tests
+ */
+
+use ExtraChillEvents\Abilities\VenueBookingCommunicationAbilities;
+use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingCommunicationService;
+use ExtraChillEvents\Core\BookingRepository;
+use ExtraChillEvents\Core\BookingSchema;
+use ExtraChillEvents\Core\VenueBookingConfig;
+use PHPUnit\Framework\TestCase;
+
+require_once __DIR__ . '/Support/BookingTestHarness.php';
+
+final class BookingCommunicationTest extends TestCase {
+
+	protected function setUp(): void {
+		$GLOBALS['ec_artist_test'] = array(
+			'blog_id'       => 7,
+			'stack'         => array(),
+			'uuid'          => 0,
+			'options'       => array( BookingSchema::VERSION_OPTION => BookingSchema::SCHEMA_VERSION ),
+			'abilities'     => array(),
+			'ability_objects' => array(),
+			'actions'       => array(),
+			'fired_actions' => array(),
+			'scheduled'     => array(),
+			'cache_deletes' => array(),
+			'terms'         => array(
+				7 => array(
+					55 => (object) array( 'term_id' => 55, 'taxonomy' => 'venue', 'name' => 'The Room' ),
+				),
+			),
+			'meta'          => array(
+				7 => array(
+					55 => array(
+						'_venue_timezone' => 'America/New_York',
+						VenueBookingConfig::META_KEY => array( 'enabled' => true ),
+					),
+				),
+			),
+			'posts'         => array(),
+			'post_meta'     => array(),
+		);
+		$GLOBALS['wpdb'] = new BookingWpdb();
+	}
+
+	private function booking( string $email = 'artist@example.com', string $status = 'under_review' ): array {
+		$booking = ( new BookingRepository() )->create(
+			array(
+				'venue_term_id' => 55,
+				'artist_name'   => 'Test Band',
+				'contact_name'  => 'Artist Agent',
+				'contact_email' => $email,
+				'intake'        => array(),
+			)
+		);
+		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ]['status'] = $status;
+		$booking['status'] = $status;
+		return $booking;
+	}
+
+	private function input( int $booking_id, array $overrides = array() ): array {
+		return array_merge(
+			array(
+				'booking_id'        => $booking_id,
+				'idempotency_key'   => 'message-1',
+				'template'          => 'operator_message',
+				'recipient'         => 'artist@example.com',
+				'subject'           => 'Booking update',
+				'message'           => 'We would like to discuss the date.',
+				'reply_to'          => 'bookings@extrachill.com',
+				'expected_statuses' => array(),
+			),
+			$overrides
+		);
+	}
+
+	private function service( array &$queued, array &$scheduled, array &$cancelled, ?BookingTestAuthorization $authorization = null, bool $queue_success = true ): BookingCommunicationService {
+		return new BookingCommunicationService(
+			null,
+			null,
+			$authorization ? $authorization : new BookingTestAuthorization(),
+			static function ( array $input ) use ( &$queued, $queue_success ) {
+				$queued[] = $input;
+				return $queue_success ? array( 'success' => true, 'action_id' => count( $queued ) + 100 ) : array( 'success' => false, 'error' => 'simulated failure' );
+			},
+			static function ( int $timestamp, string $hook, array $args, string $group ) use ( &$scheduled ) {
+				$scheduled[] = compact( 'timestamp', 'hook', 'args', 'group' );
+				return count( $scheduled ) + 200;
+			},
+			static function ( int $action_id ) use ( &$cancelled ) {
+				$cancelled[] = $action_id;
+			}
+		);
+	}
+
+	public function test_immediate_request_is_durable_before_safe_data_machine_delegation(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$result  = $this->service( $queued, $scheduled, $cancelled )->request( $this->input( $booking['id'] ), 12 );
+
+		$this->assertSame( 'queued', $result['status'] );
+		$this->assertCount( 1, $queued );
+		$this->assertSame( 'chubes@extrachill.com', $queued[0]['cc'] );
+		$this->assertSame( 'Extra Chill Bot', $queued[0]['from_name'] );
+		$this->assertStringContainsString( "Extra Chill Bot sending on Chris's behalf.", $queued[0]['body'] );
+		$this->assertArrayNotHasKey( 'attachments', $queued[0] );
+		$this->assertArrayNotHasKey( 'credentials', $queued[0] );
+		$activity = ( new BookingActivityRepository() )->list_for_booking( $booking['id'] );
+		$this->assertSame( array( 'booking_message_queued', 'booking_message_dispatching', 'booking_message_requested' ), array_column( $activity, 'kind' ) );
+		$this->assertMatchesRegularExpression( '/^<booking-.*@extrachill\.com>$/', $result['message_id'] );
+	}
+
+	public function test_retries_are_idempotent_and_conflicting_key_reuse_is_rejected(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$first   = $service->request( $this->input( $booking['id'] ), 12 );
+		$retry   = $service->request( $this->input( $booking['id'] ), 12 );
+
+		$this->assertSame( $first, $retry );
+		$this->assertCount( 1, $queued );
+		$conflict = $service->request( $this->input( $booking['id'], array( 'message' => 'Different message.' ) ), 12 );
+		$this->assertSame( 'booking_message_idempotency_conflict', $conflict->get_error_code() );
+	}
+
+	public function test_concurrent_retry_observes_dispatch_claim_without_duplicate_queueing(): void {
+		$booking = $this->booking();
+		$input   = $this->input( $booking['id'] );
+		$authorization = new BookingTestAuthorization();
+		$queue_calls   = 0;
+		$reentrant     = null;
+		$service       = null;
+		$service       = new BookingCommunicationService(
+			null,
+			null,
+			$authorization,
+			static function () use ( &$queue_calls, &$reentrant, &$service, $input ) {
+				++$queue_calls;
+				$reentrant = $service->request( $input, 12 );
+				return array( 'success' => true, 'action_id' => 501 );
+			}
+		);
+
+		$result = $service->request( $input, 12 );
+		$this->assertSame( 'queued', $result['status'] );
+		$this->assertSame( 'dispatching', $reentrant['status'] );
+		$this->assertSame( 1, $queue_calls );
+	}
+
+	public function test_failed_queue_remains_visible_and_retryable(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$failed  = $this->service( $queued, $scheduled, $cancelled, null, false )->request( $this->input( $booking['id'] ), 12 );
+		$this->assertSame( 'booking_message_queue_failed', $failed->get_error_code() );
+
+		$retry = $this->service( $queued, $scheduled, $cancelled )->request( $this->input( $booking['id'] ), 12 );
+		$this->assertSame( 'queued', $retry['status'] );
+		$this->assertCount( 2, $queued );
+		$this->assertContains( 'booking_message_failed', array_column( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ), 'kind' ) );
+	}
+
+	public function test_state_read_failure_fails_closed_without_duplicate_delivery(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$service->request( $this->input( $booking['id'] ), 12 );
+		$GLOBALS['wpdb']->fail_activity_reads = true;
+		$result = $service->request( $this->input( $booking['id'] ), 12 );
+		$this->assertSame( 'booking_activity_read_failed', $result->get_error_code() );
+		$this->assertCount( 1, $queued );
+	}
+
+	public function test_authorization_is_rechecked_under_membership_lock(): void {
+		$booking       = $this->booking();
+		$authorization = new BookingTestAuthorization();
+		$queued = $scheduled = $cancelled = array();
+		$GLOBALS['wpdb']->after_membership_lock = static function () use ( $authorization ) {
+			unset( $authorization->allowed['12:55'] );
+		};
+		$result = $this->service( $queued, $scheduled, $cancelled, $authorization )->request( $this->input( $booking['id'] ), 12 );
+		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
+		$this->assertCount( 0, $queued );
+		$this->assertEmpty( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] ?? array() );
+	}
+
+	public function test_recipient_and_thread_are_exactly_booking_scoped(): void {
+		$first  = $this->booking();
+		$second = $this->booking( 'second@example.com' );
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$this->assertSame( 'booking_message_recipient_forbidden', $service->request( $this->input( $first['id'], array( 'recipient' => 'other@example.com' ) ), 12 )->get_error_code() );
+		$sent = $service->request( $this->input( $first['id'] ), 12 );
+		$cross_thread = $service->request( $this->input( $second['id'], array( 'idempotency_key' => 'second', 'recipient' => 'second@example.com', 'in_reply_to' => $sent['message_id'] ) ), 12 );
+		$this->assertSame( 'booking_message_thread_forbidden', $cross_thread->get_error_code() );
+	}
+
+	public function test_scheduled_reminder_is_idempotent_and_stale_status_is_suppressed(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$input = $this->input(
+			$booking['id'],
+			array(
+				'template'          => 'follow_up',
+				'send_at'           => '2035-01-01 12:00:00',
+				'expected_statuses' => array( 'under_review' ),
+			)
+		);
+		$state = $service->request( $input, 12 );
+		$this->assertSame( 'scheduled', $state['status'] );
+		$this->assertSame( $state, $service->request( $input, 12 ) );
+		$this->assertCount( 1, $scheduled );
+		$this->assertCount( 0, $queued );
+
+		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ]['status'] = 'confirmed';
+		$suppressed = $service->dispatch_reminder( $state['intent_id'] );
+		$this->assertSame( 'suppressed', $suppressed['status'] );
+		$this->assertCount( 0, $queued );
+	}
+
+	public function test_schedule_failure_is_durable_and_retryable(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$input = $this->input( $booking['id'], array( 'template' => 'follow_up', 'send_at' => '2035-01-01 12:00:00', 'expected_statuses' => array( 'under_review' ) ) );
+		$failed_service = new BookingCommunicationService(
+			null,
+			null,
+			new BookingTestAuthorization(),
+			static function () {
+				throw new RuntimeException( 'queue must not run' );
+			},
+			static function () {
+				return 0;
+			}
+		);
+		$result = $failed_service->request( $input, 12 );
+		$this->assertSame( 'booking_reminder_schedule_failed', $result->get_error_code() );
+		$this->assertContains( 'booking_message_failed', array_column( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ), 'kind' ) );
+
+		$retry = $this->service( $queued, $scheduled, $cancelled )->request( $input, 12 );
+		$this->assertSame( 'scheduled', $retry['status'] );
+		$this->assertCount( 1, $scheduled );
+	}
+
+	public function test_reply_suppresses_and_cancels_pending_reminders_idempotently(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$immediate = $service->request( $this->input( $booking['id'] ), 12 );
+		$reminder  = $service->request( $this->input( $booking['id'], array( 'idempotency_key' => 'reminder', 'template' => 'follow_up', 'send_at' => '2035-01-01 12:00:00', 'expected_statuses' => array( 'under_review' ), 'in_reply_to' => $immediate['message_id'] ) ), 12 );
+
+		$reply = $service->record_reply( $booking['id'], 'artist@example.com', '<reply-1@example.com>', $immediate['message_id'], 12 );
+		$this->assertSame( 'booking_message_received', $reply['kind'] );
+		$this->assertSame( array( $reminder['action_id'] ), $cancelled );
+		$this->assertSame( 'suppressed', $service->dispatch_reminder( $reminder['intent_id'] )['status'] );
+		$duplicate = $service->record_reply( $booking['id'], 'artist@example.com', '<reply-1@example.com>', $immediate['message_id'], 12 );
+		$this->assertSame( $reply['id'], $duplicate['id'] );
+		$this->assertSame( 'booking_reply_not_qualified', $service->record_reply( $booking['id'], 'intruder@example.com', '<reply-2@example.com>', $immediate['message_id'], 12 )->get_error_code() );
+	}
+
+	public function test_duplicate_delivery_callbacks_do_not_duplicate_activity_or_overstate_queueing(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		$state = $service->request( $this->input( $booking['id'] ), 12 );
+		$this->assertSame( 'queued', $state['status'] );
+		$sent = $service->record_delivery( $state['intent_id'], 'sent', 'callback-1', 'provider-9', 12 );
+		$this->assertSame( 'sent', $sent['status'] );
+		$this->assertSame( $sent, $service->record_delivery( $state['intent_id'], 'sent', 'callback-1', 'provider-9', 12 ) );
+		$kinds = array_column( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ), 'kind' );
+		$this->assertSame( 1, count( array_keys( $kinds, 'booking_message_sent', true ) ) );
+	}
+
+	public function test_read_model_reauthorizes_under_lock_and_abilities_are_strict(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$authorization = new BookingTestAuthorization();
+		$service = $this->service( $queued, $scheduled, $cancelled, $authorization );
+		$service->request( $this->input( $booking['id'] ), 12 );
+		$GLOBALS['wpdb']->after_membership_lock = static function () use ( $authorization ) {
+			unset( $authorization->allowed['12:55'] );
+		};
+		$this->assertSame( 'venue_action_forbidden', $service->list_for_booking( $booking['id'], 12 )->get_error_code() );
+
+		$abilities = new VenueBookingCommunicationAbilities( $service, new BookingRepository(), $authorization );
+		$abilities->register();
+		$registered = $GLOBALS['ec_artist_test']['abilities'];
+		$this->assertSame( array( 'extrachill/send-booking-message', 'extrachill/list-booking-communications', 'extrachill/record-booking-email-reply', 'extrachill/record-booking-message-delivery' ), array_keys( $registered ) );
+		foreach ( $registered as $definition ) {
+			$this->assertFalse( $definition['input_schema']['additionalProperties'] );
+			$this->assertTrue( $definition['meta']['show_in_rest'] );
+		}
+		$this->assertArrayNotHasKey( 'attachments', $registered['extrachill/send-booking-message']['input_schema']['properties'] );
+		$this->assertArrayNotHasKey( 'from_email', $registered['extrachill/send-booking-message']['input_schema']['properties'] );
+	}
+}

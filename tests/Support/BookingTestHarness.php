@@ -6,6 +6,7 @@
  */
 
 use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingCommunicationService;
 use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingMutationService;
@@ -17,6 +18,7 @@ use ExtraChillEvents\Abilities\VenueBookingAbilities;
 use ExtraChillEvents\Abilities\VenueBookingHoldAbilities;
 use ExtraChillEvents\Abilities\VenueBookingMutationAbilities;
 use ExtraChillEvents\Abilities\VenueBookingEventAbilities;
+use ExtraChillEvents\Abilities\VenueBookingCommunicationAbilities;
 use ExtraChillEvents\Core\VenueAuthorization;
 
 if ( ! defined( 'ARRAY_A' ) ) {
@@ -976,6 +978,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingCommunicationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMutationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingEventConversionService.php';
@@ -985,6 +988,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingHoldAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMutationAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingEventAbilities.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingCommunicationAbilities.php';
 
 final class BookingTestAuthorization extends VenueAuthorization {
 	public $calls   = array();

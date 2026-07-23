@@ -132,6 +132,29 @@ class BookingActivityRepository {
 		return $hydrated;
 	}
 
+	/** Read the complete narrow correspondence history used for delivery correctness. */
+	public function communication_state_rows( int $booking_id ) {
+		global $wpdb;
+		$booking_id = $this->positive_id( $booking_id, 'booking_id', false );
+		if ( is_wp_error( $booking_id ) ) {
+			return $booking_id;
+		}
+		$table = BookingSchema::activity_table();
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND (kind LIKE 'booking_message_%%' OR kind LIKE 'booking_reminder_%%') ORDER BY occurred_at ASC, id ASC", $booking_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Complete narrow booking correspondence state.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_communication_state_read_failed', __( 'Booking communication state could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
+		$hydrated = array();
+		foreach ( (array) $rows as $row ) {
+			$item = $this->hydrate( $row );
+			if ( is_wp_error( $item ) ) {
+				return $item;
+			}
+			$hydrated[] = $item;
+		}
+		return $hydrated;
+	}
+
 	/** Reconstruct and validate the complete activity-backed event conversion state. */
 	public function event_conversion_state( int $booking_id, string $public_id ) {
 		global $wpdb;
@@ -230,7 +253,7 @@ class BookingActivityRepository {
 	}
 
 	/** Find an existing booking-scoped idempotent activity. */
-	private function find_by_idempotency( int $booking_id, string $key ) {
+	public function find_by_idempotency( int $booking_id, string $key ) {
 		global $wpdb;
 		$table = BookingSchema::activity_table();
 		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND idempotency_key = %s LIMIT 1", $booking_id, $key ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Trusted current-prefix table.

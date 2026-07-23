@@ -254,8 +254,10 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventConversionService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingLifecycle.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueBookingConfig.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/CanonicalEventPublicationGuard.php';
 		\ExtraChillEvents\Core\BookingHoldRepository::register();
 		\ExtraChillEvents\Core\BookingCommunicationService::register();
+		new \ExtraChillEvents\Core\CanonicalEventPublicationGuard();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Api/Controllers/ArtistUrlImport.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Api/ArtistUrlImportRoutes.php';
 

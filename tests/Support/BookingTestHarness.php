@@ -7,10 +7,12 @@
 
 use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\BookingSchema;
 use ExtraChillEvents\Core\VenueBookingConfig;
 use ExtraChillEvents\Abilities\VenueBookingAbilities;
+use ExtraChillEvents\Abilities\VenueBookingHoldAbilities;
 use ExtraChillEvents\Core\VenueAuthorization;
 
 if ( ! defined( 'ARRAY_A' ) ) {
@@ -152,7 +154,8 @@ if ( ! function_exists( 'get_current_user_id' ) ) {
 		return 12; }
 }
 if ( ! function_exists( 'add_action' ) ) {
-	function add_action( $hook, $callback ) {
+	function add_action( $hook, $callback, $priority = 10, $accepted_args = 1 ) {
+		unset( $priority, $accepted_args );
 		$GLOBALS['ec_artist_test']['actions'][ $hook ][] = $callback; }
 }
 if ( ! function_exists( 'wp_register_ability' ) ) {
@@ -164,44 +167,70 @@ if ( ! function_exists( 'wp_cache_delete' ) ) {
 		$GLOBALS['ec_artist_test']['cache_deletes'][] = array( $key, $group );
 		return true; }
 }
+if ( ! function_exists( 'as_schedule_single_action' ) ) {
+	function as_schedule_single_action( $timestamp, $hook, $args, $group, $unique = false ) {
+		if ( ! empty( $GLOBALS['ec_artist_test']['throw_scheduler'] ) ) {
+			throw new RuntimeException( 'simulated scheduler failure' );
+		}
+		if ( ! empty( $GLOBALS['ec_artist_test']['scheduler_zero'] ) ) {
+			return 0;
+		}
+		$GLOBALS['ec_artist_test']['scheduled'][] = compact( 'timestamp', 'hook', 'args', 'group', 'unique' );
+		return count( $GLOBALS['ec_artist_test']['scheduled'] );
+	}
+}
+if ( ! function_exists( 'do_action' ) ) {
+	function do_action( $hook, ...$args ) {
+		$GLOBALS['ec_artist_test']['fired_actions'][ $hook ][] = $args;
+	}
+}
 
 /** Stateful wpdb fake that enforces the persistence contracts under test. */
 final class BookingWpdb {
-	public $prefix                    = 'wp_7_';
-	public $terms                     = 'wp_7_terms';
-	public $insert_id                 = 0;
-	public $last_error                = '';
-	public $rows                      = array();
-	public $schemas                   = array();
-	public $engines                   = array();
-	public $schema_omit               = array();
-	public $schema_queries            = 0;
-	public $dropped_indexes           = array();
-	public $fail_reads                = false;
-	public $fail_activity_reads       = false;
-	public $fail_inserts              = false;
-	public $fail_updates              = false;
-	public $fail_engine_repair        = false;
-	public $race_activity_insert      = false;
-	public $race_booking_insert       = false;
-	public $race_booking_hash         = null;
-	public $race_activity_read_fail   = false;
-	public $race_event_read_fail      = false;
-	public $concurrent_role_migration = false;
-	public $reads_before_failure      = null;
-	public $last_query                = '';
-	public $fail_activity_inserts     = false;
-	public $fail_transaction_start    = false;
-	public $fail_transaction_commit   = false;
-	public $fail_transaction_rollback = false;
-	public $rollback_queries          = 0;
-	public $after_membership_lock     = null;
-	public $after_venue_lock          = null;
-	public $fail_venue_lock           = false;
-	public $venue_lock_queries        = 0;
-	public $transaction_active        = false;
+	public $prefix                           = 'wp_7_';
+	public $terms                            = 'wp_7_terms';
+	public $posts                            = 'wp_7_posts';
+	public $term_relationships               = 'wp_7_term_relationships';
+	public $term_taxonomy                    = 'wp_7_term_taxonomy';
+	public $insert_id                        = 0;
+	public $last_error                       = '';
+	public $rows                             = array();
+	public $schemas                          = array();
+	public $engines                          = array();
+	public $schema_omit                      = array();
+	public $schema_queries                   = 0;
+	public $dropped_indexes                  = array();
+	public $fail_reads                       = false;
+	public $fail_activity_reads              = false;
+	public $fail_inserts                     = false;
+	public $fail_updates                     = false;
+	public $fail_engine_repair               = false;
+	public $race_activity_insert             = false;
+	public $race_booking_insert              = false;
+	public $race_booking_hash                = null;
+	public $race_activity_read_fail          = false;
+	public $race_event_read_fail             = false;
+	public $concurrent_role_migration        = false;
+	public $reads_before_failure             = null;
+	public $last_query                       = '';
+	public $fail_activity_inserts            = false;
+	public $fail_transaction_start           = false;
+	public $fail_transaction_commit          = false;
+	public $fail_transaction_rollback        = false;
+	public $rollback_queries                 = 0;
+	public $after_membership_lock            = null;
+	public $after_venue_lock                 = null;
+	public $fail_venue_lock                  = false;
+	public $venue_lock_queries               = 0;
+	public $transaction_active               = false;
 	public $natural_key_reads_in_transaction = 0;
-	private $transaction_snapshot     = null;
+	public $get_lock_result                  = 1;
+	public $release_lock_result              = 1;
+	public $lock_names                       = array();
+	public $event_dates                      = array();
+	public $elapse_hold_after_membership_lock = null;
+	public $elapse_hold_before_release_update = null;
+	private $transaction_snapshot            = null;
 
 	public function get_charset_collate() {
 		return 'DEFAULT CHARACTER SET utf8mb4'; }
@@ -288,8 +317,8 @@ final class BookingWpdb {
 				$this->rows[ $table ][ $this->insert_id ]['inquiry_request_hash'] = $this->race_booking_hash;
 				$this->race_booking_hash = null;
 			}
-			$activity_table = $this->prefix . 'ec_booking_activity';
-			$activity_id    = count( $this->rows[ $activity_table ] ?? array() ) + 1;
+			$activity_table                                = $this->prefix . 'ec_booking_activity';
+			$activity_id                                   = count( $this->rows[ $activity_table ] ?? array() ) + 1;
 			$this->rows[ $activity_table ][ $activity_id ] = array(
 				'id'              => $activity_id,
 				'booking_id'      => $this->insert_id,
@@ -304,8 +333,8 @@ final class BookingWpdb {
 				'occurred_at'     => gmdate( 'Y-m-d H:i:s' ),
 				'created_at'      => gmdate( 'Y-m-d H:i:s' ),
 			);
-			$this->transaction_snapshot = $this->rows;
-			$this->last_error          = 'simulated concurrent duplicate';
+			$this->transaction_snapshot                    = $this->rows;
+			$this->last_error                              = 'simulated concurrent duplicate';
 			return false;
 		}
 		if ( false !== strpos( $table, 'ec_booking_activity' ) && $this->race_activity_insert ) {
@@ -321,6 +350,35 @@ final class BookingWpdb {
 
 	public function get_var( $query ) {
 		$this->last_error = '';
+		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', (\d+)\)/", $query, $match ) ) {
+			$this->lock_names[] = array( 'get', stripslashes( $match[1] ) );
+			return $this->get_lock_result;
+		}
+		if ( preg_match( "/SELECT RELEASE_LOCK\('([^']+)'\)/", $query, $match ) ) {
+			$this->lock_names[] = array( 'release', stripslashes( $match[1] ) );
+			return $this->release_lock_result;
+		}
+		if ( preg_match( "/SELECT id FROM .*ec_booking_holds WHERE booking_id = (\d+) AND venue_term_id = (\d+) AND space_key = '([^']+)' AND start_at = '([^']+)' AND end_at = '([^']+)'.*expires_at > '([^']+)'.*id <> (\d+)/", $query, $match ) ) {
+			foreach ( $this->rows[ $this->prefix . 'ec_booking_holds' ] ?? array() as $row ) {
+				if ( (int) $row['booking_id'] === (int) $match[1] && (int) $row['venue_term_id'] === (int) $match[2] && $row['space_key'] === stripslashes( $match[3] ) && $row['start_at'] === $match[4] && $row['end_at'] === $match[5] && 'active' === $row['status'] && $row['expires_at'] > $match[6] && (int) $row['id'] !== (int) $match[7] ) {
+					return $row['id'];
+				}
+			}
+			return null;
+		}
+		if ( false !== strpos( $query, 'SELECT b.id FROM' ) && false !== strpos( $query, 'INNER JOIN' ) && preg_match( "/b\.venue_term_id = (\d+).*h\.expires_at <= '([^']+)'/", $query, $stale ) ) {
+			foreach ( $this->rows[ $this->prefix . 'ec_bookings' ] ?? array() as $booking ) {
+				if ( (int) $booking['venue_term_id'] !== (int) $stale[1] || 'held' !== $booking['status'] ) {
+					continue;
+				}
+				foreach ( $this->rows[ $this->prefix . 'ec_booking_holds' ] ?? array() as $hold ) {
+					if ( (int) $hold['booking_id'] === (int) $booking['id'] && (int) $hold['venue_term_id'] === (int) $booking['venue_term_id'] && $hold['space_key'] === $booking['space_key'] && $hold['start_at'] === $booking['requested_start_at'] && $hold['end_at'] === $booking['requested_end_at'] && 'active' === $hold['status'] && $hold['expires_at'] <= $stale[2] ) {
+						return $booking['id'];
+					}
+				}
+			}
+			return null;
+		}
 		if ( preg_match( '/SELECT term_id FROM .* WHERE term_id = (\d+) FOR UPDATE/', $query, $match ) ) {
 			++$this->venue_lock_queries;
 			if ( $this->fail_venue_lock ) {
@@ -360,6 +418,7 @@ final class BookingWpdb {
 			return isset( $this->engines[ $table ] ) ? array( 'Engine' => $this->engines[ $table ] ) : null;
 		}
 		$is_activity = false !== strpos( $query, 'ec_booking_activity' );
+		$is_hold     = false !== strpos( $query, 'ec_booking_holds' );
 		if ( null !== $this->reads_before_failure ) {
 			if ( 0 === $this->reads_before_failure ) {
 				$this->last_error = 'simulated delayed row read failure';
@@ -371,9 +430,67 @@ final class BookingWpdb {
 			$this->last_error = 'simulated row read failure';
 			return null;
 		}
-		$table = $is_activity ? $this->prefix . 'ec_booking_activity' : $this->prefix . 'ec_bookings';
+		$table = $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' );
 		if ( preg_match( '/WHERE id = (\d+)/', $query, $match ) ) {
 			return $this->rows[ $table ][ (int) $match[1] ] ?? null; }
+		if ( $is_hold && false !== strpos( $query, 'booking_id =' ) ) {
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( preg_match( '/booking_id = (\d+)/', $query, $match ) && (int) $row['booking_id'] !== (int) $match[1] ) {
+					continue;
+				}
+				if ( preg_match( "/venue_term_id = (\d+).*space_key = '([^']+)'.*start_at = '([^']+)'.*end_at = '([^']+)'.*expires_at > '([^']+)'/", $query, $match ) && ( (int) $row['venue_term_id'] !== (int) $match[1] || $row['space_key'] !== stripslashes( $match[2] ) || $row['start_at'] !== $match[3] || $row['end_at'] !== $match[4] || $row['expires_at'] <= $match[5] ) ) {
+					continue;
+				}
+				if ( preg_match( "/venue_term_id = (\d+).*space_key = '([^']+)'.*start_at = '([^']+)'.*end_at = '([^']+)'.*expires_at <= '([^']+)'/", $query, $match ) && ( (int) $row['venue_term_id'] !== (int) $match[1] || $row['space_key'] !== stripslashes( $match[2] ) || $row['start_at'] !== $match[3] || $row['end_at'] !== $match[4] || $row['expires_at'] > $match[5] ) ) {
+					continue;
+				}
+				if ( false !== strpos( $query, "status = 'active'" ) && 'active' !== $row['status'] ) {
+					continue;
+				}
+				return $row;
+			}
+			return null;
+		}
+		if ( $is_hold && false !== strpos( $query, "'hold' AS conflict_type" ) ) {
+			preg_match( "/venue_term_id = (\d+) AND space_key = '([^']+)' AND status = 'active' AND expires_at > '([^']+)' AND start_at < '([^']+)' AND end_at > '([^']+)' AND booking_id <> (\d+) AND id <> (\d+)/", $query, $match );
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( (int) $row['venue_term_id'] === (int) $match[1] && $row['space_key'] === stripslashes( $match[2] ) && 'active' === $row['status'] && $row['expires_at'] > $match[3] && $row['start_at'] < $match[4] && $row['end_at'] > $match[5] && (int) $row['booking_id'] !== (int) $match[6] && (int) $row['id'] !== (int) $match[7] ) {
+					return array(
+						'id'            => $row['id'],
+						'booking_id'    => $row['booking_id'],
+						'conflict_type' => 'hold',
+					);
+				}
+			}
+			return null;
+		}
+		if ( ! $is_hold && false !== strpos( $query, "'confirmed_booking' AS conflict_type" ) ) {
+			preg_match( "/venue_term_id = (\d+) AND space_key = '([^']+)'.*requested_start_at < '([^']+)' AND requested_end_at > '([^']+)' AND id <> (\d+)/", $query, $match );
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( (int) $row['venue_term_id'] === (int) $match[1] && $row['space_key'] === stripslashes( $match[2] ) && 'confirmed' === $row['status'] && $row['requested_start_at'] < $match[3] && $row['requested_end_at'] > $match[4] && (int) $row['id'] !== (int) $match[5] ) {
+					return array(
+						'id'            => $row['id'],
+						'conflict_type' => 'confirmed_booking',
+					);
+				}
+			}
+			return null;
+		}
+		if ( false !== strpos( $query, "'canonical_event' AS conflict_type" ) ) {
+			preg_match( "/tt.term_id = (\d+) AND p.ID <> (\d+) AND ed.start_datetime < '([^']+)'.*ed.end_datetime > '([^']+)'.*ed.start_datetime >= '([^']+)'/", $query, $match );
+			foreach ( $this->event_dates as $event ) {
+				if ( (int) $event['venue_term_id'] !== (int) $match[1] || (int) $event['post_id'] === (int) $match[2] || 'publish' !== $event['post_status'] ) {
+					continue;
+				}
+				if ( $event['start_datetime'] < $match[3] && ( ( null !== $event['end_datetime'] && $event['end_datetime'] > $match[4] ) || ( null === $event['end_datetime'] && $event['start_datetime'] >= $match[5] ) ) ) {
+					return array(
+						'id'            => $event['post_id'],
+						'conflict_type' => 'canonical_event',
+					);
+				}
+			}
+			return null;
+		}
 		if ( preg_match( "/WHERE public_id = '([^']+)'/", $query, $match ) ) {
 			foreach ( $this->rows[ $table ] ?? array() as $row ) {
 				if ( stripslashes( $match[1] ) === $row['public_id'] ) {
@@ -406,6 +523,22 @@ final class BookingWpdb {
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated result read failure';
 			return null; }
+		if ( false !== strpos( $query, 'INNER JOIN' ) && false !== strpos( $query, 'ec_booking_holds' ) && preg_match( "/b\.venue_term_id = (\d+).*h\.expires_at <= '([^']+)'/", $query, $stale ) ) {
+			$rows = array();
+			foreach ( $this->rows[ $this->prefix . 'ec_bookings' ] ?? array() as $booking ) {
+				if ( (int) $booking['venue_term_id'] !== (int) $stale[1] || 'held' !== $booking['status'] ) {
+					continue;
+				}
+				foreach ( $this->rows[ $this->prefix . 'ec_booking_holds' ] ?? array() as $hold ) {
+					if ( (int) $hold['booking_id'] === (int) $booking['id'] && (int) $hold['venue_term_id'] === (int) $booking['venue_term_id'] && $hold['space_key'] === $booking['space_key'] && $hold['start_at'] === $booking['requested_start_at'] && $hold['end_at'] === $booking['requested_end_at'] && 'active' === $hold['status'] && $hold['expires_at'] <= $stale[2] ) {
+						$rows[] = $booking;
+						break;
+					}
+				}
+			}
+			usort( $rows, static function ( $left, $right ) { return $left['id'] <=> $right['id']; } );
+			return array_slice( $rows, 0, 100 );
+		}
 		if ( preg_match( '/SHOW COLUMNS FROM `([^`]+)`/', $query, $match ) ) {
 			++$this->schema_queries;
 			$rows = array();
@@ -419,6 +552,16 @@ final class BookingWpdb {
 				$callback                    = $this->after_membership_lock;
 				$this->after_membership_lock = null;
 				$callback();
+			}
+			if ( null !== $this->elapse_hold_after_membership_lock ) {
+				$hold_id = (int) $this->elapse_hold_after_membership_lock;
+				$past    = gmdate( 'Y-m-d H:i:s' );
+				$table   = $this->prefix . 'ec_booking_holds';
+				$this->rows[ $table ][ $hold_id ]['expires_at'] = $past;
+				if ( is_array( $this->transaction_snapshot ) ) {
+					$this->transaction_snapshot[ $table ][ $hold_id ]['expires_at'] = $past;
+				}
+				$this->elapse_hold_after_membership_lock = null;
 			}
 			return array_values( $this->rows[ $this->prefix . 'ec_venue_members' ] ?? array() );
 		}
@@ -438,7 +581,8 @@ final class BookingWpdb {
 			return $rows;
 		}
 		$is_activity = false !== strpos( $query, 'ec_booking_activity' );
-		$table       = $is_activity ? $this->prefix . 'ec_booking_activity' : $this->prefix . 'ec_bookings';
+		$is_hold     = false !== strpos( $query, 'ec_booking_holds' );
+		$table       = $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' );
 		$rows        = array_values( $this->rows[ $table ] ?? array() );
 		$filters     = array( 'venue_term_id', 'artist_term_id', 'artist_profile_id', 'assignee_user_id', 'booking_id' );
 		foreach ( $filters as $field ) {
@@ -453,7 +597,11 @@ final class BookingWpdb {
 				);
 			}
 		}
-		if ( preg_match( "/status = '([^']+)'/", $query, $filter ) ) {
+		if ( $is_hold && false !== strpos( $query, "(status = 'expired' OR (status = 'active'" ) && preg_match( "/expires_at <= '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) use ( $filter ) { return 'expired' === $row['status'] || ( 'active' === $row['status'] && $row['expires_at'] <= $filter[1] ); } ) );
+		} elseif ( $is_hold && false !== strpos( $query, "status = 'active' AND expires_at >" ) && preg_match( "/expires_at > '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) use ( $filter ) { return 'active' === $row['status'] && $row['expires_at'] > $filter[1]; } ) );
+		} elseif ( preg_match( "/status = '([^']+)'/", $query, $filter ) ) {
 			$rows = array_values(
 				array_filter(
 					$rows,
@@ -479,6 +627,26 @@ final class BookingWpdb {
 					$rows,
 					static function ( $row ) use ( $filter ) {
 						return null !== $row['requested_end_at'] && $row['requested_end_at'] <= stripslashes( $filter[1] );
+					}
+				)
+			);
+		}
+		if ( $is_hold && preg_match( "/end_at > '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) use ( $filter ) {
+						return $row['end_at'] > stripslashes( $filter[1] );
+					}
+				)
+			);
+		}
+		if ( $is_hold && preg_match( "/start_at < '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) use ( $filter ) {
+						return $row['start_at'] < stripslashes( $filter[1] );
 					}
 				)
 			);
@@ -580,11 +748,54 @@ final class BookingWpdb {
 		if ( $this->fail_updates ) {
 			$this->last_error = 'simulated update failure';
 			return false; }
-		if ( ! preg_match( '/WHERE id = (\d+) AND version = (\d+)/', $query, $match ) ) {
+		if ( false !== strpos( $query, 'expires_at > UTC_TIMESTAMP()' ) && preg_match( '/UPDATE ([^ ]+).*WHERE id = (\d+) AND version = (\d+)/', $query, $release_hold ) ) {
+			$table    = $release_hold[1];
+			$id       = (int) $release_hold[2];
+			$expected = (int) $release_hold[3];
+			if ( (int) $this->elapse_hold_before_release_update === $id ) {
+				$past = gmdate( 'Y-m-d H:i:s' );
+				$this->rows[ $table ][ $id ]['expires_at'] = $past;
+				if ( is_array( $this->transaction_snapshot ) ) {
+					$this->transaction_snapshot[ $table ][ $id ]['expires_at'] = $past;
+				}
+				$this->elapse_hold_before_release_update = null;
+			}
+			if ( ! isset( $this->rows[ $table ][ $id ] ) || (int) $this->rows[ $table ][ $id ]['version'] !== $expected || 'active' !== $this->rows[ $table ][ $id ]['status'] || $this->rows[ $table ][ $id ]['expires_at'] <= gmdate( 'Y-m-d H:i:s' ) ) {
+				return 0;
+			}
+		}
+		if ( false !== strpos( $query, "SET status = 'expired'" ) && preg_match( "/UPDATE ([^ ]+).*WHERE booking_id = (\d+).*expires_at <= '([^']+)'.*id <> (\d+)/", $query, $expired ) ) {
+			$count = 0;
+			$this->rows[ $expired[1] ] = $this->rows[ $expired[1] ] ?? array();
+			foreach ( $this->rows[ $expired[1] ] as &$row ) {
+				if ( (int) $row['booking_id'] === (int) $expired[2] && 'active' === $row['status'] && $row['expires_at'] <= $expired[3] && (int) $row['id'] !== (int) $expired[4] ) {
+					$row['status']     = 'expired';
+					$row['expired_at'] = $expired[3];
+					++$row['version'];
+					++$count;
+				}
+			}
+			unset( $row );
+			return $count;
+		}
+		if ( false !== strpos( $query, "SET status = 'released'" ) && preg_match( "/UPDATE ([^ ]+).*WHERE booking_id = (\d+).*expires_at > '([^']+)'.*id <> (\d+)/", $query, $release ) ) {
+			$count = 0;
+			$this->rows[ $release[1] ] = $this->rows[ $release[1] ] ?? array();
+			foreach ( $this->rows[ $release[1] ] as &$row ) {
+				if ( (int) $row['booking_id'] === (int) $release[2] && 'active' === $row['status'] && $row['expires_at'] > $release[3] && (int) $row['id'] !== (int) $release[4] ) {
+					$row['status'] = 'released';
+					++$row['version'];
+					++$count;
+				}
+			}
+			unset( $row );
+			return $count;
+		}
+		if ( ! preg_match( '/UPDATE ([^ ]+) SET .*WHERE id = (\d+) AND version = (\d+)/', $query, $match ) ) {
 			return false; }
-		$id       = (int) $match[1];
-		$expected = (int) $match[2];
-		$table    = $this->prefix . 'ec_bookings';
+		$table    = $match[1];
+		$id       = (int) $match[2];
+		$expected = (int) $match[3];
 		if ( ! isset( $this->rows[ $table ][ $id ] ) || (int) $this->rows[ $table ][ $id ]['version'] !== $expected ) {
 			if ( $this->race_event_read_fail ) {
 				$this->reads_before_failure = 1;
@@ -616,12 +827,14 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingLifecycle.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueBookingConfig.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingAbilities.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingHoldAbilities.php';
 
 final class BookingTestAuthorization extends VenueAuthorization {
-	public $calls = array();
+	public $calls   = array();
 	public $allowed = array();
 	public function __construct( array $allowed = array() ) {
 		$this->allowed = array_merge( array( '12:55' => true ), $allowed );

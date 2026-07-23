@@ -138,6 +138,11 @@ final class BookingHoldTest extends TestCase {
 		$this->assertSame( $GLOBALS['wpdb']->lock_names[0][1], $GLOBALS['wpdb']->lock_names[2][1], 'The same venue-space must produce the same lock name.' );
 		$this->assertNotSame( $GLOBALS['wpdb']->lock_names[0][1], $GLOBALS['wpdb']->lock_names[4][1], 'Different spaces must not share a lock.' );
 		$this->assertLessThanOrEqual( 64, strlen( $GLOBALS['wpdb']->lock_names[0][1] ) );
+		$first_lock = $GLOBALS['wpdb']->lock_names[0][1];
+		$GLOBALS['wpdb']->prefix = 'wp_8_';
+		$other_site = $this->booking( '2030-10-01 20:00:00', '2030-10-01 23:00:00' );
+		$holds->create( $other_site['id'], 1, 12 );
+		$this->assertNotSame( $first_lock, $GLOBALS['wpdb']->lock_names[6][1], 'Different site tables must not share advisory locks.' );
 	}
 
 	public function test_same_space_conflicts_different_space_succeeds_and_elapsed_never_blocks(): void {
@@ -555,6 +560,40 @@ final class BookingHoldTest extends TestCase {
 		$this->assertSame( 1, ( new BookingRepository() )->get( $booking['id'] )['version'] );
 	}
 
+	public function test_mutations_deny_lock_current_revoked_membership(): void {
+		$authorization = new BookingTestAuthorization();
+		$authorization->require_locked_membership = true;
+		$holds         = new BookingHoldRepository( null, null, $authorization );
+		$lifecycle     = new BookingLifecycle( null, null, $authorization, null, $holds );
+		$booking       = $this->booking( '2031-11-01 20:00:00', '2031-11-01 23:00:00' );
+		$membership_table = BookingSchema::memberships_table();
+		$GLOBALS['wpdb']->rows[ $membership_table ][1] = array(
+			'id'                  => 1,
+			'venue_term_id'       => 55,
+			'user_id'             => 12,
+			'status'              => 'active',
+		);
+		$revoke = static function () use ( $membership_table ) {
+			$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'revoked';
+		};
+		$GLOBALS['wpdb']->after_membership_lock = $revoke;
+		$this->assertSame( 'venue_action_forbidden', $holds->create( $booking['id'], 1, 12 )->get_error_code() );
+
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$created = $holds->create( $booking['id'], 1, 12 );
+		$GLOBALS['wpdb']->after_membership_lock = $revoke;
+		$this->assertSame( 'venue_action_forbidden', $holds->release( $created['hold']['id'], 1, 12, 'revoked' )->get_error_code() );
+
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$GLOBALS['wpdb']->after_membership_lock = $revoke;
+		$this->assertSame( 'venue_action_forbidden', $lifecycle->transition( $booking['id'], 'held', 2, 12 )->get_error_code() );
+
+		$GLOBALS['wpdb']->rows[ $membership_table ][1]['status'] = 'active';
+		$lifecycle->transition( $booking['id'], 'held', 2, 12 );
+		$GLOBALS['wpdb']->after_membership_lock = $revoke;
+		$this->assertSame( 'venue_action_forbidden', $lifecycle->transition( $booking['id'], 'confirmed', 3, 12 )->get_error_code() );
+	}
+
 	public function test_list_reauthorizes_after_lock_and_rolls_back_on_revocation(): void {
 		$authorization                          = new BookingTestAuthorization();
 		$holds                                  = new BookingHoldRepository( null, null, $authorization );
@@ -628,6 +667,22 @@ final class BookingHoldTest extends TestCase {
 
 		$other = $this->booking();
 		$this->assertSame( 'booking_time_conflict', $holds->create( $other['id'], 1, 12 )->get_error_code(), 'Converted booking remains protected by confirmed-booking overlap.' );
+	}
+
+	public function test_confirmation_rolls_back_when_hold_expires_at_conversion_boundary(): void {
+		$holds     = $this->holds();
+		$lifecycle = new BookingLifecycle( null, null, null, null, $holds );
+		$booking   = $this->booking( '2031-12-01 20:00:00', '2031-12-01 23:00:00' );
+		$created   = $holds->create( $booking['id'], 1, 12 );
+		$lifecycle->transition( $booking['id'], 'held', 2, 12 );
+		$GLOBALS['wpdb']->elapse_hold_before_conversion_update = $created['hold']['id'];
+
+		$result = $lifecycle->transition( $booking['id'], 'confirmed', 3, 12 );
+		$this->assertSame( 'booking_hold_expired_during_confirmation', $result->get_error_code() );
+		$this->assertSame( 409, $result->get_error_data()['status'] );
+		$this->assertSame( 'held', ( new BookingRepository() )->get( $booking['id'] )['status'] );
+		$this->assertSame( 3, ( new BookingRepository() )->get( $booking['id'] )['version'] );
+		$this->assertSame( 'active', $GLOBALS['wpdb']->rows[ BookingSchema::holds_table() ][ $created['hold']['id'] ]['status'] );
 	}
 
 	public function test_leaving_held_releases_remaining_active_holds(): void {

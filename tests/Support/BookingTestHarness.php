@@ -246,7 +246,10 @@ final class BookingWpdb {
 	public $venue_lock_queries        = 0;
 	public $reference_locks           = array();
 	public $lock_sequence             = array();
+	public $reference_lock_queries    = 0;
+	public $fail_reference_unlock     = false;
 	public $after_reference_lock      = null;
+	public $after_reference_unlock    = null;
 	public $transaction_active        = false;
 	public $natural_key_reads_in_transaction = 0;
 	private $transaction_snapshot     = null;
@@ -378,6 +381,7 @@ final class BookingWpdb {
 	public function get_var( $query ) {
 		$this->last_error = '';
 		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', 10\)/", $query, $match ) ) {
+			++$this->reference_lock_queries;
 			$this->reference_locks[ stripslashes( $match[1] ) ] = true;
 			$this->lock_sequence[] = 'reference';
 			if ( is_callable( $this->after_reference_lock ) ) {
@@ -388,7 +392,15 @@ final class BookingWpdb {
 			return 1;
 		}
 		if ( preg_match( "/SELECT RELEASE_LOCK\('([^']+)'\)/", $query, $match ) ) {
+			if ( $this->fail_reference_unlock ) {
+				return 0;
+			}
 			unset( $this->reference_locks[ stripslashes( $match[1] ) ] );
+			if ( is_callable( $this->after_reference_unlock ) ) {
+				$callback                     = $this->after_reference_unlock;
+				$this->after_reference_unlock = null;
+				$callback();
+			}
 			return 1;
 		}
 		if ( preg_match( '/SELECT term_id FROM .* WHERE term_id = (\d+) FOR UPDATE/', $query, $match ) ) {
@@ -815,6 +827,8 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	public $handoffs = array();
 	public $claim_records = array();
 	public $throw_claim = false;
+	public $inspect_uncertain = 0;
+	public $inspect_truncated = false;
 	public function stage( string $source_path, string $filename, string $purpose ) {
 		unset( $source_path, $filename, $purpose );
 		return new WP_Error( 'not_implemented' );
@@ -841,7 +855,11 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 		return $this->fail_release ? new WP_Error( 'simulated_claim_release_failure' ) : true;
 	}
 	public function inspect_claims() {
-		return array_values( $this->claim_records );
+		return array(
+			'claims'    => array_values( $this->claim_records ),
+			'uncertain' => $this->inspect_uncertain,
+			'truncated' => $this->inspect_truncated,
+		);
 	}
 	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
 		$token = bin2hex( random_bytes( 32 ) );

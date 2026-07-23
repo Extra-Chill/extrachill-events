@@ -159,11 +159,15 @@ class BookingAttachmentRepository {
 	public function list_active_replacements_before( string $cutoff ) {
 		global $wpdb;
 		$table = BookingSchema::attachments_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state = 'active' AND replaces_attachment_id IS NOT NULL AND created_at < %s ORDER BY created_at ASC, id ASC LIMIT 250", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit reconciliation candidates.
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state = 'active' AND replaces_attachment_id IS NOT NULL AND created_at < %s ORDER BY created_at ASC, id ASC LIMIT 251", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit bounded reconciliation candidates.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_attachment_reconciliation_read_failed', __( 'Incomplete attachment replacements could not be inspected.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}
-		return array_map( array( $this, 'hydrate' ), (array) $rows );
+		$rows = array_map( array( $this, 'hydrate' ), (array) $rows );
+		return array(
+			'items'     => array_slice( $rows, 0, 250 ),
+			'truncated' => count( $rows ) > 250,
+		);
 	}
 
 	/**
@@ -219,6 +223,48 @@ class BookingAttachmentRepository {
 				: new \WP_Error( 'booking_attachment_state_conflict', __( 'The attachment changed before the operation completed.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		return $this->get( $id );
+	}
+
+	/**
+	 * Restore a recoverable purging row when phase-two policy denies deletion.
+	 *
+	 * @param int    $id    Attachment ID.
+	 * @param string $state Prior inactive state.
+	 */
+	public function cancel_purge( int $id, string $state ) {
+		global $wpdb;
+		if ( ! in_array( $state, array( 'replaced', 'deleted', 'abandoned' ), true ) ) {
+			$state = 'deleted';
+		}
+		$current = $this->get( $id );
+		if ( is_wp_error( $current ) ) {
+			return $current;
+		}
+		if ( ! is_array( $current ) ) {
+			return new \WP_Error( 'booking_attachment_not_found', __( 'The attachment was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
+		}
+		if ( $state === $current['state'] ) {
+			return $current;
+		}
+		if ( 'purging' !== $current['state'] ) {
+			return new \WP_Error( 'booking_attachment_state_conflict', __( 'The attachment is no longer in recoverable purging state.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Restores policy-blocked cleanup state.
+		$updated = $wpdb->update(
+			BookingSchema::attachments_table(),
+			array(
+				'state'      => $state,
+				'updated_at' => gmdate( 'Y-m-d H:i:s' ),
+			),
+			array(
+				'id'    => $id,
+				'state' => 'purging',
+			)
+		);
+		if ( false === $updated ) {
+			return new \WP_Error( 'booking_attachment_purge_cancel_failed', __( 'The attachment cleanup state could not be restored.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
+		return 1 === $updated ? $this->get( $id ) : new \WP_Error( 'booking_attachment_state_conflict', __( 'The attachment cleanup state changed before it could be restored.', 'extrachill-events' ) );
 	}
 
 	/**

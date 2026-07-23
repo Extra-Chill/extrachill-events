@@ -288,6 +288,19 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$this->assertFileDoesNotExist( $metadata_path );
 	}
 
+	public function test_claim_inspection_counts_corruption_and_continues(): void {
+		$provider = new LocalBookingPrivateFileProvider( $this->root );
+		$bad      = $provider->stage( $this->source( 'bad.txt', 'bad' ), 'bad.txt', 'epk' );
+		$good     = $provider->stage( $this->source( 'good.txt', 'good' ), 'good.txt', 'epk' );
+		$provider->claim( $good, 'site:7:table:wp_7_ec_booking_attachments:booking:1:request:' . hash( 'sha256', 'good' ), 'epk' );
+		$bad_metadata = $this->root . '/objects/' . substr( $bad, 0, 2 ) . '/' . substr( $bad, 2, 2 ) . '/' . $bad . '.json';
+		file_put_contents( $bad_metadata, '{corrupt' );
+		$inspection = $provider->inspect_claims();
+		$this->assertSame( 1, $inspection['uncertain'] );
+		$this->assertCount( 1, $inspection['claims'] );
+		$this->assertFalse( $inspection['truncated'] );
+	}
+
 	private function source( string $filename, string $contents ): string {
 		$path = $this->incoming . '/' . $filename;
 		file_put_contents( $path, $contents );

@@ -44,7 +44,6 @@ class BookingAttachmentService {
 	 * @var VenueAuthorization
 	 */
 	private $authorization;
-
 	/**
 	 * Build the booking attachment aggregate.
 	 *
@@ -323,13 +322,15 @@ class BookingAttachmentService {
 							return false;
 						}
 					}
+					$states = array();
 					foreach ( $locked as $attachment ) {
-						$marked = $this->attachments->retire( $attachment['id'], 'purging' );
+						$states[ $attachment['id'] ] = $attachment['state'];
+						$marked                      = $this->attachments->retire( $attachment['id'], 'purging' );
 						if ( is_wp_error( $marked ) ) {
 							return $marked;
 						}
 					}
-					return true;
+					return $states;
 				}
 			);
 			if ( false === $prepared ) {
@@ -348,14 +349,48 @@ class BookingAttachmentService {
 				$bookings,
 				$actor_id,
 				$reference,
-				function () use ( $reference, $bookings ) {
+				function () use ( $reference, $bookings, $legal_hold, $prepared ) {
 					$locked = $this->attachments->list_by_storage_reference( $reference, true );
 					if ( is_wp_error( $locked ) || empty( $locked ) || ! $this->same_booking_set( $locked, $bookings ) ) {
-						return is_wp_error( $locked ) ? $locked : new \WP_Error( 'booking_attachment_cleanup_retry_required', __( 'Attachment references changed before physical retirement.', 'extrachill-events' ) );
+						$cancelled = $this->cancel_purging( $prepared );
+						if ( is_wp_error( $cancelled ) ) {
+							return $cancelled;
+						}
+						return array(
+							'cancelled' => true,
+							'error'     => is_wp_error( $locked ) ? $locked->get_error_code() : 'booking_attachment_cleanup_retry_required',
+						);
 					}
 					foreach ( $locked as $attachment ) {
 						if ( 'purging' !== $attachment['state'] ) {
-							return new \WP_Error( 'booking_attachment_cleanup_uncertain', __( 'Physical retirement requires every reference to be in recoverable purging state.', 'extrachill-events' ) );
+							$cancelled = $this->cancel_purging( $prepared );
+							return is_wp_error( $cancelled ) ? $cancelled : array(
+								'cancelled' => true,
+								'error'     => 'booking_attachment_cleanup_uncertain',
+							);
+						}
+						$current_booking = $this->bookings->get( $attachment['booking_id'] );
+						if ( is_wp_error( $current_booking ) || ! is_array( $current_booking ) ) {
+							$cancelled = $this->cancel_purging( $prepared );
+							return is_wp_error( $cancelled ) ? $cancelled : array(
+								'cancelled' => true,
+								'error'     => is_wp_error( $current_booking ) ? $current_booking->get_error_code() : 'booking_attachment_reference_booking_missing',
+							);
+						}
+						$held = $legal_hold( $attachment, $current_booking );
+						if ( is_wp_error( $held ) ) {
+							$cancelled = $this->cancel_purging( $prepared );
+							return is_wp_error( $cancelled ) ? $cancelled : array(
+								'cancelled' => true,
+								'error'     => $held->get_error_code(),
+							);
+						}
+						if ( false !== $held || $this->policy->requires_audit_retention( $attachment, $current_booking ) ) {
+							$cancelled = $this->cancel_purging( $prepared );
+							return is_wp_error( $cancelled ) ? $cancelled : array(
+								'cancelled' => true,
+								'error'     => null,
+							);
 						}
 					}
 					$retired = $this->provider->retire( $reference );
@@ -373,6 +408,12 @@ class BookingAttachmentService {
 			);
 			if ( is_wp_error( $result ) ) {
 				return $result;
+			}
+			if ( is_array( $result ) && ! empty( $result['cancelled'] ) ) {
+				if ( ! empty( $result['error'] ) ) {
+					return new \WP_Error( $result['error'], __( 'Attachment cleanup was cancelled before byte retirement.', 'extrachill-events' ) );
+				}
+				continue;
 			}
 			$purged += (int) $result;
 		}
@@ -397,14 +438,16 @@ class BookingAttachmentService {
 		if ( $actor_id < 1 || $minimum_age < HOUR_IN_SECONDS ) {
 			return new \WP_Error( 'booking_attachment_reconciliation_policy_required', __( 'Reconciliation requires an explicit actor and minimum crash-age policy.', 'extrachill-events' ) );
 		}
-		$claims = $this->provider->inspect_claims();
-		if ( is_wp_error( $claims ) ) {
-			return $claims;
+		$inspection = $this->provider->inspect_claims();
+		if ( is_wp_error( $inspection ) ) {
+			return $inspection;
 		}
-		$cutoff          = time() - $minimum_age;
-		$orphan_claims   = array();
-		$repaired_claims = 0;
-		$unscoped_claims = 0;
+		$claims           = is_array( $inspection['claims'] ?? null ) ? $inspection['claims'] : array();
+		$claim_truncated  = true === ( $inspection['truncated'] ?? false );
+		$cutoff           = time() - $minimum_age;
+		$orphan_claims    = array();
+		$repaired_claims  = 0;
+		$uncertain_claims = absint( $inspection['uncertain'] ?? 0 );
 		foreach ( $claims as $claim ) {
 			$updated = strtotime( (string) ( $claim['updated_at'] ?? '' ) );
 			if ( 'active' !== ( $claim['state'] ?? '' ) || false === $updated || $updated >= $cutoff ) {
@@ -412,16 +455,18 @@ class BookingAttachmentService {
 			}
 			$booking_id = $this->booking_id_from_claim_key( (string) ( $claim['claim_key'] ?? '' ) );
 			if ( $booking_id < 1 ) {
-				++$unscoped_claims;
+				++$uncertain_claims;
 				continue;
 			}
 			$booking = $this->booking( $booking_id );
 			if ( is_wp_error( $booking ) ) {
-				return $booking;
+				++$uncertain_claims;
+				continue;
 			}
 			$references = $this->attachments->list_by_storage_reference( (string) $claim['storage_reference'] );
 			if ( is_wp_error( $references ) ) {
-				return $references;
+				++$uncertain_claims;
+				continue;
 			}
 			$referenced = false;
 			foreach ( $references as $attachment ) {
@@ -463,23 +508,32 @@ class BookingAttachmentService {
 		}
 
 		$replacement_cutoff = gmdate( 'Y-m-d H:i:s', $cutoff );
-		$replacements       = $this->attachments->list_active_replacements_before( $replacement_cutoff );
-		if ( is_wp_error( $replacements ) ) {
-			return $replacements;
+		$replacement_page   = $this->attachments->list_active_replacements_before( $replacement_cutoff );
+		if ( is_wp_error( $replacement_page ) ) {
+			return $replacement_page;
 		}
-		$incomplete            = array();
-		$repaired_replacements = 0;
+		$replacements           = is_array( $replacement_page['items'] ?? null ) ? $replacement_page['items'] : array();
+		$replacement_truncated  = true === ( $replacement_page['truncated'] ?? false );
+		$incomplete             = array();
+		$repaired_replacements  = 0;
+		$uncertain_replacements = 0;
 		foreach ( $replacements as $replacement ) {
 			$prior = $this->attachments->get( (int) $replacement['replaces_attachment_id'] );
 			if ( is_wp_error( $prior ) ) {
-				return $prior;
+				++$uncertain_replacements;
+				continue;
 			}
-			if ( ! is_array( $prior ) || 'active' !== $prior['state'] || $prior['booking_id'] !== $replacement['booking_id'] ) {
+			if ( ! is_array( $prior ) ) {
+				++$uncertain_replacements;
+				continue;
+			}
+			if ( 'active' !== $prior['state'] || $prior['booking_id'] !== $replacement['booking_id'] ) {
 				continue;
 			}
 			$booking = $this->booking( $replacement['booking_id'] );
 			if ( is_wp_error( $booking ) ) {
-				return $booking;
+				++$uncertain_replacements;
+				continue;
 			}
 			$result = $this->authorized_reference_transaction(
 				$booking,
@@ -529,7 +583,12 @@ class BookingAttachmentService {
 			'incomplete_replacements' => $incomplete,
 			'repaired_claims'         => $repaired_claims,
 			'repaired_replacements'   => $repaired_replacements,
-			'unscoped_claims'         => $unscoped_claims,
+			'uncertain_claims'        => $uncertain_claims,
+			'uncertain_replacements'  => $uncertain_replacements,
+			'truncated'               => array(
+				'claims'       => $claim_truncated,
+				'replacements' => $replacement_truncated,
+			),
 		);
 	}
 
@@ -745,7 +804,19 @@ class BookingAttachmentService {
 	 */
 	private function acquire_reference_lock( string $reference ) {
 		global $wpdb;
-		$name     = $this->reference_lock_name( $reference );
+		$name            = $this->reference_lock_name( $reference );
+		$uncertain_locks = $this->uncertain_reference_locks();
+		if ( isset( $uncertain_locks[ $name ] ) ) {
+			return new \WP_Error(
+				'booking_attachment_reference_lock_uncertain',
+				__( 'This connection has an unresolved private attachment lock.', 'extrachill-events' ),
+				array(
+					'lock_uncertain' => true,
+					'lock_name'      => $name,
+					'recovery'       => 'disconnect_and_reconcile',
+				)
+			);
+		}
 		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 10)', $name ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Cross-store object serialization.
 		if ( '' !== (string) $wpdb->last_error || 1 !== (int) $acquired ) {
 			return new \WP_Error( 'booking_attachment_reference_lock_failed', __( 'The private attachment reference could not be locked.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
@@ -810,7 +881,18 @@ class BookingAttachmentService {
 		if ( is_string( $lock_name ) ) {
 			$released = $this->release_reference_lock( $lock_name );
 			if ( is_wp_error( $released ) ) {
-				return $released;
+				$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'][ $lock_name ] = true;
+				return new \WP_Error(
+					'booking_attachment_reference_unlock_uncertain',
+					is_wp_error( $result ) ? __( 'The attachment operation failed and its connection lock release is uncertain.', 'extrachill-events' ) : __( 'The attachment operation committed but its connection lock release is uncertain.', 'extrachill-events' ),
+					array(
+						'committed'      => ! is_wp_error( $result ),
+						'lock_uncertain' => true,
+						'lock_name'      => $lock_name,
+						'recovery'       => 'disconnect_and_reconcile',
+						'cause'          => is_wp_error( $result ) ? $result->get_error_code() : null,
+					)
+				);
 			}
 		}
 		return $result;
@@ -903,6 +985,21 @@ class BookingAttachmentService {
 	}
 
 	/**
+	 * Restore phase-one purging rows before retaining bytes.
+	 *
+	 * @param array $states Prior states keyed by attachment ID.
+	 */
+	private function cancel_purging( array $states ) {
+		foreach ( $states as $attachment_id => $state ) {
+			$restored = $this->attachments->cancel_purge( (int) $attachment_id, (string) $state );
+			if ( is_wp_error( $restored ) ) {
+				return $restored;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Preserve an explicit recovery marker and surface failed compensation.
 	 *
 	 * @param array     $booking   Current booking.
@@ -912,7 +1009,8 @@ class BookingAttachmentService {
 	 * @param \WP_Error $cause     Original failure.
 	 */
 	private function compensate_claim( array $booking, ?int $actor_id, string $reference, string $claim_key, \WP_Error $cause ) {
-		if ( 'booking_attachment_transaction_commit_uncertain' === $cause->get_error_code() ) {
+		$error_data = $cause->get_error_data();
+		if ( 'booking_attachment_transaction_commit_uncertain' === $cause->get_error_code() || true === ( $error_data['lock_uncertain'] ?? false ) ) {
 			return $cause;
 		}
 		$released = $this->authorized_reference_transaction(
@@ -933,6 +1031,23 @@ class BookingAttachmentService {
 					'compensation' => is_wp_error( $released ) ? $released->get_error_code() : 'unconfirmed',
 				)
 			);
+	}
+
+	/** Return operator-visible request-local advisory lock uncertainty. */
+	public function reference_lock_uncertainty(): array {
+		$uncertain_locks = $this->uncertain_reference_locks();
+		return array(
+			'count'      => count( $uncertain_locks ),
+			'lock_names' => array_keys( $uncertain_locks ),
+			'recovery'   => empty( $uncertain_locks ) ? null : 'disconnect_and_reconcile',
+		);
+	}
+
+	/** Return request-wide lock quarantine shared by all service instances. */
+	private function uncertain_reference_locks(): array {
+		return is_array( $GLOBALS['extrachill_events_booking_reference_lock_uncertainty'] ?? null )
+			? $GLOBALS['extrachill_events_booking_reference_lock_uncertainty']
+			: array();
 	}
 
 	/**

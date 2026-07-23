@@ -280,8 +280,10 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		if ( ! $this->is_ready() ) {
 			return $this->configuration_error();
 		}
-		$claims   = array();
-		$iterator = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->objects_directory(), \FilesystemIterator::SKIP_DOTS ) );
+		$claims    = array();
+		$uncertain = 0;
+		$truncated = false;
+		$iterator  = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->objects_directory(), \FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $iterator as $file ) {
 			if ( ! $file->isFile() || $file->isLink() || '.json' !== substr( $file->getFilename(), -5 ) ) {
 				continue;
@@ -298,9 +300,14 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				}
 			}
 			if ( is_wp_error( $record ) ) {
-				return $record;
+				++$uncertain;
+				continue;
 			}
 			foreach ( $record['claims'] as $claim_key => $claim ) {
+				if ( count( $claims ) >= 250 ) {
+					$truncated = true;
+					break 2;
+				}
 				$claims[] = array(
 					'storage_reference' => $reference,
 					'claim_key'         => (string) $claim_key,
@@ -309,7 +316,11 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				);
 			}
 		}
-		return $claims;
+		return array(
+			'claims'    => $claims,
+			'uncertain' => $uncertain,
+			'truncated' => $truncated,
+		);
 	}
 
 	/**

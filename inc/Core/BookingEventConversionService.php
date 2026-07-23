@@ -13,7 +13,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /** Coordinates the two-phase booking/event handoff without owning DME internals. */
 class BookingEventConversionService {
-	private const SOURCE = 'extrachill-events-booking';
+	public const SOURCE = 'extrachill-events-booking';
 
 	/** @var BookingRepository */
 	private $bookings;

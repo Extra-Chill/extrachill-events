@@ -24,11 +24,14 @@ class VenueBookingEventAbilities {
 	private $bookings;
 	/** @var VenueAuthorization */
 	private $authorization;
+	/** @var array|null Exact booking context active during nested event upsert. */
+	private $active_conversion;
 
 	public function __construct( ?BookingEventConversionService $conversion = null, ?BookingRepository $bookings = null, ?VenueAuthorization $authorization = null ) {
 		$this->bookings      = $bookings ? $bookings : new BookingRepository();
 		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
 		$this->conversion    = $conversion ? $conversion : new BookingEventConversionService( $this->bookings, null, null, $this->authorization );
+		add_filter( 'datamachine_events_upsert_event_permission', array( $this, 'can_upsert_booking_event' ), 10, 2 );
 		if ( ! self::$registered ) {
 			add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
 			self::$registered = true;
@@ -59,7 +62,31 @@ class VenueBookingEventAbilities {
 	}
 
 	public function execute( array $input ) {
-		return $this->conversion->convert( (int) $input['booking_id'], (int) $input['expected_version'], get_current_user_id() );
+		$booking = $this->bookings->get( (int) $input['booking_id'] );
+		$this->active_conversion = is_array( $booking ) ? $booking : null;
+		try {
+			return $this->conversion->convert( (int) $input['booking_id'], (int) $input['expected_version'], get_current_user_id() );
+		} finally {
+			$this->active_conversion = null;
+		}
+	}
+
+	/** Grant only the exact nested DME write performed by this conversion. */
+	public function can_upsert_booking_event( bool $allowed, array $input ): bool {
+		if ( $allowed ) {
+			return true;
+		}
+		if ( ! is_array( $this->active_conversion )
+			|| BookingEventConversionService::SOURCE !== ( $input['source'] ?? '' )
+			|| $this->active_conversion['public_id'] !== ( $input['source_id'] ?? '' ) ) {
+			return false;
+		}
+
+		return true === $this->authorization->authorize(
+			get_current_user_id(),
+			(int) $this->active_conversion['venue_term_id'],
+			VenueAuthorization::ACTION_ACCESS_VENUE
+		);
 	}
 
 	/** Missing records deliberately use the same denial as inaccessible records. */

@@ -233,6 +233,32 @@ final class BookingEventConversionTest extends TestCase {
 		$this->assertSame( 55, $authorization->calls[0][1] );
 	}
 
+	public function test_nested_dme_permission_is_scoped_to_the_active_booking_conversion(): void {
+		$booking       = $this->booking();
+		$authorization = new BookingTestAuthorization();
+		$wrapper       = null;
+		$this->install_ability(
+			function ( array $input ) use ( &$wrapper ): array {
+				$this->assertTrue( $wrapper->can_upsert_booking_event( false, $input ) );
+				$this->assertFalse( $wrapper->can_upsert_booking_event( false, array_merge( $input, array( 'source_id' => 'another-booking' ) ) ) );
+				$this->add_event( 901 );
+				$this->add_event_source_proof( 901, $input );
+				return $this->upstream_result( $input );
+			}
+		);
+		$wrapper = new VenueBookingEventAbilities( $this->service( $authorization ), null, $authorization );
+
+		$result = $wrapper->execute( array( 'booking_id' => $booking['id'], 'expected_version' => 1 ) );
+
+		$this->assertSame( 901, $result['event_id'] );
+		$this->assertFalse(
+			$wrapper->can_upsert_booking_event(
+				false,
+				array( 'source' => BookingEventConversionService::SOURCE, 'source_id' => $booking['public_id'] )
+			)
+		);
+	}
+
 	public function test_success_maps_only_canonical_public_data_and_claims_once(): void {
 		$ability = $GLOBALS['ec_artist_test']['ability_objects']['data-machine-events/upsert-event'];
 		$booking = $this->booking();

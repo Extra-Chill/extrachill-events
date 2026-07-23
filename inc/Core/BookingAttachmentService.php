@@ -79,7 +79,7 @@ class BookingAttachmentService {
 		}
 
 		$claim_key = 'booking:' . $booking['id'] . ':' . $normalized['idempotency_key'];
-		$metadata  = $this->provider->claim( $normalized['storage_reference'], $claim_key );
+		$metadata  = $this->provider->claim( $normalized['storage_reference'], $claim_key, $normalized['purpose'] );
 		if ( is_wp_error( $metadata ) ) {
 			return $metadata;
 		}
@@ -91,6 +91,10 @@ class BookingAttachmentService {
 		if ( is_wp_error( $validated ) ) {
 			$this->provider->release_claim( $normalized['storage_reference'], $claim_key );
 			return $validated;
+		}
+		if ( BookingAttachmentPolicy::requires_malware_scan( $validated['mime_type'] ) && 'clean' !== ( $metadata['scan_status'] ?? '' ) ) {
+			$this->provider->release_claim( $normalized['storage_reference'], $claim_key );
+			return new \WP_Error( 'booking_private_scan_required', __( 'This document type requires an approved malware scanner before attachment.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		if ( $this->policy->is_default_denied_filename( $validated['original_filename'] ) ) {
 			$this->provider->release_claim( $normalized['storage_reference'], $claim_key );

@@ -17,12 +17,10 @@ final class BookingPrivateFileProviders {
 	/** Return the registered private provider or fail closed. */
 	public static function resolve() {
 		$provider = apply_filters( 'extrachill_events_booking_private_file_provider', null );
-		return $provider instanceof BookingPrivateFileProvider
-			? $provider
-			: new \WP_Error(
-				'booking_private_storage_unavailable',
-				__( 'Private booking file storage is not configured.', 'extrachill-events' ),
-				array( 'status' => 503 )
-			);
+		if ( $provider instanceof BookingPrivateFileProvider ) {
+			return $provider;
+		}
+		$local = new LocalBookingPrivateFileProvider();
+		return $local->is_ready() ? $local : $local->configuration_error();
 	}
 }

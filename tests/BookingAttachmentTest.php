@@ -59,6 +59,7 @@ final class BookingAttachmentTest extends TestCase {
 			'mime_type'    => $mime,
 			'byte_size'    => $size,
 			'content_hash' => hash( 'sha256', $filename ),
+			'scan_status'  => BookingAttachmentPolicy::requires_malware_scan( $mime ) ? 'clean' : 'not_required',
 		);
 	}
 

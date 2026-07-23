@@ -30,6 +30,34 @@ final class BookingAttachmentPolicy {
 		'txt'          => 'text/plain',
 	);
 
+	/** Return the effective application limit bounded by the platform limit. */
+	public static function max_bytes(): int {
+		$platform_limit = function_exists( 'wp_max_upload_size' ) ? (int) wp_max_upload_size() : self::MAX_BYTES;
+		return max( 1, min( self::MAX_BYTES, $platform_limit ) );
+	}
+
+	/** Return the domain MIME allowlist keyed by extensions. */
+	public static function allowed_mimes(): array {
+		return self::MIMES;
+	}
+
+	/**
+	 * Require an explicit scanner verdict for active document formats.
+	 *
+	 * @param string $mime_type Detected MIME type.
+	 */
+	public static function requires_malware_scan( string $mime_type ): bool {
+		return in_array(
+			$mime_type,
+			array(
+				'application/pdf',
+				'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+				'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+			),
+			true
+		);
+	}
+
 	/**
 	 * Validate trusted metadata returned by the private storage provider.
 	 *
@@ -46,9 +74,10 @@ final class BookingAttachmentPolicy {
 			return new \WP_Error( 'invalid_booking_attachment_filename', __( 'The attachment filename is unsafe.', 'extrachill-events' ) );
 		}
 
-		$size = $metadata['byte_size'] ?? null;
-		if ( ! is_int( $size ) || 1 > $size || self::MAX_BYTES < $size ) {
-			return new \WP_Error( 'invalid_booking_attachment_size', __( 'The attachment size is outside the allowed range.', 'extrachill-events' ), array( 'max_bytes' => self::MAX_BYTES ) );
+		$size      = $metadata['byte_size'] ?? null;
+		$max_bytes = self::max_bytes();
+		if ( ! is_int( $size ) || 1 > $size || $max_bytes < $size ) {
+			return new \WP_Error( 'invalid_booking_attachment_size', __( 'The attachment size is outside the allowed range.', 'extrachill-events' ), array( 'max_bytes' => $max_bytes ) );
 		}
 
 		$filetype = wp_check_filetype( $filename, self::MIMES );
@@ -76,7 +105,7 @@ final class BookingAttachmentPolicy {
 	 * @param string $filename Safe original filename.
 	 */
 	public function is_default_denied_filename( string $filename ): bool {
-		return 1 === preg_match( '/(?:^|[-_.\s])w[-_.\s]?9(?:[-_.\s]|$)/i', $filename );
+		return 1 === preg_match( '/(?:^|[-_.\s])(?:w[-_.\s]?9|tax|tin|ein|ssn)(?:[-_.\s]|$)/i', $filename );
 	}
 
 	/**

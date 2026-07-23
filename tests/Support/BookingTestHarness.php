@@ -60,6 +60,11 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	function sanitize_text_field( $value ) {
 		return trim( strip_tags( (string) $value ) ); }
 }
+if ( ! function_exists( 'wp_unslash' ) ) {
+	function wp_unslash( $value ) {
+		return is_string( $value ) ? stripslashes( $value ) : $value;
+	}
+}
 if ( ! function_exists( 'sanitize_file_name' ) ) {
 	function sanitize_file_name( $value ) {
 		$value = basename( (string) $value );
@@ -79,6 +84,18 @@ if ( ! function_exists( 'wp_check_filetype' ) ) {
 		return array(
 			'ext'  => false,
 			'type' => false,
+		);
+	}
+}
+if ( ! function_exists( 'wp_max_upload_size' ) ) {
+	function wp_max_upload_size() {
+		return $GLOBALS['ec_artist_test']['max_upload_size'] ?? 2 * 1024 * 1024;
+	}
+}
+if ( ! function_exists( 'wp_upload_dir' ) ) {
+	function wp_upload_dir() {
+		return array(
+			'basedir' => $GLOBALS['ec_artist_test']['uploads_basedir'] ?? ABSPATH . 'uploads',
 		);
 	}
 }
@@ -711,6 +728,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingLifecycle.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProvider.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalBookingPrivateFileProvider.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProviders.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentPolicy.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentRepository.php';
@@ -744,7 +762,12 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	public $claims   = array();
 	public $released = array();
 	public $retired  = array();
-	public function claim( string $storage_reference, string $claim_key ) {
+	public function stage( string $source_path, string $filename, string $purpose ) {
+		unset( $source_path, $filename, $purpose );
+		return new WP_Error( 'not_implemented' );
+	}
+	public function claim( string $storage_reference, string $claim_key, string $purpose = '' ) {
+		unset( $purpose );
 		$this->claims[] = array( $storage_reference, $claim_key );
 		return $this->objects[ $storage_reference ] ?? new WP_Error( 'private_object_missing' );
 	}
@@ -757,6 +780,10 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 			'stream_token' => 'token-' . $storage_reference,
 			'expires_at'   => '2026-08-01T00:05:00Z',
 		) : new WP_Error( 'private_object_missing' );
+	}
+	public function open_stream( string $stream_token ) {
+		unset( $stream_token );
+		return new WP_Error( 'not_implemented' );
 	}
 	public function retire( string $storage_reference ) {
 		$this->retired[] = $storage_reference;

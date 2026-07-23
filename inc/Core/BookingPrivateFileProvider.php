@@ -15,12 +15,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 interface BookingPrivateFileProvider {
 
 	/**
+	 * Stage validated bytes and return an opaque immutable reference.
+	 *
+	 * @param string $source_path Source file path.
+	 * @param string $filename    Original filename.
+	 * @param string $purpose     Booking attachment purpose.
+	 */
+	public function stage( string $source_path, string $filename, string $purpose );
+
+	/**
 	 * Idempotently claim an object and return trusted metadata.
 	 *
 	 * @param string $storage_reference Opaque object reference.
 	 * @param string $claim_key         Consumer claim key.
+	 * @param string $purpose           Booking attachment purpose.
 	 */
-	public function claim( string $storage_reference, string $claim_key );
+	public function claim( string $storage_reference, string $claim_key, string $purpose = '' );
 
 	/**
 	 * Release a failed metadata claim without deleting another consumer's claim.
@@ -36,6 +46,13 @@ interface BookingPrivateFileProvider {
 	 * @param string $storage_reference Opaque object reference.
 	 */
 	public function download_descriptor( string $storage_reference );
+
+	/**
+	 * Open a previously authorized internal stream token.
+	 *
+	 * @param string $stream_token Signed stream token.
+	 */
+	public function open_stream( string $stream_token );
 
 	/**
 	 * Permanently retire one exact private object.

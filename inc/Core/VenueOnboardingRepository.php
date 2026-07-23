@@ -48,14 +48,28 @@ class VenueOnboardingRepository {
 		if ( is_wp_error( $valid ) ) {
 			return $valid;
 		}
-		if ( is_array( ( new VenueMembershipRepository() )->get( $venue_term_id, $actor_user_id ) ) ) {
-			return new \WP_Error( 'venue_claim_membership_exists', __( 'This user already belongs to the venue.', 'extrachill-events' ), array( 'status' => 409 ) );
-		}
-
 		global $wpdb;
 		$started = $this->begin_and_lock_venue( $venue_term_id );
 		if ( is_wp_error( $started ) ) {
 			return $started;
+		}
+
+		$members = $this->lock_memberships( $venue_term_id );
+		if ( is_wp_error( $members ) ) {
+			$this->rollback();
+			return $members;
+		}
+		$invitations_table = BookingSchema::invitations_table();
+		$invitation        = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$invitations_table} WHERE venue_term_id = %d AND user_id = %d FOR UPDATE", $venue_term_id, $actor_user_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Reciprocal onboarding exclusion under venue lock.
+		if ( is_array( $invitation ) && in_array( $invitation['status'], array( self::INVITE_PENDING, self::INVITE_ACCEPTED ), true ) ) {
+			$this->rollback();
+			return new \WP_Error( 'venue_claim_invitation_exists', __( 'This user already has a venue invitation.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		foreach ( $members as $member ) {
+			if ( (int) $member['user_id'] === $actor_user_id ) {
+				$this->rollback();
+				return new \WP_Error( 'venue_claim_membership_exists', __( 'This user already belongs to the venue.', 'extrachill-events' ), array( 'status' => 409 ) );
+			}
 		}
 
 		$table = BookingSchema::claims_table();
@@ -367,7 +381,10 @@ class VenueOnboardingRepository {
 			$this->rollback();
 			return $this->invalid_invitation();
 		}
-		$binding_matches = $invite['user_id'] === $actor_user_id && $invite['venue_term_id'] === $venue_term_id && $invite['is_owner'] === $is_owner;
+		$user            = get_userdata( $actor_user_id );
+		$current_email   = $user instanceof \WP_User ? strtolower( sanitize_email( $user->user_email ) ) : '';
+		$email_hash      = hash_hmac( 'sha256', $current_email, wp_salt( 'auth' ) );
+		$binding_matches = $invite['user_id'] === $actor_user_id && $invite['venue_term_id'] === $venue_term_id && $invite['is_owner'] === $is_owner && '' !== $current_email && hash_equals( $invite['_email_hash'], $email_hash );
 		if ( ! $binding_matches || ! $this->tokens->verify( $token, $invite, $invite['_token_hash'] ) ) {
 			$this->rollback();
 			return $this->invalid_invitation();
@@ -424,14 +441,31 @@ class VenueOnboardingRepository {
 	 * @param int $venue_term_id Venue term ID.
 	 */
 	public function list_invitations( int $actor_user_id, int $venue_term_id ) {
-		$allowed = $this->authorization->authorize( $actor_user_id, $venue_term_id, VenueAuthorization::ACTION_MANAGE_MEMBERS );
+		global $wpdb;
+		$started = $this->begin_and_lock_venue( $venue_term_id );
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+		$members = $this->lock_memberships( $venue_term_id );
+		if ( is_wp_error( $members ) ) {
+			$this->rollback();
+			return $members;
+		}
+		$allowed = $this->authorization->authorize_locked( $actor_user_id, $venue_term_id, VenueAuthorization::ACTION_MANAGE_MEMBERS, $members );
 		if ( true !== $allowed ) {
+			$this->rollback();
 			return $allowed;
 		}
-		global $wpdb;
 		$table = BookingSchema::invitations_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY created_at ASC, id ASC LIMIT 100", $venue_term_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Private venue invitations.
-		return array_map( array( $this, 'hydrate_invitation' ), (array) $rows );
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY created_at ASC, id ASC LIMIT 100 FOR UPDATE", $venue_term_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Private venue invitations under the same authorization transaction.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return $this->rollback_error( 'venue_invitation_read_failed', __( 'Venue invitations could not be read.', 'extrachill-events' ) );
+		}
+		$result = array_map( array( $this, 'hydrate_invitation' ), (array) $rows );
+		if ( ! $this->commit() ) {
+			return $this->commit_error();
+		}
+		return $result;
 	}
 
 	/**
@@ -481,6 +515,7 @@ class VenueOnboardingRepository {
 		$row['is_owner']    = (bool) (int) $row['is_owner'];
 		$row['resolved_at'] = empty( $row['resolved_at'] ) ? null : (string) $row['resolved_at'];
 		$row['_token_hash'] = (string) $row['token_hash'];
+		$row['_email_hash'] = (string) $row['email_hash'];
 		unset( $row['token_hash'], $row['email_hash'] );
 		return $row;
 	}
@@ -491,7 +526,7 @@ class VenueOnboardingRepository {
 	 * @param array $invitation Internal invitation row.
 	 */
 	public function public_invitation( array $invitation ): array {
-		unset( $invitation['_token_hash'] );
+		unset( $invitation['_token_hash'], $invitation['_email_hash'] );
 		return $invitation;
 	}
 
@@ -532,9 +567,6 @@ class VenueOnboardingRepository {
 		if ( ! is_array( $preview ) ) {
 			return is_wp_error( $preview ) ? $preview : $this->not_found( 'venue_invitation_not_found' );
 		}
-		if ( self::INVITE_CANCELLED === $action && self::INVITE_CANCELLED === $preview['status'] ) {
-			return $preview;
-		}
 		$started = $this->begin_and_lock_venue( $preview['venue_term_id'] );
 		if ( is_wp_error( $started ) ) {
 			return $started;
@@ -550,6 +582,12 @@ class VenueOnboardingRepository {
 			return $allowed;
 		}
 		$current = $this->get_invitation_by_id( $invitation_id, true );
+		if ( self::INVITE_CANCELLED === $action && is_array( $current ) && self::INVITE_CANCELLED === $current['status'] ) {
+			if ( ! $this->commit() ) {
+				return $this->commit_error();
+			}
+			return $current;
+		}
 		if ( ! is_array( $current ) || self::INVITE_PENDING !== $current['status'] ) {
 			$this->rollback();
 			return is_array( $current ) ? $this->transition_conflict( 'venue_invitation_transition_conflict', $current ) : $this->not_found( 'venue_invitation_not_found' );

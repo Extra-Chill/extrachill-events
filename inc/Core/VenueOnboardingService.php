@@ -22,10 +22,14 @@ class VenueOnboardingService {
 	/** Invitation token service. */
 	private $tokens;
 
+	/** Venue membership authorization. */
+	private $authorization;
+
 	/** Build the onboarding policy service. */
-	public function __construct( ?VenueOnboardingRepository $repository = null, ?VenueInvitationToken $tokens = null ) {
-		$this->tokens     = $tokens ? $tokens : new VenueInvitationToken();
-		$this->repository = $repository ? $repository : new VenueOnboardingRepository( $this->tokens );
+	public function __construct( ?VenueOnboardingRepository $repository = null, ?VenueInvitationToken $tokens = null, ?VenueAuthorization $authorization = null ) {
+		$this->tokens        = $tokens ? $tokens : new VenueInvitationToken();
+		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
+		$this->repository    = $repository ? $repository : new VenueOnboardingRepository( $this->tokens, $this->authorization );
 	}
 
 	/** Submit a venue claim. */
@@ -60,6 +64,10 @@ class VenueOnboardingService {
 		$email = strtolower( sanitize_email( $email ) );
 		if ( ! is_email( $email ) ) {
 			return new \WP_Error( 'invalid_venue_invitation_email', __( 'A valid invitation email is required.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$allowed = $this->authorization->authorize( $actor_user_id, $venue_term_id, VenueAuthorization::ACTION_MANAGE_MEMBERS );
+		if ( true !== $allowed ) {
+			return $allowed;
 		}
 
 		$account = $this->resolve_account( $email );

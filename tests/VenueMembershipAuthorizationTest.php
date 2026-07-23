@@ -361,6 +361,20 @@ final class VenueMembershipWpdb {
 	public function get_results( $query, $output = null ) {
 		unset( $output );
 		$this->last_error = '';
+		if ( false !== strpos( $query, 'ec_venue_invitations' ) ) {
+			$rows = array_values( $this->rows['wp_7_ec_venue_invitations'] ?? array() );
+			if ( preg_match( '/venue_term_id = (\d+)/', $query, $match ) ) {
+				$rows = array_values(
+					array_filter(
+						$rows,
+						static function ( $row ) use ( $match ) {
+							return (int) $row['venue_term_id'] === (int) $match[1];
+						}
+					)
+				);
+			}
+			return $rows;
+		}
 		if ( false !== strpos( $query, 'SELECT member.*' ) && is_callable( $this->before_list ) ) {
 			$callback          = $this->before_list;
 			$this->before_list = null;
@@ -525,6 +539,9 @@ final class VenueMembershipWpdb {
 			if ( preg_match( '/venue_term_id = (\d+) AND claimant_user_id = (\d+)/', $query, $claim ) && (int) $row['venue_term_id'] === (int) $claim[1] && (int) $row['claimant_user_id'] === (int) $claim[2] ) {
 				return $row;
 			}
+			if ( preg_match( '/venue_term_id = (\d+) AND user_id = (\d+)/', $query, $invitation ) && (int) $row['venue_term_id'] === (int) $invitation[1] && (int) $row['user_id'] === (int) $invitation[2] ) {
+				return $row;
+			}
 		}
 		return null;
 	}
@@ -624,6 +641,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		);
 	}
 
+	private function email_hash( string $email ): string {
+		return hash_hmac( 'sha256', strtolower( $email ), wp_salt( 'auth' ) );
+	}
+
 	public function test_capability_scope_and_inactive_statuses_fail_closed(): void {
 		$authorization = new VenueAuthorization();
 		$this->create_member( 55, 3, true );
@@ -646,8 +667,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 
 		unset( $GLOBALS['venue_membership_test']['team_access'][6] );
 		$this->assertFalse( $authorization->can( 6, 56, VenueAuthorization::ACTION_ACCESS_VENUE ) );
+		$this->assertTrue( $authorization->can( 6, 56, VenueAuthorization::ACTION_MANAGE_MEMBERS ) );
 		$GLOBALS['venue_membership_test']['feature_available'] = false;
 		$this->assertFalse( $authorization->can( 3, 55, VenueAuthorization::ACTION_ACCESS_VENUE ) );
+		$this->assertTrue( $authorization->can( 3, 55, VenueAuthorization::ACTION_MANAGE_MEMBERS ) );
 	}
 
 	public function test_administrator_override_validates_venue_and_cross_venue_access_is_denied(): void {
@@ -857,14 +880,30 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'venue_claim_version_conflict', $onboarding->review_claim( 1, $claim['id'], VenueOnboardingRepository::CLAIM_REJECTED, 1 )->get_error_code() );
 	}
 
+	public function test_claims_and_invitations_are_reciprocally_exclusive_under_the_venue_lock(): void {
+		$onboarding = new VenueOnboardingRepository();
+		$this->create_member( 55, 2, true );
+		$token  = ( new VenueInvitationToken() )->generate();
+		$invite = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+
+		$this->assertSame( VenueOnboardingRepository::INVITE_PENDING, $invite['status'] );
+		$this->assertSame( 'venue_claim_invitation_exists', $onboarding->submit_claim( 7, 55 )->get_error_code() );
+
+		$claim = $onboarding->submit_claim( 6, 55 );
+		$this->assertSame( VenueOnboardingRepository::CLAIM_PENDING, $claim['status'] );
+		$result = $onboarding->create_invitation( 2, 55, 6, false, $this->email_hash( 'member6@example.com' ), $token, 3600 );
+		$this->assertSame( 'venue_invitation_claim_exists', $result->get_error_code() );
+	}
+
 	public function test_invitation_acceptance_is_single_use_and_exactly_bound(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
-		$token      = ( new VenueInvitationToken() )->generate();
-		$invite     = $onboarding->create_invitation( 1, 55, 7, false, hash( 'sha256', 'user@example.com' ), $token, 3600 );
+		$token  = ( new VenueInvitationToken() )->generate();
+		$invite = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
 
 		$this->assertArrayNotHasKey( 'token_hash', $invite );
 		$this->assertArrayNotHasKey( 'email_hash', $invite );
+		$this->assertArrayNotHasKey( '_email_hash', $onboarding->public_invitation( $invite ) );
 		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 56, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, true, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 6, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
@@ -875,10 +914,23 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 	}
 
+	public function test_invitation_acceptance_rechecks_current_account_email_binding(): void {
+		$onboarding = new VenueOnboardingRepository();
+		$this->create_member( 55, 2, true );
+		$token  = ( new VenueInvitationToken() )->generate();
+		$invite = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+
+		$GLOBALS['venue_membership_test']['users'][7]->user_email = 'changed@example.com';
+		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+
+		$this->assertSame( 'invalid_venue_invitation', $result->get_error_code() );
+		$this->assertSame( VenueAuthorization::STATUS_INVITED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
+	}
+
 	public function test_first_active_invitation_must_bootstrap_an_owner(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$token      = ( new VenueInvitationToken() )->generate();
-		$invite     = $onboarding->create_invitation( 1, 55, 7, false, hash( 'sha256', 'existing@example.com' ), $token, 3600 );
+		$invite     = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
 
 		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( 'venue_membership_owner_required', $result->get_error_code() );
@@ -890,7 +942,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$onboarding = new VenueOnboardingRepository();
 		$tokens     = new VenueInvitationToken();
 		$old_token  = $tokens->generate();
-		$invite     = $onboarding->create_invitation( 2, 55, 7, true, hash( 'sha256', 'new@example.com' ), $old_token, 3600 );
+		$invite     = $onboarding->create_invitation( 2, 55, 7, true, $this->email_hash( 'existing@example.com' ), $old_token, 3600 );
 		$new_token  = $tokens->generate();
 		$rotated    = $onboarding->resend_invitation( 2, $invite['id'], 1, $new_token, 3600 );
 
@@ -909,21 +961,21 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$onboarding = new VenueOnboardingRepository();
 		$tokens     = new VenueInvitationToken();
 		$token      = $tokens->generate();
-		$invite     = $onboarding->create_invitation( 1, 55, 7, false, hash( 'sha256', 'private@example.com' ), $token, 3600 );
+		$invite     = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
 		$rejected   = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_REJECTED );
 		$this->assertSame( VenueOnboardingRepository::INVITE_REJECTED, $rejected['status'] );
 		$this->assertSame( VenueAuthorization::STATUS_REVOKED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
 
-		$owner  = $this->create_member( 56, 2, true );
-		$token2 = $tokens->generate();
-		$invite2 = $onboarding->create_invitation( 2, 56, 6, false, hash( 'sha256', 'cancel@example.com' ), $token2, 3600 );
+		$owner     = $this->create_member( 56, 2, true );
+		$token2    = $tokens->generate();
+		$invite2   = $onboarding->create_invitation( 2, 56, 6, false, $this->email_hash( 'member6@example.com' ), $token2, 3600 );
 		$cancelled = $onboarding->cancel_invitation( 2, $invite2['id'], 1 );
 		$this->assertSame( VenueOnboardingRepository::INVITE_CANCELLED, $cancelled['status'] );
 		$this->assertSame( $cancelled, $onboarding->cancel_invitation( 2, $invite2['id'], 1 ) );
 		$this->assertTrue( $owner['is_owner'] );
 
 		$token3  = $tokens->generate();
-		$invite3 = $onboarding->create_invitation( 2, 56, 5, false, hash( 'sha256', 'expired@example.com' ), $token3, 3600 );
+		$invite3 = $onboarding->create_invitation( 2, 56, 5, false, $this->email_hash( 'member5@example.com' ), $token3, 3600 );
 		$GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'][ $invite3['id'] ]['expires_at'] = '2000-01-01 00:00:00';
 		$expired = $onboarding->respond_to_invitation( 5, $invite3['public_id'], $token3, 56, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( 'venue_invitation_expired', $expired->get_error_code() );
@@ -936,6 +988,37 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 			$this->assertStringNotContainsString( 'token', strtolower( $audit['payload'] ) );
 			$this->assertStringNotContainsString( 'email', strtolower( $audit['payload'] ) );
 		}
+	}
+
+	public function test_cancelled_invitation_is_not_disclosed_to_another_venue_owner(): void {
+		$onboarding = new VenueOnboardingRepository();
+		$this->create_member( 55, 2, true );
+		$this->create_member( 56, 3, true );
+		$token     = ( new VenueInvitationToken() )->generate();
+		$invite    = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$cancelled = $onboarding->cancel_invitation( 2, $invite['id'], 1 );
+
+		$this->assertSame( VenueOnboardingRepository::INVITE_CANCELLED, $cancelled['status'] );
+		$this->assertSame( 'venue_action_forbidden', $onboarding->cancel_invitation( 3, $invite['id'], 2 )->get_error_code() );
+	}
+
+	public function test_invitation_listing_rechecks_owner_authority_under_the_venue_lock(): void {
+		$onboarding = new VenueOnboardingRepository();
+		$this->create_member( 55, 2, true );
+		$token = ( new VenueInvitationToken() )->generate();
+		$onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+
+		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
+			foreach ( $wpdb->rows['wp_7_ec_venue_members'] as &$row ) {
+				if ( 2 === (int) $row['user_id'] ) {
+					$row['status'] = VenueAuthorization::STATUS_REVOKED;
+				}
+			}
+			unset( $row );
+		};
+
+		$result = $onboarding->list_invitations( 2, 55 );
+		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
 	}
 
 	public function test_existing_and_new_user_invitations_use_account_and_queued_mail_primitives(): void {
@@ -963,6 +1046,33 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertTrue( $GLOBALS['venue_membership_test']['created_account_input']['unclaimed'] );
 		$this->assertSame( 'venue_invitation', $GLOBALS['venue_membership_test']['created_account_input']['registration_source'] );
 		$this->assertStringContainsString( 'action=rp', $GLOBALS['venue_membership_test']['queued_emails'][1]['context']['cta_url'] );
+	}
+
+	public function test_account_creation_requires_fresh_membership_authority_but_not_booking_access(): void {
+		$this->create_member( 55, 2, true );
+		unset( $GLOBALS['venue_membership_test']['team_access'][2] );
+		$GLOBALS['venue_membership_test']['feature_available'] = false;
+
+		$GLOBALS['venue_membership_test']['ability_objects']['extrachill/create-user'] = new class() {
+			public function execute( array $input ) {
+				++$GLOBALS['venue_membership_test']['account_create_calls'];
+				$user_id = 8 + $GLOBALS['venue_membership_test']['account_create_calls'];
+				$GLOBALS['venue_membership_test']['users'][ $user_id ] = new WP_User( $user_id, $input['email'] );
+				return $user_id;
+			}
+		};
+		$GLOBALS['venue_membership_test']['account_create_calls'] = 0;
+
+		$service = new VenueOnboardingService();
+
+		$allowed = $service->invite( 2, 55, 'authorized-new@example.com', false );
+		$this->assertTrue( $allowed['account_created'] );
+		$this->assertSame( 1, $GLOBALS['venue_membership_test']['account_create_calls'] );
+		$this->assertFalse( ( new VenueAuthorization() )->can( 2, 55, VenueAuthorization::ACTION_ACCESS_VENUE ) );
+
+		$denied = $service->invite( 3, 55, 'unauthorized-new@example.com', false );
+		$this->assertSame( 'venue_action_forbidden', $denied->get_error_code() );
+		$this->assertSame( 1, $GLOBALS['venue_membership_test']['account_create_calls'] );
 	}
 
 	public function test_config_abilities_round_trip_revision_and_audit(): void {

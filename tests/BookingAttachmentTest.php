@@ -49,6 +49,7 @@ final class BookingAttachmentTest extends TestCase {
 		);
 		$GLOBALS['wpdb']                                      = new BookingWpdb();
 		$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'] = array();
+		$GLOBALS['extrachill_events_booking_database_connection_quarantined'] = false;
 		$this->provider                                       = new BookingTestPrivateFileProvider();
 		$this->provider->objects['private_object_one_123456'] = $this->metadata( 'press-kit.pdf', 'application/pdf' );
 		$this->provider->objects['private_object_two_123456'] = $this->metadata( 'stage-plot.pdf', 'application/pdf' );
@@ -280,6 +281,28 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertCount( 0, $this->provider->released );
 	}
 
+	public function test_authorization_uses_the_membership_rows_locked_by_the_transaction(): void {
+		$booking       = $this->booking();
+		$authorization = new BookingTestAuthorization();
+		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][1] = array(
+			'id'                 => 1,
+			'venue_term_id'      => 55,
+			'user_id'            => 12,
+			'is_owner'           => 0,
+			'status'             => VenueAuthorization::STATUS_ACTIVE,
+			'version'            => 1,
+			'created_by_user_id' => 12,
+			'created_at'         => '2026-07-23 00:00:00',
+			'updated_at'         => '2026-07-23 00:00:00',
+			'revoked_at'         => null,
+		);
+		$result = $this->service( $authorization )->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_code() : '' );
+		$this->assertCount( 1, $authorization->locked_calls );
+		$this->assertSame( 1, $authorization->locked_calls[0][3][0]['id'] );
+		$this->assertSame( array(), $authorization->direct_calls, 'Authorization must not perform an unlocked membership reread.' );
+	}
+
 	public function test_failed_claim_compensation_is_never_silently_ignored(): void {
 		$booking = $this->booking();
 		$this->provider->objects['bad_mime_object_123456789'] = $this->metadata( 'press-kit.pdf', 'image/jpeg' );
@@ -428,6 +451,54 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertFalse( $GLOBALS['wpdb']->transaction_active );
 		$this->assertSame( array(), $GLOBALS['wpdb']->reference_locks );
 		$this->assertSame( 1, $GLOBALS['wpdb']->rollback_queries );
+	}
+
+	public function test_rollback_uncertainty_disconnects_and_quarantines_without_explicit_unlock(): void {
+		$booking = $this->booking();
+		$this->provider->throw_claim                 = true;
+		$GLOBALS['wpdb']->fail_transaction_rollback = true;
+		$result = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'booking_attachment_transaction_rollback_failed', $result->get_error_code() );
+		$this->assertTrue( $result->get_error_data()['connection_quarantined'] );
+		$this->assertTrue( $result->get_error_data()['disconnect_confirmed'] );
+		$this->assertSame( 1, $GLOBALS['wpdb']->close_calls );
+		$this->assertFalse( $GLOBALS['wpdb']->ready );
+		$this->assertSame( array( 'get' ), array_column( $GLOBALS['wpdb']->lock_names, 0 ), 'A quarantined connection must not claim an explicit advisory unlock.' );
+		$this->assertSame( 1, $this->service()->reference_lock_uncertainty()['count'] );
+
+		$retry = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'booking_attachment_database_connection_quarantined', $retry->get_error_code() );
+		$this->assertSame( 1, $GLOBALS['wpdb']->reference_lock_queries );
+	}
+
+	public function test_commit_and_rollback_uncertainty_disconnects_without_compensating_claim(): void {
+		$booking = $this->booking();
+		$GLOBALS['wpdb']->fail_transaction_commit   = true;
+		$GLOBALS['wpdb']->fail_transaction_rollback = true;
+		$result = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
+		$this->assertSame( 'booking_attachment_transaction_commit_uncertain', $result->get_error_code() );
+		$this->assertTrue( $result->get_error_data()['connection_quarantined'] );
+		$this->assertSame( array(), $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] ?? array(), 'Disconnect must roll back uncommitted metadata in the fake connection.' );
+		$this->assertSame( 'active', array_values( $this->provider->claim_records )[0]['state'], 'Uncertain cross-store claims require reconciliation, not compensation.' );
+		$this->assertSame( array(), $this->provider->released );
+		$this->assertSame( array( 'get' ), array_column( $GLOBALS['wpdb']->lock_names, 0 ) );
+	}
+
+	public function test_fake_named_locks_track_acquisition_and_recursive_ownership(): void {
+		$wpdb = $GLOBALS['wpdb'];
+		$wpdb->get_lock_result = 0;
+		$this->assertSame( 0, $wpdb->get_var( "SELECT GET_LOCK('test-lock', 0)" ) );
+		$this->assertSame( array(), $wpdb->reference_locks );
+		$this->assertNull( $wpdb->get_var( "SELECT RELEASE_LOCK('test-lock')" ) );
+
+		$wpdb->get_lock_result = 1;
+		$this->assertSame( 1, $wpdb->get_var( "SELECT GET_LOCK('test-lock', 0)" ) );
+		$this->assertSame( 1, $wpdb->get_var( "SELECT GET_LOCK('test-lock', 0)" ) );
+		$this->assertSame( 2, $wpdb->reference_locks['test-lock'] );
+		$this->assertSame( 1, $wpdb->get_var( "SELECT RELEASE_LOCK('test-lock')" ) );
+		$this->assertSame( 1, $wpdb->reference_locks['test-lock'] );
+		$this->assertSame( 1, $wpdb->get_var( "SELECT RELEASE_LOCK('test-lock')" ) );
+		$this->assertSame( array(), $wpdb->reference_locks );
 	}
 
 	public function test_committed_unlock_uncertainty_preserves_claim_and_blocks_recursive_locking(): void {

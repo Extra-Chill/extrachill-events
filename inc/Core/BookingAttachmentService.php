@@ -862,6 +862,9 @@ class BookingAttachmentService {
 	 * @param callable $callback  Transaction body after all locks.
 	 */
 	private function authorized_reference_transaction_many( array $bookings, ?int $actor_id, string $reference, callable $callback ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		$lock_name = null;
 		$result    = $this->transaction(
 			function () use ( $bookings, $actor_id, $reference, $callback, &$lock_name ) {
@@ -879,6 +882,11 @@ class BookingAttachmentService {
 			}
 		);
 		if ( is_string( $lock_name ) ) {
+			$error_data = is_wp_error( $result ) ? (array) $result->get_error_data() : array();
+			if ( true === ( $error_data['connection_quarantined'] ?? false ) ) {
+				$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'][ $lock_name ] = true;
+				return $result;
+			}
 			$released = $this->release_reference_lock( $lock_name );
 			if ( is_wp_error( $released ) ) {
 				$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'][ $lock_name ] = true;
@@ -916,7 +924,8 @@ class BookingAttachmentService {
 	 */
 	private function lock_and_authorize_many( array $bookings, ?int $actor_id ) {
 		global $wpdb;
-		$venues = array();
+		$venues             = array();
+		$locked_memberships = array();
 		foreach ( $bookings as $booking ) {
 			$venues[ (int) $booking['venue_term_id'] ] = true;
 		}
@@ -924,10 +933,11 @@ class BookingAttachmentService {
 		sort( $venue_ids, SORT_NUMERIC );
 		$memberships = BookingSchema::memberships_table();
 		foreach ( $venue_ids as $venue_id ) {
-			$wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$memberships} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $venue_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Global order locks authority ranges first.
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$memberships} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $venue_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Global order locks authority ranges first.
 			if ( '' !== (string) $wpdb->last_error ) {
 				return new \WP_Error( 'booking_authorization_lock_failed', __( 'Venue booking authority could not be locked.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 			}
+			$locked_memberships[ $venue_id ] = (array) $rows;
 		}
 		ksort( $bookings, SORT_NUMERIC );
 		$bookings_table = BookingSchema::bookings_table();
@@ -941,7 +951,7 @@ class BookingAttachmentService {
 			return true;
 		}
 		foreach ( $venue_ids as $venue_id ) {
-			$allowed = $this->authorization->authorize( $actor_id, $venue_id, VenueAuthorization::ACTION_ACCESS_VENUE );
+			$allowed = $this->authorization->authorize_locked( $actor_id, $venue_id, VenueAuthorization::ACTION_ACCESS_VENUE, $locked_memberships[ $venue_id ] );
 			if ( true !== $allowed ) {
 				return is_wp_error( $allowed ) ? $allowed : new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) );
 			}
@@ -1099,6 +1109,9 @@ class BookingAttachmentService {
 	 */
 	private function transaction( callable $callback ) {
 		global $wpdb;
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		try {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Coordinates private metadata and audit writes.
 			$started = $wpdb->query( 'START TRANSACTION' );
@@ -1131,7 +1144,7 @@ class BookingAttachmentService {
 			} catch ( \Throwable $throwable ) {
 				$rolled_back = false;
 			}
-			return new \WP_Error(
+			$error = new \WP_Error(
 				'booking_attachment_transaction_commit_uncertain',
 				__( 'The attachment transaction outcome could not be confirmed.', 'extrachill-events' ),
 				array(
@@ -1139,6 +1152,7 @@ class BookingAttachmentService {
 					'rollback_confirmed' => false !== $rolled_back,
 				)
 			);
+			return false === $rolled_back ? $this->quarantine_connection( $error ) : $error;
 		}
 		return $result;
 	}
@@ -1156,15 +1170,61 @@ class BookingAttachmentService {
 		} catch ( \Throwable $throwable ) {
 			$rolled_back = false;
 		}
-		return false !== $rolled_back
-			? $cause
-			: new \WP_Error(
+		if ( false !== $rolled_back ) {
+			return $cause;
+		}
+		return $this->quarantine_connection(
+			new \WP_Error(
 				'booking_attachment_transaction_rollback_failed',
 				__( 'The attachment transaction could not be rolled back.', 'extrachill-events' ),
 				array(
 					'cause'          => $cause->get_error_code(),
 					'database_error' => $wpdb->last_error,
 				)
-			);
+			)
+		);
+	}
+
+	/**
+	 * Prevent any further query on a connection with unknown transaction state.
+	 *
+	 * @param \WP_Error $cause Failure that exposed rollback uncertainty.
+	 */
+	private function quarantine_connection( \WP_Error $cause ): \WP_Error {
+		global $wpdb;
+		$GLOBALS['extrachill_events_booking_database_connection_quarantined'] = true;
+		$closed = false;
+		try {
+			$closed = method_exists( $wpdb, 'close' ) && true === $wpdb->close();
+		} catch ( \Throwable $throwable ) {
+			unset( $throwable );
+		}
+		if ( property_exists( $wpdb, 'ready' ) ) {
+			$wpdb->ready = false;
+		}
+		$data                           = (array) $cause->get_error_data();
+		$data['rollback_uncertain']     = true;
+		$data['connection_quarantined'] = true;
+		$data['disconnect_confirmed']   = $closed;
+		$data['lock_uncertain']         = true;
+		$data['recovery']               = 'abort_request_and_reconcile';
+		return new \WP_Error( $cause->get_error_code(), $cause->get_error_message(), $data );
+	}
+
+	/** Whether this request has retired its database connection after rollback uncertainty. */
+	private function connection_is_quarantined(): bool {
+		return true === ( $GLOBALS['extrachill_events_booking_database_connection_quarantined'] ?? false );
+	}
+
+	/** Return the stable fail-closed response for a retired request connection. */
+	private function connection_quarantined_error(): \WP_Error {
+		return new \WP_Error(
+			'booking_attachment_database_connection_quarantined',
+			__( 'The database connection is unavailable after an uncertain attachment rollback.', 'extrachill-events' ),
+			array(
+				'connection_quarantined' => true,
+				'recovery'               => 'abort_request_and_reconcile',
+			)
+		);
 	}
 }

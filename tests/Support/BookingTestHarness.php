@@ -335,6 +335,8 @@ final class BookingWpdb {
 	public $fail_read_after_conversion_update = false;
 	public $fail_clock_reads                  = false;
 	public $database_now                     = null;
+	public $ready                            = true;
+	public $close_calls                      = 0;
 	private $transaction_snapshot            = null;
 
 	public function get_charset_collate() {
@@ -474,24 +476,36 @@ final class BookingWpdb {
 	}
 
 	public function get_var( $query ) {
+		if ( ! $this->ready ) {
+			$this->last_error = 'simulated closed database connection';
+			return null;
+		}
 		$this->last_error = '';
 		$database_now     = $this->current_database_time();
 		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', (\d+)\)/", $query, $match ) ) {
-			$this->lock_names[] = array( 'get', stripslashes( $match[1] ) );
+			$name               = stripslashes( $match[1] );
+			$this->lock_names[] = array( 'get', $name );
 			++$this->reference_lock_queries;
-			$this->reference_locks[ stripslashes( $match[1] ) ] = true;
-			$this->lock_sequence[] = 'reference';
-			if ( is_callable( $this->after_reference_lock ) ) {
+			$result = $this->get_lock_result;
+			if ( 1 === (int) $result ) {
+				$this->reference_locks[ $name ] = ( $this->reference_locks[ $name ] ?? 0 ) + 1;
+				$this->lock_sequence[]          = 'reference';
+			}
+			if ( 1 === (int) $result && is_callable( $this->after_reference_lock ) ) {
 				$callback                   = $this->after_reference_lock;
 				$this->after_reference_lock = null;
 				$callback();
 			}
-			return $this->get_lock_result;
+			return $result;
 		}
 		if ( preg_match( "/SELECT RELEASE_LOCK\('([^']+)'\)/", $query, $match ) ) {
-			$this->lock_names[] = array( 'release', stripslashes( $match[1] ) );
+			$name               = stripslashes( $match[1] );
+			$this->lock_names[] = array( 'release', $name );
 			if ( $this->fail_reference_unlock ) {
 				return 0;
+			}
+			if ( ! isset( $this->reference_locks[ $name ] ) ) {
+				return null;
 			}
 			$result = empty( $this->release_lock_results ) ? $this->release_lock_result : array_shift( $this->release_lock_results );
 			if ( ! empty( $this->release_lock_errors ) ) {
@@ -500,7 +514,10 @@ final class BookingWpdb {
 			if ( 1 !== (int) $result ) {
 				return $result;
 			}
-			unset( $this->reference_locks[ stripslashes( $match[1] ) ] );
+			--$this->reference_locks[ $name ];
+			if ( $this->reference_locks[ $name ] < 1 ) {
+				unset( $this->reference_locks[ $name ] );
+			}
 			if ( is_callable( $this->after_reference_unlock ) ) {
 				$callback                     = $this->after_reference_unlock;
 				$this->after_reference_unlock = null;
@@ -1012,6 +1029,10 @@ final class BookingWpdb {
 	}
 
 	public function query( $query ) {
+		if ( ! $this->ready ) {
+			$this->last_error = 'simulated closed database connection';
+			return false;
+		}
 		$this->last_query = $query;
 		$this->last_error = '';
 		if ( 'START TRANSACTION' === $query ) {
@@ -1182,6 +1203,18 @@ final class BookingWpdb {
 		return 1;
 	}
 
+	public function close() {
+		++$this->close_calls;
+		if ( $this->transaction_active && is_array( $this->transaction_snapshot ) ) {
+			$this->rows = $this->transaction_snapshot;
+		}
+		$this->ready                = false;
+		$this->transaction_active   = false;
+		$this->reference_locks      = array();
+		$this->transaction_snapshot = null;
+		return true;
+	}
+
 	public function update( $table, $data, $where ) {
 		$this->last_error = '';
 		if ( $this->fail_updates ) {
@@ -1226,22 +1259,27 @@ require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMutationAbiliti
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingEventAbilities.php';
 
 final class BookingTestAuthorization extends VenueAuthorization {
-	public $calls   = array();
-	public $allowed = array();
+	public $calls        = array();
+	public $direct_calls = array();
+	public $locked_calls = array();
+	public $allowed      = array();
 	public $require_locked_membership = false;
 	public function __construct( array $allowed = array() ) {
 		parent::__construct();
 		$this->allowed = array_merge( array( '12:55' => true ), $allowed );
 	}
 	public function authorize( int $user_id, int $venue_term_id, string $action ) {
-		$this->calls[] = array( $user_id, $venue_term_id, $action );
+		$this->calls[]        = array( $user_id, $venue_term_id, $action );
+		$this->direct_calls[] = array( $user_id, $venue_term_id, $action );
 		return ! empty( $this->allowed[ $user_id . ':' . $venue_term_id ] ) ? true : new WP_Error( 'venue_action_forbidden' );
 	}
 	public function authorize_locked( int $user_id, int $venue_term_id, string $action, array $locked_memberships ) {
+		$this->calls[]        = array( $user_id, $venue_term_id, $action );
+		$this->locked_calls[] = array( $user_id, $venue_term_id, $action, $locked_memberships );
 		if ( $this->require_locked_membership ) {
 			return parent::authorize_locked( $user_id, $venue_term_id, $action, $locked_memberships );
 		}
-		return $this->authorize( $user_id, $venue_term_id, $action );
+		return ! empty( $this->allowed[ $user_id . ':' . $venue_term_id ] ) ? true : new WP_Error( 'venue_action_forbidden' );
 	}
 }
 

@@ -115,6 +115,16 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	 * @var int
 	 */
 	private $actor_id;
+	/** Whether the membership contender remained blocked during claim.
+	 *
+	 * @var bool
+	 */
+	private $membership_update_waited = false;
+	/** Whether the named-lock contender remained blocked during retirement.
+	 *
+	 * @var bool
+	 */
+	private $reference_lock_waited = false;
 
 	/** Install the production schema and create two real database sessions. */
 	public function set_up(): void {
@@ -186,7 +196,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->provider->claim_probe = function () use ( $memberships ): void {
 			$this->contender->query( "UPDATE {$memberships} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}", MYSQLI_ASYNC ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent test connection races the production transaction.
 			usleep( 250000 );
-			$this->assertTrue( $this->async_query_is_waiting(), 'Membership revocation bypassed the rows used by production attachment authorization.' );
+			$this->membership_update_waited = $this->async_query_is_waiting();
 		};
 
 		$service    = new BookingAttachmentService( null, null, null, null, $this->provider );
@@ -202,6 +212,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		);
 		$this->assertIsArray( $attachment, is_wp_error( $attachment ) ? $attachment->get_error_code() : '' );
 		$this->assertTrue( $this->reap_async_update(), 'Membership revocation did not complete after the production transaction committed.' );
+		$this->assertTrue( $this->membership_update_waited, 'Membership revocation bypassed the rows used by production attachment authorization.' );
 		$this->assertSame( 1, $this->contender->affected_rows );
 
 		$this->contender->query( "UPDATE {$memberships} SET status = 'active' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Restores isolated fixture authority for cleanup.
@@ -214,7 +225,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			$escaped = $this->contender->real_escape_string( $lock_name );
 			$this->contender->query( "SELECT GET_LOCK('{$escaped}', 3)", MYSQLI_ASYNC );
 			usleep( 250000 );
-			$this->assertTrue( $this->async_query_is_waiting(), 'A second session acquired the reference domain while production cleanup was retiring bytes.' );
+			$this->reference_lock_waited = $this->async_query_is_waiting();
 		};
 		$cleanup                      = $service->cleanup(
 			array(
@@ -227,6 +238,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		);
 		$this->assertSame( 1, $cleanup['purged'] ?? 0, is_wp_error( $cleanup ) ? $cleanup->get_error_code() : '' );
 		$result = $this->contender->reap_async_query();
+		$this->assertTrue( $this->reference_lock_waited, 'A second session acquired the reference domain while production cleanup was retiring bytes.' );
 		$this->assertInstanceOf( mysqli_result::class, $result );
 		$this->assertSame( 1, (int) $result->fetch_row()[0], 'The second session did not acquire the reference domain after cleanup committed.' );
 		$this->assertSame( 1, (int) $this->contender->query( "SELECT RELEASE_LOCK('{$lock_name}')" )->fetch_row()[0] );

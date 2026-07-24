@@ -2,7 +2,7 @@
 /**
  * Production booking-attachment service coverage across two MySQL sessions.
  *
- * @package ExtraChillEvents\Tests\Integration
+ * @package ExtraChillEvents\Tests\MySQLIntegration
  */
 
 // phpcs:disable Generic.Files.OneObjectStructurePerFile.MultipleFound,Squiz.Commenting.FunctionComment.MissingParamTag,WordPress.DB.RestrictedFunctions,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- PHPUnit fixture keeps its probe provider local and requires a second raw MySQL session.
@@ -61,11 +61,13 @@ final class BookingAttachmentMySQLProbeProvider implements BookingPrivateFilePro
 	}
 
 	/** Return an empty reconciliation inventory. */
-	public function inspect_claims() {
+	public function inspect_claims( ?string $cursor = null ) {
+		unset( $cursor );
 		return array(
-			'claims'    => array(),
-			'uncertain' => 0,
-			'truncated' => false,
+			'claims'       => array(),
+			'uncertain'    => 0,
+			'truncated'    => false,
+			'continuation' => null,
 		);
 	}
 

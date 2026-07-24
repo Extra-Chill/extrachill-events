@@ -7,7 +7,7 @@
 	failOnWarning="true">
 	<testsuites>
 		<testsuite name="booking-attachment-mysql">
-			<file>tests/Integration/BookingAttachmentMySQLIntegrationTest.php</file>
+			<file>tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php</file>
 		</testsuite>
 	</testsuites>
 </phpunit>

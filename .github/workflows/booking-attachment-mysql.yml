@@ -14,8 +14,8 @@ on:
       - inc/Core/VenueAuthorization.php
       - inc/Core/VenueMembershipRepository.php
       - phpunit-booking-mysql.xml.dist
-      - tests/Integration/BookingAttachmentMySQLIntegrationTest.php
-      - tests/Integration/booking-attachment-mysql-bootstrap.php
+      - tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php
+      - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
 
 permissions:
   contents: read
@@ -75,9 +75,9 @@ jobs:
           set -euo pipefail
           export HOMEBOY_SETTINGS_JSON
           HOMEBOY_SETTINGS_JSON=$(jq -nc \
-            --arg root "/wordpress/wp-content/plugins/extrachill-events/tests/Integration" \
+            --arg root "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration" \
             --arg config "/wordpress/wp-content/plugins/extrachill-events/phpunit-booking-mysql.xml.dist" \
-            --arg preload "/wordpress/wp-content/plugins/extrachill-events/tests/Integration/booking-attachment-mysql-bootstrap.php" \
+            --arg preload "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php" \
             '{
               database_type: "mysql",
               phpunit_no_tests: "fail",

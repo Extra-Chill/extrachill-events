@@ -2,7 +2,7 @@
 /**
  * External feature-flag dependency for the disposable WordPress integration test.
  *
- * @package ExtraChillEvents\Tests\Integration
+ * @package ExtraChillEvents\Tests\MySQLIntegration
  */
 
 if ( ! function_exists( 'ec_feature_available' ) ) {

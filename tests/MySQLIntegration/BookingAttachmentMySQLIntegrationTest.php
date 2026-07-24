@@ -251,7 +251,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		}
 		$connection = mysqli_init();
 		$port       = $port > 0 ? $port : 3306;
-		$this->assertTrue( mysqli_real_connect( $connection, $host, $user, $pass, $name, $port ), mysqli_connect_error() );
+		$this->assertTrue( mysqli_real_connect( $connection, $host, $user, $pass, $name, $port ), (string) mysqli_connect_error() );
 		$connection->set_charset( 'utf8mb4' );
 		return $connection;
 	}

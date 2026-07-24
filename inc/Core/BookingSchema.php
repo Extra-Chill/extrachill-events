@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '7';
+	public const SCHEMA_VERSION = '8';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -40,6 +40,12 @@ class BookingSchema {
 		return $wpdb->prefix . 'ec_booking_communication_state';
 	}
 
+	/** Get the booking attachments table for the current site. */
+	public static function attachments_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_attachments';
+	}
+
 	/** Get the venue membership table for the current site. */
 	public static function memberships_table(): string {
 		global $wpdb;
@@ -59,6 +65,7 @@ class BookingSchema {
 		$bookings            = self::bookings_table();
 		$activity            = self::activity_table();
 		$communication_state = self::communication_state_table();
+		$attachments         = self::attachments_table();
 		$members             = self::memberships_table();
 		$holds               = self::holds_table();
 		$charset             = $wpdb->get_charset_collate();
@@ -142,6 +149,39 @@ class BookingSchema {
 			KEY booking_status_intent (booking_id, status, intent_id)
 		) ENGINE=InnoDB {$charset};";
 
+		$attachments_sql = "CREATE TABLE {$attachments} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			public_id CHAR(36) NOT NULL,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			uploader_type VARCHAR(20) NOT NULL,
+			uploader_user_id BIGINT UNSIGNED NULL,
+			uploader_reference VARCHAR(191) NULL,
+			artist_term_id BIGINT UNSIGNED NULL,
+			artist_profile_id BIGINT UNSIGNED NULL,
+			purpose VARCHAR(32) NOT NULL,
+			original_filename VARCHAR(255) NOT NULL,
+			mime_type VARCHAR(127) NOT NULL,
+			byte_size BIGINT UNSIGNED NOT NULL,
+			content_hash CHAR(64) NOT NULL,
+			storage_reference VARCHAR(191) NOT NULL,
+			state VARCHAR(20) NOT NULL DEFAULT 'active',
+			idempotency_key VARCHAR(191) NOT NULL,
+			request_hash CHAR(64) NOT NULL,
+			replaces_attachment_id BIGINT UNSIGNED NULL,
+			retired_at DATETIME NULL,
+			purged_at DATETIME NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY public_id (public_id),
+			UNIQUE KEY booking_idempotency (booking_id, idempotency_key),
+			KEY booking_state_created (booking_id, state, created_at),
+			KEY storage_reference_state (storage_reference, state),
+			KEY artist_term_purpose (artist_term_id, purpose),
+			KEY artist_profile_purpose (artist_profile_id, purpose),
+			KEY state_retired (state, retired_at)
+		) ENGINE=InnoDB {$charset};";
+
 		$members_sql = "CREATE TABLE {$members} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			venue_term_id BIGINT UNSIGNED NOT NULL,
@@ -197,11 +237,13 @@ class BookingSchema {
 		$activity_error = (string) $wpdb->last_error;
 		dbDelta( $communication_state_sql );
 		$communication_state_error = (string) $wpdb->last_error;
+		dbDelta( $attachments_sql );
+		$attachments_error = (string) $wpdb->last_error;
 		dbDelta( $members_sql );
 		$members_error = (string) $wpdb->last_error;
 		dbDelta( $holds_sql );
 		$holds_error = (string) $wpdb->last_error;
-		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $members_error || '' !== $holds_error ) {
+		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $attachments_error || '' !== $members_error || '' !== $holds_error ) {
 			$error = new \WP_Error(
 				'booking_schema_dbdelta_failed',
 				__( 'The booking schema could not be reconciled.', 'extrachill-events' ),
@@ -209,6 +251,7 @@ class BookingSchema {
 					'bookings_error'            => $bookings_error,
 					'activity_error'            => $activity_error,
 					'communication_state_error' => $communication_state_error,
+					'attachments_error'         => $attachments_error,
 					'members_error'             => $members_error,
 					'holds_error'               => $holds_error,
 				)
@@ -633,6 +676,67 @@ class BookingSchema {
 					'booking_status_intent' => array(
 						'unique'  => false,
 						'columns' => array( 'booking_id', 'status', 'intent_id' ),
+					),
+				),
+			),
+			self::attachments_table()         => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'id'                     => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'public_id'              => $required( 'char(36)', false ),
+					'booking_id'             => $required( 'bigint unsigned', false ),
+					'uploader_type'          => $required( 'varchar(20)', false ),
+					'uploader_user_id'       => $required( 'bigint unsigned', true ),
+					'uploader_reference'     => $required( 'varchar(191)', true ),
+					'artist_term_id'         => $required( 'bigint unsigned', true ),
+					'artist_profile_id'      => $required( 'bigint unsigned', true ),
+					'purpose'                => $required( 'varchar(32)', false ),
+					'original_filename'      => $required( 'varchar(255)', false ),
+					'mime_type'              => $required( 'varchar(127)', false ),
+					'byte_size'              => $required( 'bigint unsigned', false ),
+					'content_hash'           => $required( 'char(64)', false ),
+					'storage_reference'      => $required( 'varchar(191)', false ),
+					'state'                  => $required( 'varchar(20)', false, array( 'default' => 'active' ) ),
+					'idempotency_key'        => $required( 'varchar(191)', false ),
+					'request_hash'           => $required( 'char(64)', false ),
+					'replaces_attachment_id' => $required( 'bigint unsigned', true ),
+					'retired_at'             => $required( 'datetime', true ),
+					'purged_at'              => $required( 'datetime', true ),
+					'created_at'             => $required( 'datetime', false ),
+					'updated_at'             => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'                 => array(
+						'unique'  => true,
+						'columns' => array( 'id' ),
+					),
+					'public_id'               => array(
+						'unique'  => true,
+						'columns' => array( 'public_id' ),
+					),
+					'booking_idempotency'     => array(
+						'unique'  => true,
+						'columns' => array( 'booking_id', 'idempotency_key' ),
+					),
+					'booking_state_created'   => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'state', 'created_at' ),
+					),
+					'storage_reference_state' => array(
+						'unique'  => false,
+						'columns' => array( 'storage_reference', 'state' ),
+					),
+					'artist_term_purpose'     => array(
+						'unique'  => false,
+						'columns' => array( 'artist_term_id', 'purpose' ),
+					),
+					'artist_profile_purpose'  => array(
+						'unique'  => false,
+						'columns' => array( 'artist_profile_id', 'purpose' ),
+					),
+					'state_retired'           => array(
+						'unique'  => false,
+						'columns' => array( 'state', 'retired_at' ),
 					),
 				),
 			),

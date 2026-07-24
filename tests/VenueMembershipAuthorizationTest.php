@@ -423,14 +423,7 @@ final class VenueMembershipWpdb {
 		if ( false !== strpos( $query, 'ec_venue_invitations' ) ) {
 			$rows = array_values( $this->rows['wp_7_ec_venue_invitations'] ?? array() );
 			if ( preg_match( '/user_id = (\d+)/', $query, $user_match ) ) {
-				$rows = array_values(
-					array_filter(
-						$rows,
-						static function ( $row ) use ( $user_match ) {
-							return (int) $row['user_id'] === (int) $user_match[1];
-						}
-					)
-				);
+				$rows = $this->filter_rows( $rows, 'user_id', (int) $user_match[1] );
 			}
 			if ( preg_match( '/venue_term_id = (\d+)/', $query, $match ) ) {
 				$rows = array_values(
@@ -447,14 +440,7 @@ final class VenueMembershipWpdb {
 		if ( false !== strpos( $query, 'ec_venue_claims' ) ) {
 			$rows = array_values( $this->rows['wp_7_ec_venue_claims'] ?? array() );
 			if ( preg_match( '/claimant_user_id = (\d+)/', $query, $claimant ) ) {
-				$rows = array_values(
-					array_filter(
-						$rows,
-						static function ( $row ) use ( $claimant ) {
-							return (int) $row['claimant_user_id'] === (int) $claimant[1];
-						}
-					)
-				);
+				$rows = $this->filter_rows( $rows, 'claimant_user_id', (int) $claimant[1] );
 			}
 			return $rows;
 		}
@@ -465,14 +451,7 @@ final class VenueMembershipWpdb {
 		}
 		$rows = array_values( $this->rows[ $this->prefix . 'ec_venue_members' ] ?? array() );
 		if ( preg_match( '/WHERE user_id = (\d+)/', $query, $user_match ) ) {
-			$rows = array_values(
-				array_filter(
-					$rows,
-					static function ( $row ) use ( $user_match ) {
-						return (int) $row['user_id'] === (int) $user_match[1];
-					}
-				)
-			);
+			$rows = $this->filter_rows( $rows, 'user_id', (int) $user_match[1] );
 		}
 		if ( preg_match( '/AS actor .*actor.user_id = (\d+)/', $query, $actor ) ) {
 			$authorized = false;
@@ -619,6 +598,12 @@ final class VenueMembershipWpdb {
 		$this->insert_id                          = count( $this->rows[ $table ] ?? array() ) + 1;
 		$row['id']                                = $this->insert_id;
 		$this->rows[ $table ][ $this->insert_id ] = $row;
+	}
+
+	private function filter_rows( array $rows, string $field, int $value ): array {
+		return array_values( array_filter( $rows, static function ( $row ) use ( $field, $value ) {
+			return (int) $row[ $field ] === $value;
+		} ) );
 	}
 
 	private function find_onboarding_row( string $table, string $query ) {
@@ -1120,11 +1105,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	}
 
 	public static function terminal_invitation_status_provider(): array {
-		return array(
-			'cancelled' => array( VenueOnboardingRepository::INVITE_CANCELLED ),
-			'rejected'  => array( VenueOnboardingRepository::INVITE_REJECTED ),
-			'expired'   => array( VenueOnboardingRepository::INVITE_EXPIRED ),
-		);
+		return array( 'cancelled' => array( VenueOnboardingRepository::INVITE_CANCELLED ), 'rejected' => array( VenueOnboardingRepository::INVITE_REJECTED ), 'expired' => array( VenueOnboardingRepository::INVITE_EXPIRED ) );
 	}
 
 	/** @dataProvider terminal_invitation_status_provider */
@@ -1316,17 +1297,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
 			$wpdb->insert(
 				'wp_7_ec_venue_members',
-				array(
-					'venue_term_id'      => 56,
-					'user_id'            => 8,
-					'is_owner'           => 0,
-					'status'             => VenueAuthorization::STATUS_ACTIVE,
-					'version'            => 1,
-					'created_by_user_id' => 3,
-					'created_at'         => '2026-01-01 00:00:00',
-					'updated_at'         => '2026-01-01 00:00:00',
-					'revoked_at'         => null,
-				)
+				array( 'venue_term_id' => 56, 'user_id' => 8, 'is_owner' => 0, 'status' => VenueAuthorization::STATUS_ACTIVE, 'version' => 1, 'created_by_user_id' => 3, 'created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-01 00:00:00', 'revoked_at' => null )
 			);
 		};
 

@@ -229,8 +229,9 @@ class VenueOnboardingRepository {
 	 * @param string $email_hash    Privacy-preserving email binding.
 	 * @param string $token         Raw token used only to derive its hash.
 	 * @param int    $ttl           Token lifetime in seconds.
+	 * @param bool   $account_created Whether this invitation created the account.
 	 */
-	public function create_invitation( int $actor_user_id, int $venue_term_id, int $user_id, bool $is_owner, string $email_hash, string $token, int $ttl ) {
+	public function create_invitation( int $actor_user_id, int $venue_term_id, int $user_id, bool $is_owner, string $email_hash, string $token, int $ttl, bool $account_created = false ) {
 		global $wpdb;
 
 		$valid = $this->validate_actor_venue( $user_id, $venue_term_id );
@@ -293,6 +294,7 @@ class VenueOnboardingRepository {
 			'status'             => self::INVITE_PENDING,
 			'token_hash'         => $this->tokens->hash( $token, $invitation ),
 			'email_hash'         => $email_hash,
+			'account_created'    => $account_created ? 1 : 0,
 			'version'            => 1,
 			'invited_by_user_id' => $actor_user_id,
 			'created_at'         => $now,
@@ -346,6 +348,45 @@ class VenueOnboardingRepository {
 	 */
 	public function cancel_invitation( int $actor_user_id, int $invitation_id, int $expected_version ) {
 		return $this->mutate_invitation( $actor_user_id, $invitation_id, $expected_version, self::INVITE_CANCELLED );
+	}
+
+	/** Cancel an invitation whose post-persistence delivery setup failed. */
+	public function abandon_invitation( array $invitation, int $actor_user_id, string $event ) {
+		$started = $this->begin_and_lock_venue( (int) $invitation['venue_term_id'] );
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+		$current = $this->get_invitation_by_id( (int) $invitation['id'], true );
+		if ( ! is_array( $current ) || self::INVITE_PENDING !== $current['status'] || (int) $invitation['version'] !== $current['version'] ) {
+			$this->rollback();
+			return new \WP_Error( 'venue_invitation_compensation_conflict', __( 'The failed invitation changed before it could be compensated.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		$membership = $this->set_invited_membership_status( $current, VenueAuthorization::STATUS_REVOKED );
+		if ( is_wp_error( $membership ) ) {
+			$this->rollback();
+			return $membership;
+		}
+
+		global $wpdb;
+		$now    = gmdate( 'Y-m-d H:i:s' );
+		$table  = BookingSchema::invitations_table();
+		$result = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET status = %s, token_hash = %s, version = version + 1, updated_at = %s, resolved_at = %s WHERE id = %d AND version = %d AND status = %s", self::INVITE_CANCELLED, str_repeat( '0', 64 ), $now, $now, $current['id'], $current['version'], self::INVITE_PENDING ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensates an unusable invitation under its venue lock.
+		if ( 1 !== $result || ! $this->audit( $current['venue_term_id'], 'invitation', $current['id'], $event, $actor_user_id, $current['user_id'], array( 'version' => $current['version'] + 1 ) ) ) {
+			return $this->rollback_error( 'venue_invitation_compensation_failed', __( 'The failed invitation could not be compensated.', 'extrachill-events' ) );
+		}
+		$updated = $this->get_invitation_by_id( $current['id'], true );
+		if ( ! $this->commit() ) {
+			return $this->commit_error();
+		}
+		return $updated;
+	}
+
+	/** Return whether this invitation remains the account's only venue relationship. */
+	public function account_is_exclusive_to_invitation( array $invitation ): bool {
+		global $wpdb;
+		$table = BookingSchema::memberships_table();
+		$count = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE user_id = %d AND NOT (venue_term_id = %d AND status = %s)", $invitation['user_id'], $invitation['venue_term_id'], VenueAuthorization::STATUS_REVOKED ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Safety check before network-account compensation.
+		return '' === (string) $wpdb->last_error && 0 === (int) $count;
 	}
 
 	/**
@@ -403,7 +444,14 @@ class VenueOnboardingRepository {
 			if ( is_wp_error( $expired ) ) {
 				return $expired;
 			}
-			return new \WP_Error( 'venue_invitation_expired', __( 'The venue invitation has expired.', 'extrachill-events' ), array( 'status' => 410 ) );
+			return new \WP_Error(
+				'venue_invitation_expired',
+				__( 'The venue invitation has expired.', 'extrachill-events' ),
+				array(
+					'status'              => 410,
+					'_cleanup_invitation' => $expired,
+				)
+			);
 		}
 		return $this->finish_invitation( $invite, $decision, $actor_user_id );
 	}
@@ -512,11 +560,12 @@ class VenueOnboardingRepository {
 		foreach ( array( 'id', 'venue_term_id', 'user_id', 'version', 'invited_by_user_id' ) as $field ) {
 			$row[ $field ] = (int) $row[ $field ];
 		}
-		$row['is_owner']    = (bool) (int) $row['is_owner'];
-		$row['resolved_at'] = empty( $row['resolved_at'] ) ? null : (string) $row['resolved_at'];
-		$row['_token_hash'] = (string) $row['token_hash'];
-		$row['_email_hash'] = (string) $row['email_hash'];
-		unset( $row['token_hash'], $row['email_hash'] );
+		$row['is_owner']         = (bool) (int) $row['is_owner'];
+		$row['_account_created'] = ! empty( $row['account_created'] );
+		$row['resolved_at']      = empty( $row['resolved_at'] ) ? null : (string) $row['resolved_at'];
+		$row['_token_hash']      = (string) $row['token_hash'];
+		$row['_email_hash']      = (string) $row['email_hash'];
+		unset( $row['token_hash'], $row['email_hash'], $row['account_created'] );
 		return $row;
 	}
 
@@ -526,7 +575,7 @@ class VenueOnboardingRepository {
 	 * @param array $invitation Internal invitation row.
 	 */
 	public function public_invitation( array $invitation ): array {
-		unset( $invitation['_token_hash'], $invitation['_email_hash'] );
+		unset( $invitation['_token_hash'], $invitation['_email_hash'], $invitation['_account_created'] );
 		return $invitation;
 	}
 

@@ -183,6 +183,7 @@ class BookingSchema {
 			status VARCHAR(20) NOT NULL DEFAULT 'pending',
 			token_hash CHAR(64) NOT NULL,
 			email_hash CHAR(64) NOT NULL,
+			account_created TINYINT UNSIGNED NOT NULL DEFAULT '0',
 			version BIGINT UNSIGNED NOT NULL DEFAULT '1',
 			invited_by_user_id BIGINT UNSIGNED NOT NULL,
 			created_at DATETIME NOT NULL,

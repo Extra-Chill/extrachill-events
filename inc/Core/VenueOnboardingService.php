@@ -14,7 +14,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Composes Events-owned onboarding with existing user and email primitives. */
 class VenueOnboardingService {
 
-	public const INVITATION_TTL = 604800;
+	public const INVITATION_TTL           = 604800;
+	private const ACCOUNT_PROVENANCE_META = 'ec_venue_invitation_account';
 
 	/** Venue onboarding persistence. */
 	private $repository;
@@ -77,15 +78,21 @@ class VenueOnboardingService {
 
 		$token      = $this->tokens->generate();
 		$email_hash = hash_hmac( 'sha256', $email, wp_salt( 'auth' ) );
-		$invitation = $this->repository->create_invitation( $actor_user_id, $venue_term_id, $account['user_id'], $is_owner, $email_hash, $token, self::INVITATION_TTL );
+		$invitation = $this->repository->create_invitation( $actor_user_id, $venue_term_id, $account['user_id'], $is_owner, $email_hash, $token, self::INVITATION_TTL, $account['created'] );
 		if ( is_wp_error( $invitation ) ) {
-			return $invitation;
+			return $this->compensate_initial_account( $account, $email, $invitation );
+		}
+		if ( $account['created'] && ! $this->persist_account_provenance( $account['user_id'], $invitation['public_id'] ) ) {
+			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, $email, new \WP_Error( 'venue_invitation_provenance_failed', __( 'The invitation account provenance could not be saved.', 'extrachill-events' ), array( 'status' => 500 ) ), 'invitation_provenance_failed' );
 		}
 
 		$queued = $this->queue_delivery( $invitation, $token, $account['claim_url'] );
-		$this->repository->audit_delivery( $invitation, $actor_user_id, $queued );
+		if ( is_wp_error( $queued ) ) {
+			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, $email, $queued, 'invitation_delivery_failed' );
+		}
+		$this->repository->audit_delivery( $invitation, $actor_user_id, true );
 		$result                    = $this->repository->public_invitation( $invitation );
-		$result['delivery_queued'] = $queued;
+		$result['delivery_queued'] = true;
 		$result['account_created'] = $account['created'];
 		return $result;
 	}
@@ -108,8 +115,14 @@ class VenueOnboardingService {
 			return new \WP_Error( 'venue_invitation_user_missing', __( 'The invitation user no longer exists.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		$claim_url = '1' === (string) get_user_meta( $user->ID, 'ec_unclaimed', true ) ? $this->build_claim_url( $user ) : '';
-		$queued    = $this->queue_delivery( $invitation, $token, $claim_url );
-		$this->repository->audit_delivery( $invitation, $actor_user_id, $queued );
+		if ( is_wp_error( $claim_url ) ) {
+			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, strtolower( sanitize_email( $user->user_email ) ), $claim_url, 'invitation_reset_key_failed' );
+		}
+		$queued = $this->queue_delivery( $invitation, $token, $claim_url );
+		if ( is_wp_error( $queued ) ) {
+			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, strtolower( sanitize_email( $user->user_email ) ), $queued, 'invitation_delivery_failed' );
+		}
+		$this->repository->audit_delivery( $invitation, $actor_user_id, true );
 		$result                    = $this->repository->public_invitation( $invitation );
 		$result['delivery_queued'] = $queued;
 		return $result;
@@ -118,12 +131,33 @@ class VenueOnboardingService {
 	/** Cancel a pending invitation. */
 	public function cancel_invitation( int $actor_user_id, int $invitation_id, int $expected_version ) {
 		$result = $this->repository->cancel_invitation( $actor_user_id, $invitation_id, $expected_version );
-		return is_array( $result ) ? $this->repository->public_invitation( $result ) : $result;
+		if ( is_array( $result ) ) {
+			$cleanup = $this->cleanup_invited_account( $result );
+			return is_wp_error( $cleanup ) ? $cleanup : $this->repository->public_invitation( $result );
+		}
+		return $result;
 	}
 
 	/** Accept or reject an exactly-bound invitation. */
 	public function respond( int $actor_user_id, string $public_id, string $token, int $venue_term_id, bool $is_owner, int $expected_version, string $decision ) {
 		$result = $this->repository->respond_to_invitation( $actor_user_id, $public_id, $token, $venue_term_id, $is_owner, $expected_version, $decision );
+		if ( is_wp_error( $result ) && 'venue_invitation_expired' === $result->get_error_code() ) {
+			$data       = $result->get_error_data();
+			$invitation = is_array( $data ) ? ( $data['_cleanup_invitation'] ?? null ) : null;
+			if ( is_array( $invitation ) ) {
+				$cleanup = $this->cleanup_invited_account( $invitation );
+				if ( is_wp_error( $cleanup ) ) {
+					return $cleanup;
+				}
+			}
+			return new \WP_Error( $result->get_error_code(), $result->get_error_message(), array( 'status' => 410 ) );
+		}
+		if ( is_array( $result ) && VenueOnboardingRepository::INVITE_ACCEPTED !== $result['status'] ) {
+			$cleanup = $this->cleanup_invited_account( $result );
+			if ( is_wp_error( $cleanup ) ) {
+				return $cleanup;
+			}
+		}
 		return is_array( $result ) ? $this->repository->public_invitation( $result ) : $result;
 	}
 
@@ -144,10 +178,14 @@ class VenueOnboardingService {
 	private function resolve_account( string $email ) {
 		$user = get_user_by( 'email', $email );
 		if ( $user instanceof \WP_User ) {
+			$claim_url = '1' === (string) get_user_meta( $user->ID, 'ec_unclaimed', true ) ? $this->build_claim_url( $user ) : '';
+			if ( is_wp_error( $claim_url ) ) {
+				return $claim_url;
+			}
 			return array(
 				'user_id'   => (int) $user->ID,
 				'created'   => false,
-				'claim_url' => '',
+				'claim_url' => $claim_url,
 			);
 		}
 		$create = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'extrachill/create-user' ) : null;
@@ -176,10 +214,21 @@ class VenueOnboardingService {
 		if ( ! $user ) {
 			return new \WP_Error( 'venue_invitation_account_missing', __( 'The invited account could not be resolved.', 'extrachill-events' ) );
 		}
+		$claim_url = $this->build_claim_url( $user );
+		if ( is_wp_error( $claim_url ) ) {
+			return $this->compensate_initial_account(
+				array(
+					'user_id' => (int) $user_id,
+					'created' => true,
+				),
+				$email,
+				$claim_url
+			);
+		}
 		return array(
 			'user_id'   => (int) $user_id,
 			'created'   => true,
-			'claim_url' => $this->build_claim_url( $user ),
+			'claim_url' => $claim_url,
 		);
 	}
 
@@ -188,10 +237,10 @@ class VenueOnboardingService {
 	 *
 	 * @param \WP_User $user Invited network user.
 	 */
-	private function build_claim_url( \WP_User $user ): string {
+	private function build_claim_url( \WP_User $user ) {
 		$key = get_password_reset_key( $user );
 		if ( is_wp_error( $key ) ) {
-			return '';
+			return new \WP_Error( 'venue_invitation_reset_key_failed', __( 'The invited account handoff could not be created.', 'extrachill-events' ), array( 'status' => 500 ) );
 		}
 		$base = function_exists( 'ec_get_site_url' ) ? ec_get_site_url( 'community' ) : network_site_url();
 		return trailingslashit( $base ) . 'wp-login.php?action=rp&key=' . rawurlencode( $key ) . '&login=' . rawurlencode( $user->user_login );
@@ -204,11 +253,11 @@ class VenueOnboardingService {
 	 * @param string $token      Raw one-time token.
 	 * @param string $claim_url  Existing account-claim URL, when needed.
 	 */
-	private function queue_delivery( array $invitation, string $token, string $claim_url ): bool {
+	private function queue_delivery( array $invitation, string $token, string $claim_url ) {
 		$user  = get_userdata( $invitation['user_id'] );
 		$venue = get_term( $invitation['venue_term_id'], 'venue' );
 		if ( ! $user || ! $venue || is_wp_error( $venue ) || ! function_exists( 'ec_send_email_queued' ) ) {
-			return false;
+			return new \WP_Error( 'venue_invitation_delivery_unavailable', __( 'The invitation delivery could not be prepared.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$accept_url = add_query_arg(
 			array(
@@ -249,6 +298,81 @@ class VenueOnboardingService {
 		$result  = class_exists( '\DataMachine\Abilities\PermissionHelper' )
 			? \DataMachine\Abilities\PermissionHelper::run_as_authenticated( $send, $invitation['invited_by_user_id'] )
 			: $send();
-		return is_array( $result ) && ! empty( $result['success'] );
+		return is_array( $result ) && ! empty( $result['success'] )
+			? true
+			: new \WP_Error( 'venue_invitation_delivery_failed', __( 'The invitation delivery could not be queued.', 'extrachill-events' ), array( 'status' => 503 ) );
+	}
+
+	/** Persist exact invitation provenance on a newly created account. */
+	private function persist_account_provenance( int $user_id, string $public_id ): bool {
+		update_user_meta( $user_id, self::ACCOUNT_PROVENANCE_META, $public_id );
+		return hash_equals( $public_id, (string) get_user_meta( $user_id, self::ACCOUNT_PROVENANCE_META, true ) );
+	}
+
+	/** Compensate a newly created account before invitation persistence. */
+	private function compensate_initial_account( array $account, string $email, \WP_Error $error ) {
+		if ( empty( $account['created'] ) ) {
+			return $error;
+		}
+		return $this->rollback_account_if_safe( (int) $account['user_id'], $email, '' ) ? $error : $this->reconciliation_error( $error );
+	}
+
+	/** Cancel failed persisted state, then compensate its created account. */
+	private function compensate_persisted_invitation( array $invitation, int $actor_user_id, string $email, \WP_Error $error, string $event ) {
+		$cancelled = $this->repository->abandon_invitation( $invitation, $actor_user_id, $event );
+		if ( is_wp_error( $cancelled ) ) {
+			return $this->reconciliation_error( $error );
+		}
+		$public_id = 'invitation_provenance_failed' === $event ? '' : $invitation['public_id'];
+		if ( ! empty( $invitation['_account_created'] ) && ! $this->rollback_account_if_safe( $invitation['user_id'], $email, $public_id, $cancelled ) ) {
+			return $this->reconciliation_error( $error );
+		}
+		return $error;
+	}
+
+	/** Delete only the still-unused account proven to belong to this invitation. */
+	private function cleanup_invited_account( array $invitation ) {
+		if ( empty( $invitation['_account_created'] ) ) {
+			return true;
+		}
+		$user = get_userdata( $invitation['user_id'] );
+		if ( ! $user ) {
+			return true;
+		}
+		$email = strtolower( sanitize_email( $user->user_email ) );
+		if ( ! $this->rollback_account_if_safe( $invitation['user_id'], $email, $invitation['public_id'], $invitation ) ) {
+			return $this->reconciliation_error( new \WP_Error( 'venue_invitation_account_cleanup_failed', __( 'The unused invitation account could not be removed.', 'extrachill-events' ) ) );
+		}
+		return true;
+	}
+
+	/** Apply strict provenance and usage checks before calling the Users rollback primitive. */
+	private function rollback_account_if_safe( int $user_id, string $email, string $public_id, ?array $invitation = null ): bool {
+		$user = get_userdata( $user_id );
+		if ( ! $user ) {
+			return true;
+		}
+		$matches = '1' === (string) get_user_meta( $user_id, 'ec_unclaimed', true )
+			&& 'venue_invitation' === (string) get_user_meta( $user_id, 'registration_source', true )
+			&& strtolower( sanitize_email( $user->user_email ) ) === $email;
+		if ( '' !== $public_id ) {
+			$matches = $matches && hash_equals( $public_id, (string) get_user_meta( $user_id, self::ACCOUNT_PROVENANCE_META, true ) );
+		}
+		if ( ! $matches || ( is_array( $invitation ) && ! $this->repository->account_is_exclusive_to_invitation( $invitation ) ) ) {
+			return true;
+		}
+		return function_exists( 'extrachill_users_rollback_created_user' ) && extrachill_users_rollback_created_user( $user_id );
+	}
+
+	/** Return a bounded manual-reconciliation error without leaking account data. */
+	private function reconciliation_error( \WP_Error $cause ): \WP_Error {
+		return new \WP_Error(
+			'venue_invitation_account_reconciliation_required',
+			__( 'The invitation failed and its unused account could not be safely reconciled.', 'extrachill-events' ),
+			array(
+				'status' => 500,
+				'cause'  => $cause->get_error_code(),
+			)
+		);
 	}
 }

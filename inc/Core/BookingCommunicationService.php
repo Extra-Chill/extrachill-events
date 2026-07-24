@@ -31,16 +31,19 @@ class BookingCommunicationService {
 	private $schedule;
 	/** @var callable|null */
 	private $cancel;
+	/** @var callable|null */
+	private $find_actions;
 	/** @var bool */
 	private $transaction_active = false;
 
-	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueAuthorization $authorization = null, $queue = null, $schedule = null, $cancel = null ) {
+	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueAuthorization $authorization = null, $queue = null, $schedule = null, $cancel = null, $find_actions = null ) {
 		$this->bookings      = $bookings ? $bookings : new BookingRepository();
 		$this->activity      = $activity ? $activity : new BookingActivityRepository();
 		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
 		$this->queue         = $queue;
 		$this->schedule      = $schedule;
 		$this->cancel        = $cancel;
+		$this->find_actions  = $find_actions;
 	}
 
 	/** Register the policy preflight that runs before a delayed reminder is queued. */
@@ -119,6 +122,7 @@ class BookingCommunicationService {
 						'cc'              => 'chubes@extrachill.com',
 						'from_name'       => 'Extra Chill Bot',
 						'identity'        => 'Extra Chill Bot sending on Chris\'s behalf.',
+						'mail_site_id'    => function_exists( 'extrachill_mail_site_id' ) ? extrachill_mail_site_id() : get_current_blog_id(),
 					)
 				),
 			)
@@ -160,9 +164,12 @@ class BookingCommunicationService {
 		} catch ( \Throwable $throwable ) {
 			return new \WP_Error( 'booking_reminder_schedule_uncertain', __( 'The booking reminder schedule outcome requires manual reconciliation.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		if ( ! $action_id ) {
+		if ( 0 === $action_id ) {
 			$this->append_state( $intent, 'booking_message_failed', 'schedule', array( 'retryable' => true ) );
 			return new \WP_Error( 'booking_reminder_schedule_failed', __( 'The booking reminder could not be scheduled.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		if ( ! is_int( $action_id ) || $action_id < 1 ) {
+			return new \WP_Error( 'booking_reminder_schedule_uncertain', __( 'The booking reminder schedule outcome requires manual reconciliation.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$event = $this->append_state( $intent, 'booking_reminder_scheduled', 'scheduled', array( 'action_id' => (int) $action_id ), (string) $action_id );
 		return is_wp_error( $event ) ? $event : $this->state_for_intent( $intent );
@@ -223,18 +230,7 @@ class BookingCommunicationService {
 
 	/** Call the non-idempotent queue only after a durable claim. */
 	private function deliver_claimed( array $intent, bool $commit_transaction = false ) {
-		$data  = $intent['payload']['data'];
-		$body  = $this->render_body( $data['template'], $data['message'] );
-		$input = array(
-			'to'           => $data['recipient'],
-			'cc'           => $data['cc'],
-			'subject'      => $data['subject'],
-			'body'         => $body,
-			'content_type' => 'text/plain',
-			'from_name'    => $data['from_name'],
-			'reply_to'     => $data['reply_to'],
-			'mail_site_id' => function_exists( 'extrachill_mail_site_id' ) ? extrachill_mail_site_id() : get_current_blog_id(),
-		);
+		$input = $this->queue_input( $intent );
 		try {
 			if ( $this->queue ) {
 				$result = call_user_func( $this->queue, $input );
@@ -260,7 +256,7 @@ class BookingCommunicationService {
 			}
 			return new \WP_Error( 'booking_message_delivery_uncertain', __( 'The booking message queue outcome requires manual reconciliation.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		if ( ! empty( $result['success'] ) && empty( $result['action_id'] ) ) {
+		if ( ! empty( $result['success'] ) && ( ! is_int( $result['action_id'] ?? null ) || $result['action_id'] < 1 ) ) {
 			if ( $commit_transaction ) {
 				$committed = $this->commit();
 				if ( is_wp_error( $committed ) ) {
@@ -297,6 +293,78 @@ class BookingCommunicationService {
 		return is_wp_error( $event ) ? $event : $this->state_for_intent( $intent );
 	}
 
+	/** Recover a missing scheduler receipt from exact Action Scheduler evidence. */
+	public function reconcile( int $intent_id, int $actor_id ) {
+		$intent = $this->activity->get( $intent_id );
+		if ( ! is_array( $intent ) || 'booking_message_requested' !== $intent['kind'] ) {
+			return $this->forbidden();
+		}
+		$booking = $this->bookings->get( $intent['booking_id'] );
+		if ( ! is_array( $booking ) ) {
+			return $this->forbidden();
+		}
+		$allowed = $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE );
+		if ( true !== $allowed ) {
+			return is_wp_error( $allowed ) ? $allowed : $this->forbidden();
+		}
+		$started = $this->begin_authorized( $booking['venue_term_id'], $actor_id );
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+		$locked = $this->bookings->get_for_update( $intent['booking_id'] );
+		if ( ! is_array( $locked ) || (int) $locked['venue_term_id'] !== (int) $booking['venue_term_id'] ) {
+			return $this->rollback( $this->forbidden() );
+		}
+		$state = $this->state_for_intent( $intent );
+		if ( is_wp_error( $state ) ) {
+			return $this->rollback( $state );
+		}
+		if ( 'reconciliation_required' !== $state['status'] || ! in_array( $state['claim_stage'] ?? '', array( 'scheduling', 'dispatching' ), true ) ) {
+			return $this->rollback( new \WP_Error( 'booking_message_reconciliation_not_required', __( 'This booking message does not require reconciliation.', 'extrachill-events' ), array( 'status' => 409 ) ) );
+		}
+		$evidence = $this->scheduler_evidence( $intent, $state['claim_stage'] );
+		if ( is_wp_error( $evidence ) ) {
+			return $this->rollback( $evidence );
+		}
+		if ( count( $evidence ) > 1 ) {
+			return $this->rollback( new \WP_Error( 'booking_message_reconciliation_ambiguous', __( 'Multiple scheduler actions match this booking message claim.', 'extrachill-events' ), array( 'status' => 409 ) ) );
+		}
+		if ( empty( $evidence ) ) {
+			$committed                   = $this->commit();
+			$state['scheduler_evidence'] = 'none';
+			return is_wp_error( $committed ) ? $committed : $state;
+		}
+		$action_id = $evidence[0]['action_id'] ?? null;
+		$status    = $evidence[0]['status'] ?? null;
+		if ( ! is_int( $action_id ) || $action_id < 1 || ! in_array( $status, array( 'pending', 'in-progress', 'complete', 'failed', 'canceled' ), true ) ) {
+			return $this->rollback( new \WP_Error( 'booking_message_reconciliation_evidence_invalid', __( 'Scheduler evidence for this booking message is invalid.', 'extrachill-events' ) ) );
+		}
+		$is_schedule = 'scheduling' === $state['claim_stage'];
+		if ( $is_schedule && ! in_array( $status, array( 'pending', 'in-progress' ), true ) ) {
+			$committed                   = $this->commit();
+			$state['scheduler_evidence'] = 'terminal';
+			$state['evidence_action_id'] = $action_id;
+			$state['evidence_status']    = $status;
+			return is_wp_error( $committed ) ? $committed : $state;
+		}
+		$event = $this->append_state(
+			$intent,
+			$is_schedule ? 'booking_reminder_scheduled' : 'booking_message_queued',
+			$is_schedule ? 'scheduled' : 'queued',
+			array(
+				'action_id'        => $action_id,
+				'reconciled'       => true,
+				'scheduler_status' => $status,
+			),
+			(string) $action_id
+		);
+		if ( is_wp_error( $event ) ) {
+			return $this->rollback( $event );
+		}
+		$committed = $this->commit();
+		return is_wp_error( $committed ) ? $committed : $this->state_for_intent( $intent );
+	}
+
 	/** Authorized correspondence read model for later Roadie and UI consumers. */
 	public function list_for_booking( int $booking_id, int $actor_id ) {
 		$booking = $this->bookings->get( $booking_id );
@@ -327,7 +395,7 @@ class BookingCommunicationService {
 		return 0 === strpos( $activity['kind'], 'booking_message_' ) || 0 === strpos( $activity['kind'], 'booking_reminder_' );
 	}
 
-	/** Cancel and suppress reminders after a committed booking mutation. */
+	/** Durably suppress reminders, then best-effort cancel their physical actions. */
 	public function suppress_pending_reminders( int $booking_id, string $reason ) {
 		$rows = $this->activity->communication_state_rows( $booking_id );
 		if ( is_wp_error( $rows ) ) {
@@ -344,6 +412,10 @@ class BookingCommunicationService {
 			if ( 'scheduled' !== $state['status'] ) {
 				continue;
 			}
+			$event = $this->append_state( $row, 'booking_reminder_suppressed', 'suppressed', array( 'reason' => $reason ) );
+			if ( is_wp_error( $event ) ) {
+				return $event;
+			}
 			if ( ! empty( $state['action_id'] ) ) {
 				try {
 					if ( $this->cancel ) {
@@ -355,10 +427,6 @@ class BookingCommunicationService {
 					unset( $throwable );
 					// The durable suppression remains authoritative if physical cancellation fails.
 				}
-			}
-			$event = $this->append_state( $row, 'booking_reminder_suppressed', 'suppressed', array( 'reason' => $reason ) );
-			if ( is_wp_error( $event ) ) {
-				return $event;
 			}
 		}
 		return true;
@@ -401,10 +469,11 @@ class BookingCommunicationService {
 
 	private function state_for_intent( array $intent ) {
 		$state = array(
-			'intent_id'  => $intent['id'],
-			'booking_id' => $intent['booking_id'],
-			'status'     => 'requested',
-			'action_id'  => null,
+			'intent_id'   => $intent['id'],
+			'booking_id'  => $intent['booking_id'],
+			'status'      => 'requested',
+			'action_id'   => null,
+			'claim_stage' => null,
 		);
 		$rows  = $this->activity->communication_state_rows( $intent['booking_id'] );
 		if ( is_wp_error( $rows ) ) {
@@ -431,17 +500,147 @@ class BookingCommunicationService {
 			if ( (int) ( $row['payload']['data']['intent_id'] ?? 0 ) !== (int) $intent['id'] ) {
 				continue;
 			}
-			$status = $row['payload']['data']['status'] ?? ( $row['payload']['data']['stage'] ?? null );
+			$marker = $this->state_marker( $row, $current );
+			if ( is_wp_error( $marker ) ) {
+				return $marker;
+			}
+			$status = $marker['status'];
 			if ( ! is_string( $status ) || ! isset( $allowed[ $current ] ) || ! in_array( $status, $allowed[ $current ], true ) ) {
 				return new \WP_Error( 'booking_communication_state_invalid', __( 'Booking communication history is contradictory.', 'extrachill-events' ), array( 'activity_id' => $row['id'] ) );
 			}
-			$current         = $status;
-			$state['status'] = in_array( $status, array( 'dispatching', 'scheduling' ), true ) ? 'reconciliation_required' : $status;
-			if ( isset( $row['payload']['data']['action_id'] ) ) {
-				$state['action_id'] = (int) $row['payload']['data']['action_id'];
-			}
+			$current              = $status;
+			$state['status']      = in_array( $status, array( 'dispatching', 'scheduling' ), true ) ? 'reconciliation_required' : $status;
+			$state['claim_stage'] = in_array( $status, array( 'dispatching', 'scheduling' ), true ) ? $status : null;
+			$state['action_id']   = $marker['action_id'];
 		}
 		return $state;
+	}
+
+	/** Validate one state marker before it can affect reconstructed status. */
+	private function state_marker( array $row, string $current ) {
+		$data = $row['payload']['data'];
+		if ( ! is_array( $data ) ) {
+			return $this->invalid_state( $row );
+		}
+		$kind     = $row['kind'];
+		$external = $row['external_id'];
+		$stage    = $data['stage'] ?? null;
+		$status   = $data['status'] ?? $stage;
+		$expected = array(
+			'booking_reminder_scheduling' => array( 'scheduling', 'scheduling', false ),
+			'booking_reminder_scheduled'  => array( 'scheduled', 'scheduled', true ),
+			'booking_message_dispatching' => array( 'dispatching', 'dispatching', false ),
+			'booking_message_queued'      => array( 'queued', 'queued', true ),
+			'booking_reminder_suppressed' => array( 'suppressed', 'suppressed', false ),
+		);
+		if ( 'booking_message_failed' === $kind ) {
+			$expected_stage = 'scheduling' === $current ? 'schedule' : ( 'dispatching' === $current ? 'queue' : null );
+			if ( null === $expected_stage || $stage !== $expected_stage || 'failed' !== $status || null !== $external || isset( $data['action_id'] ) || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
+				return $this->invalid_state( $row );
+			}
+			return array(
+				'status'    => 'failed',
+				'action_id' => null,
+			);
+		}
+		if ( ! isset( $expected[ $kind ] ) || $stage !== $expected[ $kind ][0] || $status !== $expected[ $kind ][1] || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
+			return $this->invalid_state( $row );
+		}
+		$action_id = $data['action_id'] ?? null;
+		if ( $expected[ $kind ][2] ) {
+			if ( ! is_int( $action_id ) || $action_id < 1 || (string) $action_id !== (string) $external ) {
+				return $this->invalid_state( $row );
+			}
+		} elseif ( null !== $external || null !== $action_id ) {
+			return $this->invalid_state( $row );
+		}
+		return array(
+			'status'    => $status,
+			'action_id' => $action_id,
+		);
+	}
+
+	private function invalid_state( array $row ): \WP_Error {
+		return new \WP_Error( 'booking_communication_state_invalid', __( 'Booking communication history is contradictory.', 'extrachill-events' ), array( 'activity_id' => $row['id'] ) );
+	}
+
+	/** Find exact scheduler actions for the unresolved claim stage. */
+	private function scheduler_evidence( array $intent, string $stage ) {
+		if ( 'scheduling' === $stage ) {
+			$query = array(
+				'hook'  => self::REMINDER_HOOK,
+				'group' => self::SCHEDULER_GROUP,
+				'args'  => array( $intent['id'] ),
+			);
+		} elseif ( 'dispatching' === $stage ) {
+			$payload             = $this->queue_input( $intent );
+			$payload['_attempt'] = 1;
+			$query               = array(
+				'hook'  => class_exists( '\DataMachine\Abilities\Publish\SendEmailQueuedAbility' ) ? \DataMachine\Abilities\Publish\SendEmailQueuedAbility::WORKER_HOOK : 'datamachine_send_email_worker',
+				'group' => class_exists( '\DataMachine\Abilities\Publish\SendEmailQueuedAbility' ) ? \DataMachine\Abilities\Publish\SendEmailQueuedAbility::GROUP : 'data-machine-email',
+				'args'  => array( $payload ),
+			);
+		} else {
+			return new \WP_Error( 'booking_message_reconciliation_unavailable', __( 'The scheduler evidence contract is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		if ( $this->find_actions ) {
+			try {
+				$result = call_user_func( $this->find_actions, $query, $intent, $stage );
+			} catch ( \Throwable $throwable ) {
+				unset( $throwable );
+				return new \WP_Error( 'booking_message_reconciliation_query_failed', __( 'Action Scheduler evidence could not be read.', 'extrachill-events' ), array( 'status' => 503 ) );
+			}
+			return is_array( $result ) || is_wp_error( $result ) ? $result : new \WP_Error( 'booking_message_reconciliation_evidence_invalid', __( 'Scheduler evidence for this booking message is invalid.', 'extrachill-events' ) );
+		}
+		if ( ! function_exists( 'as_get_scheduled_actions' ) ) {
+			return new \WP_Error( 'booking_message_reconciliation_unavailable', __( 'Action Scheduler evidence is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		$evidence = array();
+		foreach ( array( 'pending', 'in-progress', 'complete', 'failed', 'canceled' ) as $status ) {
+			try {
+				$ids = as_get_scheduled_actions(
+					array_merge(
+						$query,
+						array(
+							'status'   => $status,
+							'per_page' => 2,
+						)
+					),
+					'ids'
+				);
+			} catch ( \Throwable $throwable ) {
+				unset( $throwable );
+				return new \WP_Error( 'booking_message_reconciliation_query_failed', __( 'Action Scheduler evidence could not be read.', 'extrachill-events' ), array( 'status' => 503 ) );
+			}
+			if ( ! is_array( $ids ) ) {
+				return new \WP_Error( 'booking_message_reconciliation_query_failed', __( 'Action Scheduler evidence could not be read.', 'extrachill-events' ), array( 'status' => 503 ) );
+			}
+			foreach ( $ids as $action_id ) {
+				if ( ! is_numeric( $action_id ) || (int) $action_id < 1 ) {
+					return new \WP_Error( 'booking_message_reconciliation_evidence_invalid', __( 'Scheduler evidence for this booking message is invalid.', 'extrachill-events' ) );
+				}
+				$evidence[ (int) $action_id ] = array(
+					'action_id' => (int) $action_id,
+					'status'    => $status,
+				);
+			}
+		}
+		return array_values( $evidence );
+	}
+
+	private function queue_input( array $intent ): array {
+		$data = $intent['payload']['data'];
+		return array(
+			'to'           => $data['recipient'],
+			'cc'           => $data['cc'],
+			'subject'      => $data['subject'],
+			'body'         => $this->render_body( $data['template'], $data['message'] ),
+			'context'      => array( 'booking_communication_intent_id' => (int) $intent['id'] ),
+			'content_type' => 'text/plain',
+			'from_name'    => $data['from_name'],
+			'reply_to'     => $data['reply_to'],
+			'mail_site_id' => (int) $data['mail_site_id'],
+		);
 	}
 
 	/** Serialize the external side effect and leave a durable retry boundary. */

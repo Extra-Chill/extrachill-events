@@ -41,6 +41,8 @@ if ( ! class_exists( 'WP_Error' ) ) {
 			return $this->message; }
 		public function get_error_data() {
 			return $this->data; }
+		public function add_data( $data ) {
+			$this->data = $data; }
 	}
 }
 if ( ! function_exists( 'is_wp_error' ) ) {

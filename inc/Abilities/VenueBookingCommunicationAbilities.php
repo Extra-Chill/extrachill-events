@@ -74,6 +74,22 @@ class VenueBookingCommunicationAbilities {
 				'meta'                => $this->meta( true, true ),
 			)
 		);
+		wp_register_ability(
+			'extrachill/reconcile-booking-message',
+			array(
+				'label'               => __( 'Reconcile Booking Message', 'extrachill-events' ),
+				'description'         => __( 'Recover a missing queued or scheduled receipt from exact Action Scheduler evidence without claiming delivery.', 'extrachill-events' ),
+				'category'            => 'extrachill-events',
+				'input_schema'        => $this->intent_id_schema(),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'additionalProperties' => true,
+				),
+				'execute_callback'    => array( $this, 'reconcile' ),
+				'permission_callback' => array( $this, 'can_access_intent' ),
+				'meta'                => $this->meta( false, true ),
+			)
+		);
 	}
 
 	public function send( array $input ) {
@@ -110,6 +126,10 @@ class VenueBookingCommunicationAbilities {
 		return $this->communications->list_for_booking( (int) $input['booking_id'], get_current_user_id() );
 	}
 
+	public function reconcile( array $input ) {
+		return $this->communications->reconcile( (int) $input['intent_id'], get_current_user_id() );
+	}
+
 	/** Register replay and fresh authorization for generic Data Machine approval. */
 	public function pending_action_handlers( $handlers ) {
 		$handlers                                    = is_array( $handlers ) ? $handlers : array();
@@ -130,6 +150,13 @@ class VenueBookingCommunicationAbilities {
 	public function can_access_booking( array $input ) {
 		$booking = $this->bookings->get( absint( $input['booking_id'] ?? 0 ) );
 		return is_array( $booking ) ? $this->authorization->authorize( get_current_user_id(), $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) : new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) );
+	}
+
+	public function can_access_intent( array $input ) {
+		$intent = ( new \ExtraChillEvents\Core\BookingActivityRepository() )->get( absint( $input['intent_id'] ?? 0 ) );
+		return is_array( $intent ) && 'booking_message_requested' === $intent['kind']
+			? $this->can_access_booking( array( 'booking_id' => $intent['booking_id'] ) )
+			: new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) );
 	}
 
 	private function message_input_schema(): array {
@@ -202,6 +229,20 @@ class VenueBookingCommunicationAbilities {
 				),
 			),
 			'required'             => array( 'booking_id' ),
+			'additionalProperties' => false,
+		);
+	}
+
+	private function intent_id_schema(): array {
+		return array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'intent_id' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+			),
+			'required'             => array( 'intent_id' ),
 			'additionalProperties' => false,
 		);
 	}

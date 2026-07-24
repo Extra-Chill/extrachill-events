@@ -111,11 +111,20 @@ class VenueBookingConfigAbilities {
 					'type'                 => 'object',
 					'properties'           => array(
 						'venue_term_id'             => $venue_property,
-						'template'                  => array( 'type' => 'string', 'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES ),
-						'expected_template_version' => array( 'type' => 'integer', 'minimum' => 1 ),
+						'template'                  => array(
+							'type' => 'string',
+							'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES,
+						),
+						'expected_template_version' => array(
+							'type'    => 'integer',
+							'minimum' => 1,
+						),
 						'variables'                 => array(
 							'type'                 => 'object',
-							'properties'           => array_fill_keys( array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ), array( 'type' => 'string', 'maxLength' => 10000 ) ),
+							'properties'           => array_fill_keys( array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ), array(
+								'type'      => 'string',
+								'maxLength' => 10000,
+							) ),
 							'additionalProperties' => false,
 						),
 					),
@@ -327,9 +336,20 @@ class VenueBookingConfigAbilities {
 		$template = array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'version' => array( 'type' => 'integer', 'minimum' => 1 ),
-				'subject' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 200 ),
-				'body'    => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 10000 ),
+				'version' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'subject' => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 200,
+				),
+				'body'    => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 10000,
+				),
 			),
 			'required'             => array( 'version', 'subject', 'body' ),
 			'additionalProperties' => false,
@@ -337,10 +357,24 @@ class VenueBookingConfigAbilities {
 		$policy   = array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'version'           => array( 'type' => 'integer', 'minimum' => 1 ),
+				'version'           => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
 				'enabled'           => array( 'type' => 'boolean' ),
-				'delay_minutes'     => array( 'type' => 'integer', 'minimum' => 5, 'maximum' => 10080 ),
-				'expected_statuses' => array( 'type' => 'array', 'uniqueItems' => true, 'items' => array( 'type' => 'string', 'enum' => \ExtraChillEvents\Core\BookingRepository::STATUSES ) ),
+				'delay_minutes'     => array(
+					'type'    => 'integer',
+					'minimum' => 5,
+					'maximum' => 10080,
+				),
+				'expected_statuses' => array(
+					'type'        => 'array',
+					'uniqueItems' => true,
+					'items'       => array(
+						'type' => 'string',
+						'enum' => \ExtraChillEvents\Core\BookingRepository::STATUSES,
+					),
+				),
 			),
 			'required'             => array( 'version', 'enabled', 'delay_minutes', 'expected_statuses' ),
 			'additionalProperties' => false,
@@ -348,17 +382,33 @@ class VenueBookingConfigAbilities {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'version'           => array( 'type' => 'integer', 'enum' => array( VenueBookingConfig::CORRESPONDENCE_VERSION ) ),
-				'booking_address'   => array( 'type' => array( 'string', 'null' ), 'format' => 'email' ),
+				'version'           => array(
+					'type' => 'integer',
+					'enum' => array( VenueBookingConfig::CORRESPONDENCE_VERSION ),
+				),
+				'booking_address'   => array(
+					'type'   => array( 'string', 'null' ),
+					'format' => 'email',
+				),
 				'variables'         => array(
 					'type'     => 'array',
 					'maxItems' => 5,
 					'items'    => array(
 						'type'                 => 'object',
 						'properties'           => array(
-							'key'        => array( 'type' => 'string', 'enum' => array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ) ),
-							'type'       => array( 'type' => 'string', 'enum' => array( 'string', 'text' ) ),
-							'max_length' => array( 'type' => 'integer', 'minimum' => 1, 'maximum' => 10000 ),
+							'key'        => array(
+								'type' => 'string',
+								'enum' => array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ),
+							),
+							'type'       => array(
+								'type' => 'string',
+								'enum' => array( 'string', 'text' ),
+							),
+							'max_length' => array(
+								'type'    => 'integer',
+								'minimum' => 1,
+								'maximum' => 10000,
+							),
 						),
 						'required'             => array( 'key', 'type', 'max_length' ),
 						'additionalProperties' => false,
@@ -372,7 +422,10 @@ class VenueBookingConfigAbilities {
 				),
 				'reminder_policies' => array(
 					'type'                 => 'object',
-					'properties'           => array( 'follow_up' => $policy, 'hold_expiring' => $policy ),
+					'properties'           => array(
+						'follow_up'     => $policy,
+						'hold_expiring' => $policy,
+					),
 					'required'             => array( 'follow_up', 'hold_expiring' ),
 					'additionalProperties' => false,
 				),
@@ -387,9 +440,18 @@ class VenueBookingConfigAbilities {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'template'         => array( 'type' => 'string', 'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES ),
-				'template_version' => array( 'type' => 'integer', 'minimum' => 1 ),
-				'config_revision'  => array( 'type' => 'integer', 'minimum' => 0 ),
+				'template'         => array(
+					'type' => 'string',
+					'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES,
+				),
+				'template_version' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'config_revision'  => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
 				'subject'          => array( 'type' => 'string' ),
 				'body'             => array( 'type' => 'string' ),
 			),

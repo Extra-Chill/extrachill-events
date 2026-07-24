@@ -14,14 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Validates one versioned termmeta document on canonical venue terms. */
 class VenueBookingConfig {
 
-	public const META_KEY                = '_extrachill_booking_config';
-	public const HISTORY_META_KEY        = '_extrachill_booking_config_history';
-	public const VERSION                 = 1;
-	public const CORRESPONDENCE_VERSION  = 1;
-	public const TEMPLATE_VERSION        = 1;
-	public const REMINDER_POLICY_VERSION = 1;
-	public const CORRESPONDENCE_TEMPLATES  = array( 'operator_message', 'follow_up', 'hold_expiring' );
-	public const CORRESPONDENCE_VARIABLES  = array( 'artist_name', 'booking_id', 'contact_name', 'venue_name' );
+	public const META_KEY                 = '_extrachill_booking_config';
+	public const HISTORY_META_KEY         = '_extrachill_booking_config_history';
+	public const VERSION                  = 1;
+	public const CORRESPONDENCE_VERSION   = 1;
+	public const TEMPLATE_VERSION         = 1;
+	public const REMINDER_POLICY_VERSION  = 1;
+	public const CORRESPONDENCE_TEMPLATES = array( 'operator_message', 'follow_up', 'hold_expiring' );
+	public const CORRESPONDENCE_VARIABLES = array( 'artist_name', 'booking_id', 'contact_name', 'venue_name' );
 
 	/** @var VenueAuthorization */
 	private $authorization;
@@ -282,7 +282,7 @@ class VenueBookingConfig {
 			'ticket_provider_reference' => $this->nullable_text( $config['ticket_provider_reference'] ?? null, 191 ),
 			'marketing_channels'        => $channels,
 			'hold_ttl_minutes'          => $hold_ttl,
-			'correspondence'             => $correspondence,
+			'correspondence'            => $correspondence,
 		);
 	}
 
@@ -310,11 +310,11 @@ class VenueBookingConfig {
 			'ticket_provider_reference' => null,
 			'marketing_channels'        => array(),
 			'hold_ttl_minutes'          => 1440,
-			'correspondence'             => array(
-				'version'         => self::CORRESPONDENCE_VERSION,
-				'booking_address' => null,
-				'variables'       => $this->variable_schema(),
-				'templates'       => array(
+			'correspondence'            => array(
+				'version'           => self::CORRESPONDENCE_VERSION,
+				'booking_address'   => null,
+				'variables'         => $this->variable_schema(),
+				'templates'         => array(
 					'operator_message' => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking update for {{artist_name}}',
@@ -361,7 +361,10 @@ class VenueBookingConfig {
 			return new \WP_Error( 'booking_correspondence_template_invalid', __( 'The correspondence template is invalid.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
 		if ( $expected_template_version !== $template['version'] ) {
-			return new \WP_Error( 'booking_correspondence_template_version_conflict', __( 'The correspondence template changed since it was read.', 'extrachill-events' ), array( 'status' => 409, 'current_version' => $template['version'] ) );
+			return new \WP_Error( 'booking_correspondence_template_version_conflict', __( 'The correspondence template changed since it was read.', 'extrachill-events' ), array(
+				'status'          => 409,
+				'current_version' => $template['version'],
+			) );
 		}
 		$normalized = $this->normalize_preview_variables( $variables );
 		if ( is_wp_error( $normalized ) ) {
@@ -379,7 +382,7 @@ class VenueBookingConfig {
 		return array(
 			'template'         => $template_key,
 			'template_version' => $template['version'],
-			'config_revision' => $config['revision'],
+			'config_revision'  => $config['revision'],
 			'subject'          => $render( $template['subject'] ),
 			'body'             => $render( $template['body'] ),
 		);
@@ -603,10 +606,10 @@ class VenueBookingConfig {
 						'booking_correspondence_item_version_conflict',
 						__( 'A correspondence template or reminder policy has a stale version.', 'extrachill-events' ),
 						array(
-							'status'          => 409,
-							'section'         => $section,
-							'item'            => $key,
-							'current_version' => $prior['version'],
+							'status'           => 409,
+							'section'          => $section,
+							'item'             => $key,
+							'current_version'  => $prior['version'],
 							'expected_version' => $expected,
 						)
 					);

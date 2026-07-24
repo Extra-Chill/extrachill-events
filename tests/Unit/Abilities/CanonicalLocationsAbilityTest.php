@@ -162,16 +162,38 @@ if ( ! function_exists( 'extrachill_events_get_location_coordinates' ) ) {
 require_once dirname( __DIR__, 3 ) . '/inc/abilities/events-locations.php';
 
 final class CanonicalLocationsAbilityTest extends TestCase {
+	private function term( int $term_id, string $name, string $slug, int $parent = 0 ): WP_Term {
+		$constructor = new ReflectionMethod( WP_Term::class, '__construct' );
+		if ( 1 === $constructor->getNumberOfParameters() ) {
+			return new WP_Term(
+				(object) array(
+					'term_id'          => $term_id,
+					'name'             => $name,
+					'slug'             => $slug,
+					'term_group'       => 0,
+					'term_taxonomy_id' => $term_id,
+					'taxonomy'         => 'location',
+					'description'      => '',
+					'parent'           => $parent,
+					'count'            => 0,
+					'filter'           => 'raw',
+				)
+			);
+		}
+
+		return new WP_Term( $term_id, $name, $slug, $parent );
+	}
+
 	protected function setUp(): void {
 		parent::setUp();
 		$GLOBALS['ec_locations_blog_id']    = 2;
 		$GLOBALS['ec_locations_blog_stack'] = array();
 		$GLOBALS['ec_locations_terms']      = array(
-			1  => new WP_Term( 1, 'USA', 'usa' ),
-			2  => new WP_Term( 2, 'South Carolina', 'south-carolina', 1 ),
-			3  => new WP_Term( 3, 'Texas', 'texas', 1 ),
-			10 => new WP_Term( 10, 'Charleston', 'charleston-sc', 2 ),
-			11 => new WP_Term( 11, 'Charleston', 'charleston-tx', 3 ),
+			1  => $this->term( 1, 'USA', 'usa' ),
+			2  => $this->term( 2, 'South Carolina', 'south-carolina', 1 ),
+			3  => $this->term( 3, 'Texas', 'texas', 1 ),
+			10 => $this->term( 10, 'Charleston', 'charleston-sc', 2 ),
+			11 => $this->term( 11, 'Charleston', 'charleston-tx', 3 ),
 		);
 		$GLOBALS['ec_locations_coordinates'] = array(
 			10 => array(

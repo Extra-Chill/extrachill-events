@@ -47,6 +47,28 @@ if ( ! function_exists( 'get_term_link' ) ) {
 require_once dirname( __DIR__, 3 ) . '/inc/core/events-by-term-taxonomy-context.php';
 
 final class EventsByTermTaxonomyContextTest extends TestCase {
+	private function term( int $term_id, string $name, string $slug ): WP_Term {
+		$constructor = new ReflectionMethod( WP_Term::class, '__construct' );
+		if ( 1 === $constructor->getNumberOfParameters() ) {
+			return new WP_Term(
+				(object) array(
+					'term_id'          => $term_id,
+					'name'             => $name,
+					'slug'             => $slug,
+					'term_group'       => 0,
+					'term_taxonomy_id' => $term_id,
+					'taxonomy'         => 'venue',
+					'description'      => '',
+					'parent'           => 0,
+					'count'            => 0,
+					'filter'           => 'raw',
+				)
+			);
+		}
+
+		return new WP_Term( $term_id, $name, $slug );
+	}
+
 	protected function setUp(): void {
 		parent::setUp();
 		$GLOBALS['ec_events_by_term_relationships'] = array();
@@ -54,9 +76,9 @@ final class EventsByTermTaxonomyContextTest extends TestCase {
 
 	public function test_enriches_assigned_relationships_without_changing_existing_row_fields(): void {
 		$GLOBALS['ec_events_by_term_relationships'][123] = array(
-			'venue'    => array( new WP_Term( 10, 'The Royal American', 'royal-american' ) ),
-			'location' => array( new WP_Term( 11, 'Charleston', 'charleston-sc' ) ),
-			'festival' => array( new WP_Term( 12, 'High Water Festival', 'high-water-festival' ) ),
+			'venue'    => array( $this->term( 10, 'The Royal American', 'royal-american' ) ),
+			'location' => array( $this->term( 11, 'Charleston', 'charleston-sc' ) ),
+			'festival' => array( $this->term( 12, 'High Water Festival', 'high-water-festival' ) ),
 		);
 		$result = extrachill_events_add_events_by_term_taxonomy_context(
 			array(

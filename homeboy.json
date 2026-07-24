@@ -2,7 +2,15 @@
   "auto_cleanup": false,
   "changelog_target": "docs/CHANGELOG.md",
   "extensions": {
-    "wordpress": {}
+    "wordpress": {
+      "php": "8.3",
+      "database_type": "mysql",
+      "settings": {
+        "validation_dependencies": ["data-machine", "data-machine-events"],
+        "wp_codebox_multisite": true,
+        "wp_codebox_phpunit_bootstrap_mode": "managed"
+      }
+    }
   },
   "id": "extrachill-events",
   "remote_path": "wp-content/plugins/extrachill-events",

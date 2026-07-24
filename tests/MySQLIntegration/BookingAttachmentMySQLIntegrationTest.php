@@ -164,6 +164,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertIsArray( $membership, is_wp_error( $membership ) ? $membership->get_error_code() : '' );
 		$this->provider  = new BookingAttachmentMySQLProbeProvider();
 		$this->contender = $this->connect_second_session();
+		$this->contender->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
 	}
 
 	/** Remove all disposable booking state and close the contender session. */
@@ -194,9 +195,12 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 
 		$memberships                 = BookingSchema::memberships_table();
 		$this->provider->claim_probe = function () use ( $memberships ): void {
-			$this->contender->query( "UPDATE {$memberships} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}", MYSQLI_ASYNC ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent test connection races the production transaction.
-			usleep( 250000 );
-			$this->membership_update_waited = $this->contender_has_row_lock_wait();
+			try {
+				$updated                        = $this->contender->query( "UPDATE {$memberships} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent test connection races the production transaction.
+				$this->membership_update_waited = false === $updated && 1205 === $this->contender->errno;
+			} catch ( mysqli_sql_exception $exception ) {
+				$this->membership_update_waited = 1205 === $exception->getCode();
+			}
 		};
 
 		$service    = new BookingAttachmentService( null, null, null, null, $this->provider );
@@ -211,8 +215,8 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			)
 		);
 		$this->assertIsArray( $attachment, is_wp_error( $attachment ) ? $attachment->get_error_code() : '' );
-		$this->assertTrue( $this->reap_async_update(), 'Membership revocation did not complete after the production transaction committed.' );
 		$this->assertTrue( $this->membership_update_waited, 'Membership revocation bypassed the rows used by production attachment authorization.' );
+		$this->assertTrue( $this->contender->query( "UPDATE {$memberships} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}" ), 'Membership revocation did not complete after the production transaction committed.' ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent test connection confirms lock release.
 		$this->assertSame( 1, $this->contender->affected_rows );
 
 		$this->contender->query( "UPDATE {$memberships} SET status = 'active' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Restores isolated fixture authority for cleanup.
@@ -221,12 +225,10 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$wpdb->update( BookingSchema::attachments_table(), array( 'retired_at' => '2020-01-01 00:00:00' ), array( 'id' => $attachment['id'] ) );
 
 		$lock_name                    = $this->reference_lock_name( $attachment['storage_reference'] );
-		$this->provider->retire_probe = function () use ( $lock_name, $wpdb ): void {
+		$this->provider->retire_probe = function () use ( $lock_name ): void {
 			$escaped = $this->contender->real_escape_string( $lock_name );
-			$this->contender->query( "SELECT GET_LOCK('{$escaped}', 3)", MYSQLI_ASYNC );
-			usleep( 250000 );
-			$owner                       = $wpdb->get_var( $wpdb->prepare( 'SELECT IS_USED_LOCK(%s)', $lock_name ) );
-			$this->reference_lock_waited = (int) $wpdb->get_var( 'SELECT CONNECTION_ID()' ) === (int) $owner;
+			$result                       = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
+			$this->reference_lock_waited = $result instanceof mysqli_result && 0 === (int) $result->fetch_row()[0];
 		};
 		$cleanup                      = $service->cleanup(
 			array(
@@ -238,8 +240,8 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			)
 		);
 		$this->assertSame( 1, $cleanup['purged'] ?? 0, is_wp_error( $cleanup ) ? $cleanup->get_error_code() : '' );
-		$result = $this->contender->reap_async_query();
 		$this->assertTrue( $this->reference_lock_waited, 'A second session acquired the reference domain while production cleanup was retiring bytes.' );
+		$result = $this->contender->query( "SELECT GET_LOCK('{$lock_name}', 1)" );
 		$this->assertInstanceOf( mysqli_result::class, $result );
 		$this->assertSame( 1, (int) $result->fetch_row()[0], 'The second session did not acquire the reference domain after cleanup committed.' );
 		$this->assertSame( 1, (int) $this->contender->query( "SELECT RELEASE_LOCK('{$lock_name}')" )->fetch_row()[0] );
@@ -267,23 +269,6 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertTrue( mysqli_real_connect( $connection, $host, $user, $pass, $name, $port ), (string) mysqli_connect_error() );
 		$connection->set_charset( 'utf8mb4' );
 		return $connection;
-	}
-
-	/** Ask MySQL whether the contender is waiting on an InnoDB row lock. */
-	private function contender_has_row_lock_wait(): bool {
-		global $wpdb;
-		$count = $wpdb->get_var(
-			$wpdb->prepare(
-				'SELECT COUNT(*) FROM performance_schema.data_lock_waits AS waits INNER JOIN performance_schema.threads AS threads ON threads.THREAD_ID = waits.REQUESTING_THREAD_ID WHERE threads.PROCESSLIST_ID = %d',
-				$this->contender->thread_id
-			)
-		);
-		return 0 < (int) $count;
-	}
-
-	/** Reap a completed asynchronous UPDATE query. */
-	private function reap_async_update(): bool {
-		return true === $this->contender->reap_async_query();
 	}
 
 	/** Derive the exact production advisory-lock identity. */

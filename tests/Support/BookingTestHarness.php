@@ -299,6 +299,7 @@ final class BookingWpdb {
 	public $fail_attachment_reference_reads   = false;
 	public $fail_inserts                      = false;
 	public $fail_updates                      = false;
+	public $fail_communication_state_updates = false;
 	public $fail_engine_repair                = false;
 	public $race_activity_insert              = false;
 	public $race_booking_insert               = false;
@@ -338,6 +339,8 @@ final class BookingWpdb {
 	public $communication_attempt_queries     = 0;
 	public $communication_public_rows_returned = 0;
 	public $pending_reminder_rows_returned    = 0;
+	public $pending_reminder_query_limits     = array();
+	public $pending_reminder_query_cursors    = array();
 	public $elapse_hold_after_membership_lock = null;
 	public $elapse_hold_before_release_update = null;
 	public $elapse_hold_before_conversion_update = null;
@@ -347,6 +350,7 @@ final class BookingWpdb {
 	public $ready                            = true;
 	public $close_calls                      = 0;
 	private $transaction_snapshot            = null;
+	private $savepoint_snapshot              = null;
 
 	public function get_charset_collate() {
 		return 'DEFAULT CHARACTER SET utf8mb4'; }
@@ -833,11 +837,13 @@ final class BookingWpdb {
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated result read failure';
 			return null; }
-		if ( false !== strpos( $query, 'ec_booking_communication_state' ) && false !== strpos( $query, 'INNER JOIN' ) && preg_match( "/s\.booking_id = (\d+) AND s\.status = 'scheduled'/", $query, $match ) ) {
+		if ( false !== strpos( $query, 'ec_booking_communication_state' ) && false !== strpos( $query, 'INNER JOIN' ) && preg_match( "/s\.booking_id = (\d+) AND s\.status = 'scheduled' AND s\.intent_id > (\d+).*LIMIT (\d+)/", $query, $match ) ) {
 			++$this->communication_state_queries;
+			$this->pending_reminder_query_cursors[] = (int) $match[2];
+			$this->pending_reminder_query_limits[]  = (int) $match[3];
 			$rows = array();
 			foreach ( $this->rows[ $this->prefix . 'ec_booking_communication_state' ] ?? array() as $state ) {
-				if ( (int) $state['booking_id'] !== (int) $match[1] || 'scheduled' !== $state['status'] ) {
+				if ( (int) $state['booking_id'] !== (int) $match[1] || 'scheduled' !== $state['status'] || (int) $state['intent_id'] <= (int) $match[2] ) {
 					continue;
 				}
 				$intent = $this->rows[ $this->prefix . 'ec_booking_activity' ][ (int) $state['intent_id'] ] ?? null;
@@ -854,6 +860,7 @@ final class BookingWpdb {
 				}
 			}
 			usort( $rows, static function ( $left, $right ) { return $left['id'] <=> $right['id']; } );
+			$rows = array_slice( $rows, 0, (int) $match[3] );
 			$this->pending_reminder_rows_returned += count( $rows );
 			return $rows;
 		}
@@ -1127,7 +1134,7 @@ final class BookingWpdb {
 
 	public function update( $table, $data, $where ) {
 		$this->last_error = '';
-		if ( $this->fail_updates ) {
+		if ( $this->fail_updates || ( $this->fail_communication_state_updates && false !== strpos( $table, 'ec_booking_communication_state' ) ) ) {
 			$this->last_error = 'simulated update failure';
 			return false;
 		}
@@ -1156,7 +1163,24 @@ final class BookingWpdb {
 				return false;
 			}
 			$this->transaction_snapshot = $this->rows;
+			$this->savepoint_snapshot   = null;
 			$this->transaction_active   = true;
+			return 1;
+		}
+		if ( 'SAVEPOINT booking_communication_projection' === $query ) {
+			$this->savepoint_snapshot = $this->rows;
+			return 1;
+		}
+		if ( 'ROLLBACK TO SAVEPOINT booking_communication_projection' === $query ) {
+			if ( ! is_array( $this->savepoint_snapshot ) ) {
+				$this->last_error = 'simulated missing savepoint';
+				return false;
+			}
+			$this->rows = $this->savepoint_snapshot;
+			return 1;
+		}
+		if ( 'RELEASE SAVEPOINT booking_communication_projection' === $query ) {
+			$this->savepoint_snapshot = null;
 			return 1;
 		}
 		if ( 'COMMIT' === $query ) {
@@ -1165,6 +1189,7 @@ final class BookingWpdb {
 				return false;
 			}
 			$this->transaction_snapshot = null;
+			$this->savepoint_snapshot   = null;
 			$this->transaction_active   = false;
 			return 1;
 		}
@@ -1176,6 +1201,7 @@ final class BookingWpdb {
 			}
 			$this->rows                 = $this->transaction_snapshot;
 			$this->transaction_snapshot = null;
+			$this->savepoint_snapshot   = null;
 			$this->transaction_active   = false;
 			return 1;
 		}
@@ -1327,6 +1353,7 @@ final class BookingWpdb {
 		$this->transaction_active   = false;
 		$this->reference_locks      = array();
 		$this->transaction_snapshot = null;
+		$this->savepoint_snapshot   = null;
 		return true;
 	}
 

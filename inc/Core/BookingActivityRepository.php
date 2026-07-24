@@ -197,12 +197,14 @@ class BookingActivityRepository {
 		return $row;
 	}
 
-	/** Read only currently scheduled reminders through the booking/status index. */
-	public function pending_reminders( int $booking_id ) {
+	/** Read one keyset page of currently scheduled reminders. */
+	public function pending_reminders( int $booking_id, int $after_intent_id, int $limit ) {
 		global $wpdb;
-		$state_table    = BookingSchema::communication_state_table();
-		$activity_table = BookingSchema::activity_table();
-		$rows           = $wpdb->get_results( $wpdb->prepare( "SELECT a.*, s.status AS communication_status, s.claim_stage AS communication_claim_stage, s.action_id AS communication_action_id, s.updated_activity_id AS communication_updated_activity_id FROM {$state_table} s INNER JOIN {$activity_table} a ON a.id = s.intent_id WHERE s.booking_id = %d AND s.status = 'scheduled' ORDER BY s.intent_id ASC", $booking_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Indexed pending-reminder read model joined to exact intents.
+		$state_table     = BookingSchema::communication_state_table();
+		$activity_table  = BookingSchema::activity_table();
+		$after_intent_id = max( 0, $after_intent_id );
+		$limit           = max( 1, min( 100, $limit ) );
+		$rows            = $wpdb->get_results( $wpdb->prepare( "SELECT a.*, s.status AS communication_status, s.claim_stage AS communication_claim_stage, s.action_id AS communication_action_id, s.updated_activity_id AS communication_updated_activity_id FROM {$state_table} s INNER JOIN {$activity_table} a ON a.id = s.intent_id WHERE s.booking_id = %d AND s.status = 'scheduled' AND s.intent_id > %d ORDER BY s.intent_id ASC LIMIT %d", $booking_id, $after_intent_id, $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Indexed pending-reminder keyset page joined to exact intents.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_communication_state_read_failed', __( 'Pending booking reminders could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}

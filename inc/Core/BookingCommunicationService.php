@@ -14,10 +14,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Records booking correspondence before delegating delivery to Data Machine. */
 class BookingCommunicationService {
 
-	public const REMINDER_HOOK     = 'extrachill_events_dispatch_booking_reminder';
-	public const SCHEDULER_GROUP   = 'extrachill-events-booking-reminders';
-	public const TEMPLATES         = array( 'operator_message', 'follow_up', 'hold_expiring' );
-	public const TERMINAL_STATUSES = array( 'declined', 'withdrawn', 'cancelled', 'completed' );
+	public const REMINDER_HOOK          = 'extrachill_events_dispatch_booking_reminder';
+	public const SUPPRESSION_HOOK       = 'extrachill_events_continue_booking_reminder_suppression';
+	public const SCHEDULER_GROUP        = 'extrachill-events-booking-reminders';
+	public const SUPPRESSION_BATCH_SIZE = 25;
+	public const MAX_ATTEMPTS           = 3;
+	public const TEMPLATES              = array( 'operator_message', 'follow_up', 'hold_expiring' );
+	public const TERMINAL_STATUSES      = array( 'declined', 'withdrawn', 'cancelled', 'completed' );
 
 	/** @var BookingRepository */
 	private $bookings;
@@ -49,11 +52,20 @@ class BookingCommunicationService {
 	/** Register the policy preflight that runs before a delayed reminder is queued. */
 	public static function register(): void {
 		add_action( self::REMINDER_HOOK, array( self::class, 'dispatch_scheduled' ), 10, 1 );
+		add_action( self::SUPPRESSION_HOOK, array( self::class, 'continue_suppression' ), 10, 3 );
 	}
 
 	/** Action Scheduler callback. */
 	public static function dispatch_scheduled( int $activity_id ): void {
 		$result = ( new self() )->dispatch_reminder( $activity_id );
+		if ( is_wp_error( $result ) ) {
+			throw new \RuntimeException( $result->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is consumed by Action Scheduler, not rendered.
+		}
+	}
+
+	/** Continue a bounded suppression pass outside the lifecycle request. */
+	public static function continue_suppression( int $booking_id, string $reason, int $after_intent_id ): void {
+		$result = ( new self() )->suppress_pending_reminders( $booking_id, $reason, $after_intent_id );
 		if ( is_wp_error( $result ) ) {
 			throw new \RuntimeException( $result->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is consumed by Action Scheduler, not rendered.
 		}
@@ -169,8 +181,8 @@ class BookingCommunicationService {
 			return new \WP_Error( 'booking_reminder_schedule_uncertain', __( 'The booking reminder schedule outcome requires manual reconciliation.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		if ( 0 === $action_id ) {
-			$this->append_state( $intent, 'booking_message_failed', 'schedule', array( 'retryable' => true ) );
-			return new \WP_Error( 'booking_reminder_schedule_failed', __( 'The booking reminder could not be scheduled.', 'extrachill-events' ), array( 'status' => 503 ) );
+			$event = $this->append_state( $intent, 'booking_message_failed', 'schedule', array( 'retryable' => true ) );
+			return is_wp_error( $event ) ? $event : new \WP_Error( 'booking_reminder_schedule_failed', __( 'The booking reminder could not be scheduled.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		if ( ! is_int( $action_id ) || $action_id < 1 ) {
 			return new \WP_Error( 'booking_reminder_schedule_uncertain', __( 'The booking reminder schedule outcome requires manual reconciliation.', 'extrachill-events' ), array( 'status' => 503 ) );
@@ -277,24 +289,41 @@ class BookingCommunicationService {
 				array(
 					'retryable' => true,
 					'error'     => is_wp_error( $result ) ? $result->get_error_code() : ( $result['error'] ?? 'invalid_result' ),
-				)
+				),
+				null,
+				null,
+				$commit_transaction
 			);
+			if ( is_wp_error( $event ) ) {
+				if ( $commit_transaction && $this->transaction_active ) {
+					$committed = $this->commit();
+					return is_wp_error( $committed ) ? $committed : $event;
+				}
+				return $event;
+			}
 			if ( $commit_transaction ) {
 				$committed = $this->commit();
 				if ( is_wp_error( $committed ) ) {
 					return $committed;
 				}
 			}
-			return is_wp_error( $event ) ? $event : new \WP_Error( 'booking_message_queue_failed', __( 'Data Machine did not accept the booking message.', 'extrachill-events' ), array( 'status' => 503 ) );
+			return new \WP_Error( 'booking_message_queue_failed', __( 'Data Machine did not accept the booking message.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		$event = $this->append_state( $intent, 'booking_message_queued', 'queued', array( 'action_id' => (int) $result['action_id'] ), (string) $result['action_id'] );
+		$event = $this->append_state( $intent, 'booking_message_queued', 'queued', array( 'action_id' => (int) $result['action_id'] ), (string) $result['action_id'], null, $commit_transaction );
+		if ( is_wp_error( $event ) ) {
+			if ( $commit_transaction && $this->transaction_active ) {
+				$committed = $this->commit();
+				return is_wp_error( $committed ) ? $committed : $event;
+			}
+			return $event;
+		}
 		if ( $commit_transaction ) {
 			$committed = $this->commit();
 			if ( is_wp_error( $committed ) ) {
 				return $committed;
 			}
 		}
-		return is_wp_error( $event ) ? $event : $this->state_for_intent( $intent );
+		return $this->state_for_intent( $intent );
 	}
 
 	/** Recover a missing scheduler receipt from exact Action Scheduler evidence. */
@@ -391,11 +420,16 @@ class BookingCommunicationService {
 		if ( is_wp_error( $committed ) ) {
 			return $committed;
 		}
-		return $rows;
+		return array_map( array( $this, 'present_communication' ), $rows );
 	}
 
 	/** Durably suppress reminders, then best-effort cancel their physical actions. */
-	public function suppress_pending_reminders( int $booking_id, string $reason ) {
+	public function suppress_pending_reminders( int $booking_id, string $reason, int $after_intent_id = 0 ) {
+		$reason          = mb_substr( sanitize_key( $reason ), 0, 64 );
+		$after_intent_id = max( 0, $after_intent_id );
+		if ( '' === $reason ) {
+			return new \WP_Error( 'booking_reminder_suppression_reason_invalid', __( 'A reminder suppression reason is required.', 'extrachill-events' ) );
+		}
 		$started = $this->begin();
 		if ( is_wp_error( $started ) ) {
 			return $started;
@@ -404,11 +438,13 @@ class BookingCommunicationService {
 		if ( ! is_array( $booking ) ) {
 			return $this->rollback( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) ) );
 		}
-		$pending = $this->activity->pending_reminders( $booking_id );
+		$pending = $this->activity->pending_reminders( $booking_id, $after_intent_id, self::SUPPRESSION_BATCH_SIZE + 1 );
 		if ( is_wp_error( $pending ) ) {
 			return $this->rollback( $pending );
 		}
-		$actions = array();
+		$has_more = count( $pending ) > self::SUPPRESSION_BATCH_SIZE;
+		$pending  = array_slice( $pending, 0, self::SUPPRESSION_BATCH_SIZE );
+		$actions  = array();
 		foreach ( $pending as $item ) {
 			$event = $this->append_state( $item['intent'], 'booking_reminder_suppressed', 'suppressed', array( 'reason' => $reason ), null, $item['state'] );
 			if ( is_wp_error( $event ) ) {
@@ -434,10 +470,44 @@ class BookingCommunicationService {
 				// The durable suppression remains authoritative if physical cancellation fails.
 			}
 		}
+		if ( $has_more ) {
+			$cursor    = (int) $pending[ count( $pending ) - 1 ]['intent']['id'];
+			$continued = $this->schedule_suppression_continuation( $booking_id, $reason, $cursor );
+			if ( is_wp_error( $continued ) ) {
+				return $continued;
+			}
+		}
 		return true;
 	}
 
-	private function append_state( array $intent, string $kind, string $stage, array $payload, ?string $external_id = null, ?array $known_state = null ) {
+	/** Present only correspondence fields intentionally exposed to authorized consumers. */
+	public function present_communication( array $activity ): array {
+		$data       = is_array( $activity['payload']['data'] ?? null ) ? $activity['payload']['data'] : array();
+		$is_request = 'booking_message_requested' === $activity['kind'];
+		return array(
+			'activity_id' => (int) $activity['id'],
+			'booking_id'  => (int) $activity['booking_id'],
+			'kind'        => (string) $activity['kind'],
+			'direction'   => (string) $activity['direction'],
+			'channel'     => (string) $activity['channel'],
+			'occurred_at' => (string) $activity['occurred_at'],
+			'message'     => $is_request ? array(
+				'template'  => (string) ( $data['template'] ?? '' ),
+				'recipient' => (string) ( $data['recipient'] ?? '' ),
+				'subject'   => (string) ( $data['subject'] ?? '' ),
+				'message'   => (string) ( $data['message'] ?? '' ),
+				'reply_to'  => (string) ( $data['reply_to'] ?? '' ),
+				'send_at'   => is_string( $data['send_at'] ?? null ) ? $data['send_at'] : null,
+			) : null,
+			'state'       => $is_request ? null : array(
+				'intent_id' => (int) ( $data['intent_id'] ?? 0 ),
+				'status'    => (string) ( $data['status'] ?? $data['stage'] ?? '' ),
+				'reason'    => is_string( $data['reason'] ?? null ) ? $data['reason'] : null,
+			),
+		);
+	}
+
+	private function append_state( array $intent, string $kind, string $stage, array $payload, ?string $external_id = null, ?array $known_state = null, bool $commit_inherited_claim_on_projection_failure = false ) {
 		$owns_transaction = false;
 		if ( ! $this->transaction_active ) {
 			$started = $this->begin();
@@ -461,6 +531,10 @@ class BookingCommunicationService {
 		if ( is_wp_error( $count ) ) {
 			return $owns_transaction ? $this->rollback( $count ) : $count;
 		}
+		if ( $count >= self::MAX_ATTEMPTS ) {
+			$error = $this->retry_limit_error();
+			return $owns_transaction ? $this->rollback( $error ) : $error;
+		}
 		$attempt = $count + 1;
 		$marker  = $this->state_marker(
 			array(
@@ -483,6 +557,13 @@ class BookingCommunicationService {
 			$error = is_wp_error( $marker ) ? $marker : $this->invalid_state( array( 'id' => $state['updated_activity_id'] ) );
 			return $owns_transaction ? $this->rollback( $error ) : $error;
 		}
+		$savepoint = false;
+		if ( ! $owns_transaction ) {
+			$savepoint = $this->begin_projection_savepoint();
+			if ( is_wp_error( $savepoint ) ) {
+				return $savepoint;
+			}
+		}
 		$event = $this->activity->append(
 			array(
 				'booking_id'      => $intent['booking_id'],
@@ -503,12 +584,32 @@ class BookingCommunicationService {
 			)
 		);
 		if ( is_wp_error( $event ) ) {
+			if ( true === $savepoint ) {
+				$this->release_projection_savepoint();
+			}
 			return $owns_transaction ? $this->rollback( $event ) : $event;
 		}
 		$claim_stage = in_array( $marker['status'], array( 'dispatching', 'scheduling' ), true ) ? $marker['status'] : null;
 		$updated     = $this->activity->update_communication_state( $state, $marker['status'], $claim_stage, $marker['action_id'], $event['id'] );
 		if ( is_wp_error( $updated ) ) {
-			return $owns_transaction ? $this->rollback( $updated ) : $updated;
+			if ( true === $savepoint ) {
+				$rolled_back = $this->rollback_projection_savepoint();
+				if ( is_wp_error( $rolled_back ) ) {
+					return $this->rollback( $rolled_back );
+				}
+				if ( $commit_inherited_claim_on_projection_failure ) {
+					$committed = $this->commit();
+					return is_wp_error( $committed ) ? $committed : $updated;
+				}
+				return $updated;
+			}
+			return $this->rollback( $updated );
+		}
+		if ( true === $savepoint ) {
+			$released = $this->release_projection_savepoint();
+			if ( is_wp_error( $released ) ) {
+				return $this->rollback( $released );
+			}
 		}
 		if ( $owns_transaction ) {
 			$committed = $this->commit();
@@ -541,7 +642,7 @@ class BookingCommunicationService {
 			'scheduling'  => array( 'scheduled', 'failed' ),
 			'scheduled'   => array( 'dispatching', 'suppressed', 'cancelled' ),
 			'dispatching' => array( 'queued', 'failed' ),
-			'failed'      => array( 'scheduling', 'dispatching' ),
+			'failed'      => array( 'scheduling', 'dispatching', 'suppressed' ),
 			'queued'      => array(),
 			'suppressed'  => array(),
 			'cancelled'   => array(),
@@ -576,7 +677,7 @@ class BookingCommunicationService {
 			'scheduling'  => array( 'scheduled', 'failed' ),
 			'scheduled'   => array( 'dispatching', 'suppressed', 'cancelled' ),
 			'dispatching' => array( 'queued', 'failed' ),
-			'failed'      => array( 'scheduling', 'dispatching' ),
+			'failed'      => array( 'scheduling', 'dispatching', 'suppressed' ),
 			'queued'      => array(),
 			'suppressed'  => array(),
 			'cancelled'   => array(),
@@ -603,7 +704,7 @@ class BookingCommunicationService {
 		);
 		if ( 'booking_message_failed' === $kind ) {
 			$expected_stage = 'scheduling' === $current ? 'schedule' : ( 'dispatching' === $current ? 'queue' : $stage );
-			if ( ! in_array( $expected_stage, array( 'schedule', 'queue' ), true ) || $stage !== $expected_stage || 'failed' !== $status || null !== $external || isset( $data['action_id'] ) || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
+			if ( ! in_array( $expected_stage, array( 'schedule', 'queue' ), true ) || $stage !== $expected_stage || 'failed' !== $status || null !== $external || isset( $data['action_id'] ) || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 || $data['attempt'] > self::MAX_ATTEMPTS ) {
 				return $this->invalid_state( $row );
 			}
 			return array(
@@ -611,7 +712,7 @@ class BookingCommunicationService {
 				'action_id' => null,
 			);
 		}
-		if ( ! isset( $expected[ $kind ] ) || $stage !== $expected[ $kind ][0] || $status !== $expected[ $kind ][1] || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
+		if ( ! isset( $expected[ $kind ] ) || $stage !== $expected[ $kind ][0] || $status !== $expected[ $kind ][1] || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 || $data['attempt'] > self::MAX_ATTEMPTS ) {
 			return $this->invalid_state( $row );
 		}
 		$action_id = $data['action_id'] ?? null;
@@ -711,6 +812,23 @@ class BookingCommunicationService {
 		);
 	}
 
+	private function schedule_suppression_continuation( int $booking_id, string $reason, int $after_intent_id ) {
+		if ( ! function_exists( 'as_schedule_single_action' ) ) {
+			return new \WP_Error( 'booking_reminder_suppression_continuation_unavailable', __( 'Pending reminder suppression could not be continued.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		try {
+			$action_id = as_schedule_single_action( time() + 1, self::SUPPRESSION_HOOK, array( $booking_id, $reason, $after_intent_id ), self::SCHEDULER_GROUP, true );
+		} catch ( \Throwable $throwable ) {
+			unset( $throwable );
+			return new \WP_Error( 'booking_reminder_suppression_continuation_failed', __( 'Pending reminder suppression could not be continued.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		return is_int( $action_id ) && $action_id > 0 ? true : new \WP_Error( 'booking_reminder_suppression_continuation_failed', __( 'Pending reminder suppression could not be continued.', 'extrachill-events' ), array( 'status' => 503 ) );
+	}
+
+	private function retry_limit_error(): \WP_Error {
+		return new \WP_Error( 'booking_message_retry_limit_exceeded', __( 'This booking message reached its retry limit.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+
 	/** Serialize the external side effect and leave a durable retry boundary. */
 	private function claim_side_effect( array $intent, string $stage, array $allowed_statuses ) {
 		global $wpdb;
@@ -730,6 +848,23 @@ class BookingCommunicationService {
 			$committed = $this->commit();
 			return is_wp_error( $committed ) ? $committed : $state;
 		}
+		$claim_kind = 'scheduling' === $stage ? 'booking_reminder_scheduling' : 'booking_message_dispatching';
+		$attempts   = $this->activity->communication_attempt_count( $intent['id'], $claim_kind );
+		if ( is_wp_error( $attempts ) ) {
+			return $this->rollback( $attempts );
+		}
+		if ( $attempts >= self::MAX_ATTEMPTS ) {
+			if ( ! empty( $intent['payload']['data']['send_at'] ) ) {
+				$event = $this->append_state( $intent, 'booking_reminder_suppressed', 'suppressed', array( 'reason' => 'retry_limit_exceeded' ) );
+				if ( is_wp_error( $event ) ) {
+					return $this->rollback( $event );
+				}
+				$committed = $this->commit();
+				return is_wp_error( $committed ) ? $committed : $this->state_for_intent( $intent );
+			}
+			$committed = $this->commit();
+			return is_wp_error( $committed ) ? $committed : $this->retry_limit_error();
+		}
 		$data   = $intent['payload']['data'];
 		$reason = null;
 		if ( (int) $booking['version'] !== (int) $data['booking_version'] || in_array( $booking['status'], self::TERMINAL_STATUSES, true ) ) {
@@ -745,7 +880,7 @@ class BookingCommunicationService {
 			$committed = $this->commit();
 			return is_wp_error( $committed ) ? $committed : $this->state_for_intent( $intent );
 		}
-		$event = $this->append_state( $intent, 'scheduling' === $stage ? 'booking_reminder_scheduling' : 'booking_message_dispatching', $stage, array() );
+		$event = $this->append_state( $intent, $claim_kind, $stage, array() );
 		if ( is_wp_error( $event ) ) {
 			return $this->rollback( $event );
 		}
@@ -835,6 +970,25 @@ class BookingCommunicationService {
 		}
 		$this->transaction_active = true;
 		return true;
+	}
+
+	private function begin_projection_savepoint() {
+		global $wpdb;
+		$result = $wpdb->query( 'SAVEPOINT booking_communication_projection' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Keeps an inherited delivery claim while pairing its marker and projection.
+		return false === $result ? new \WP_Error( 'booking_communication_savepoint_failed', __( 'Booking communication state could not be protected.', 'extrachill-events' ) ) : true;
+	}
+
+	private function rollback_projection_savepoint() {
+		global $wpdb;
+		$rolled_back = $wpdb->query( 'ROLLBACK TO SAVEPOINT booking_communication_projection' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Removes an unprojected marker while retaining the prior durable claim.
+		$released    = false === $rolled_back ? false : $wpdb->query( 'RELEASE SAVEPOINT booking_communication_projection' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Ends the marker/projection savepoint.
+		return false === $rolled_back || false === $released ? new \WP_Error( 'booking_communication_savepoint_rollback_failed', __( 'Booking communication state rollback is uncertain.', 'extrachill-events' ) ) : true;
+	}
+
+	private function release_projection_savepoint() {
+		global $wpdb;
+		$result = $wpdb->query( 'RELEASE SAVEPOINT booking_communication_projection' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Ends the successful marker/projection savepoint.
+		return false === $result ? new \WP_Error( 'booking_communication_savepoint_release_failed', __( 'Booking communication state commit is uncertain.', 'extrachill-events' ) ) : true;
 	}
 
 	private function commit() {

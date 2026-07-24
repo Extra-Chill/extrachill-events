@@ -64,10 +64,7 @@ class VenueBookingCommunicationAbilities {
 				'output_schema'       => array(
 					'type'     => 'array',
 					'maxItems' => 200,
-					'items'    => array(
-						'type'                 => 'object',
-						'additionalProperties' => true,
-					),
+					'items'    => $this->communication_output_schema(),
 				),
 				'execute_callback'    => array( $this, 'list_communications' ),
 				'permission_callback' => array( $this, 'can_access_booking' ),
@@ -215,6 +212,70 @@ class VenueBookingCommunicationAbilities {
 				),
 			),
 			'required'             => array( 'booking_id', 'idempotency_key', 'template', 'recipient', 'subject', 'message', 'reply_to' ),
+			'additionalProperties' => false,
+		);
+	}
+
+	private function communication_output_schema(): array {
+		$nullable_string = array( 'type' => array( 'string', 'null' ) );
+		return array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'activity_id' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'booking_id'  => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'kind'        => array( 'type' => 'string' ),
+				'direction'   => array(
+					'type' => 'string',
+					'enum' => array( 'outbound' ),
+				),
+				'channel'     => array(
+					'type' => 'string',
+					'enum' => array( 'email' ),
+				),
+				'occurred_at' => array( 'type' => 'string' ),
+				'message'     => array(
+					'type'                 => array( 'object', 'null' ),
+					'properties'           => array(
+						'template'  => array(
+							'type' => 'string',
+							'enum' => BookingCommunicationService::TEMPLATES,
+						),
+						'recipient' => array(
+							'type'   => 'string',
+							'format' => 'email',
+						),
+						'subject'   => array( 'type' => 'string' ),
+						'message'   => array( 'type' => 'string' ),
+						'reply_to'  => array(
+							'type'   => 'string',
+							'format' => 'email',
+						),
+						'send_at'   => $nullable_string,
+					),
+					'required'             => array( 'template', 'recipient', 'subject', 'message', 'reply_to', 'send_at' ),
+					'additionalProperties' => false,
+				),
+				'state'       => array(
+					'type'                 => array( 'object', 'null' ),
+					'properties'           => array(
+						'intent_id' => array(
+							'type'    => 'integer',
+							'minimum' => 1,
+						),
+						'status'    => array( 'type' => 'string' ),
+						'reason'    => $nullable_string,
+					),
+					'required'             => array( 'intent_id', 'status', 'reason' ),
+					'additionalProperties' => false,
+				),
+			),
+			'required'             => array( 'activity_id', 'booking_id', 'kind', 'direction', 'channel', 'occurred_at', 'message', 'state' ),
 			'additionalProperties' => false,
 		);
 	}

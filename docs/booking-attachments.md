@@ -39,6 +39,12 @@ Replacement creates the new reference first, then transactionally retires the pr
 
 No download token or storage reference is written to booking activity. `BookingAttachmentService::cleanup()` has no default destructive policy: an operator must explicitly supply an actor, approved retention days, and a legal-hold callback. Provider provisional cleanup also has no destructive default and rejects policy below the minimum abandoned-claim age or without a legal-hold callback. No destructive cleanup is scheduled until #336 and #317 approve retention, legal holds, backups, and operational ownership.
 
+## MySQL Concurrency Verification
+
+`phpunit-booking-mysql.xml.dist` is a dedicated application-level integration gate for a disposable WordPress test install backed by MySQL. It invokes the production `BookingAttachmentService` attach, locked authorization, delete, and two-phase cleanup paths with `$wpdb` as one session and an independent `mysqli` connection as the contender. The contender must block while revoking the locked membership range and while acquiring the cleanup reference lock, then complete after the production transaction commits.
+
+This gate must not run against a production database. WP Codebox's existing `wordpress.phpunit` recipe with `databaseType: mysql` is the intended isolated surface and refuses SQLite substitution. If a managed MySQL service is unavailable, the integration result is unavailable rather than passing or being replaced with SQL-only evidence.
+
 ## Future Admission Seam
 
 The local provider's `stage()` method accepts a server-controlled temporary source, filename, and purpose, then returns only an opaque reference. `attach()` accepts that reference plus explicit `anonymous`, `user`, `email`, or `system` attribution and an optional inbound reference. This supports future public inquiry and inbound-email adapters without teaching the booking domain about REST or mail transport. Extra-Chill/extrachill-api#123 owns multipart inquiry admission, Turnstile, and provisional upload orchestration. Extra-Chill/extrachill-api#125 separately owns protected download requests, mapping into `download_descriptor()` plus `open_download_stream()`, byte-response transport, replay-safe HTTP behavior, and download rate limiting. Until #125 lands, the handoff is intentionally not REST-exposed.

@@ -196,7 +196,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->provider->claim_probe = function () use ( $memberships ): void {
 			$this->contender->query( "UPDATE {$memberships} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}", MYSQLI_ASYNC ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent test connection races the production transaction.
 			usleep( 250000 );
-			$this->membership_update_waited = $this->async_query_is_waiting();
+			$this->membership_update_waited = $this->contender_has_row_lock_wait();
 		};
 
 		$service    = new BookingAttachmentService( null, null, null, null, $this->provider );
@@ -221,11 +221,12 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$wpdb->update( BookingSchema::attachments_table(), array( 'retired_at' => '2020-01-01 00:00:00' ), array( 'id' => $attachment['id'] ) );
 
 		$lock_name                    = $this->reference_lock_name( $attachment['storage_reference'] );
-		$this->provider->retire_probe = function () use ( $lock_name ): void {
+		$this->provider->retire_probe = function () use ( $lock_name, $wpdb ): void {
 			$escaped = $this->contender->real_escape_string( $lock_name );
 			$this->contender->query( "SELECT GET_LOCK('{$escaped}', 3)", MYSQLI_ASYNC );
 			usleep( 250000 );
-			$this->reference_lock_waited = $this->async_query_is_waiting();
+			$owner                       = $wpdb->get_var( $wpdb->prepare( 'SELECT IS_USED_LOCK(%s)', $lock_name ) );
+			$this->reference_lock_waited = (int) $wpdb->get_var( 'SELECT CONNECTION_ID()' ) === (int) $owner;
 		};
 		$cleanup                      = $service->cleanup(
 			array(
@@ -268,12 +269,16 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		return $connection;
 	}
 
-	/** Return true only while the contender's async query remains blocked. */
-	private function async_query_is_waiting(): bool {
-		$read   = array( $this->contender );
-		$error  = array( $this->contender );
-		$reject = array( $this->contender );
-		return 0 === mysqli_poll( $read, $error, $reject, 0, 0 );
+	/** Ask MySQL whether the contender is waiting on an InnoDB row lock. */
+	private function contender_has_row_lock_wait(): bool {
+		global $wpdb;
+		$count = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM performance_schema.data_lock_waits AS waits INNER JOIN performance_schema.threads AS threads ON threads.THREAD_ID = waits.REQUESTING_THREAD_ID WHERE threads.PROCESSLIST_ID = %d',
+				$this->contender->thread_id
+			)
+		);
+		return 0 < (int) $count;
 	}
 
 	/** Reap a completed asynchronous UPDATE query. */

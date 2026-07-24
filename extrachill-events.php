@@ -249,6 +249,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueInvitationToken.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueOnboardingRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueOnboardingService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueInvitationDeliveryWorker.php';
+		\ExtraChillEvents\Core\VenueInvitationDeliveryWorker::register();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingActivityRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingHoldRepository.php';

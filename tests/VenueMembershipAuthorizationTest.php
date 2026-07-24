@@ -12,7 +12,7 @@ use ExtraChillEvents\Core\VenueAuthorization;
 use ExtraChillEvents\Core\VenueBookingConfig;
 use ExtraChillEvents\Core\VenueMembershipRepository;
 use ExtraChillEvents\Core\VenueMembershipService;
-use ExtraChillEvents\Core\VenueInvitationToken;
+use ExtraChillEvents\Core\VenueInvitationDeliveryWorker;
 use ExtraChillEvents\Core\VenueOnboardingRepository;
 use ExtraChillEvents\Core\VenueOnboardingService;
 use PHPUnit\Framework\TestCase;
@@ -149,6 +149,7 @@ if ( ! function_exists( 'wp_get_ability' ) ) {
 }
 if ( ! function_exists( 'get_password_reset_key' ) ) {
 	function get_password_reset_key( $user ) {
+		++$GLOBALS['venue_membership_test']['reset_key_calls'];
 		if ( ! empty( $GLOBALS['venue_membership_test']['fail_reset_key'] ) ) {
 			return new WP_Error( 'reset_key_failed' );
 		}
@@ -182,13 +183,28 @@ if ( ! function_exists( 'esc_url' ) ) {
 	function esc_url( $value ) {
 		return (string) $value; }
 }
-if ( ! function_exists( 'ec_send_email_queued' ) ) {
-	function ec_send_email_queued( array $args ) {
-		$GLOBALS['venue_membership_test']['queued_emails'][] = $args;
+if ( ! function_exists( 'doing_action' ) ) {
+	function doing_action( $hook ) {
+		return $hook === ( $GLOBALS['venue_membership_test']['doing_action'] ?? '' );
+	}
+}
+if ( ! function_exists( 'as_enqueue_async_action' ) ) {
+	function as_enqueue_async_action( $hook, array $args = array(), $group = '', $unique = false ) {
+		$GLOBALS['venue_membership_test']['scheduled_actions'][] = compact( 'hook', 'args', 'group', 'unique' );
+		return empty( $GLOBALS['venue_membership_test']['fail_schedule'] ) ? count( $GLOBALS['venue_membership_test']['scheduled_actions'] ) : 0;
+	}
+}
+if ( ! function_exists( 'ec_send_email' ) ) {
+	function ec_send_email( array $args ) {
+		$GLOBALS['venue_membership_test']['sent_emails'][] = $args;
+		if ( ! doing_action( 'action_scheduler_run_queue' ) ) {
+			$GLOBALS['venue_membership_test']['permission_boundary_failures'][] = $args;
+			return array( 'success' => false );
+		}
 		if ( ! empty( $GLOBALS['venue_membership_test']['fail_delivery'] ) ) {
 			return array( 'success' => false );
 		}
-		return array( 'success' => true, 'action_id' => count( $GLOBALS['venue_membership_test']['queued_emails'] ) );
+		return array( 'success' => true );
 	}
 }
 if ( ! function_exists( 'extrachill_users_rollback_created_user' ) ) {
@@ -265,6 +281,7 @@ if ( ! function_exists( 'maybe_unserialize' ) ) {
 /** Minimal membership wpdb fake with transaction and optimistic update support. */
 final class VenueMembershipWpdb {
 	public $prefix                = 'wp_7_';
+	public $users                 = 'wp_users';
 	public $terms                 = 'wp_7_terms';
 	public $termmeta              = 'wp_7_termmeta';
 	public $insert_id             = 0;
@@ -371,6 +388,9 @@ final class VenueMembershipWpdb {
 
 	public function get_var( $query ) {
 		$this->last_error = '';
+		if ( preg_match( '/SELECT ID FROM .* WHERE ID = (\d+) FOR UPDATE/', $query, $user_match ) ) {
+			return isset( $GLOBALS['venue_membership_test']['users'][ (int) $user_match[1] ] ) ? (int) $user_match[1] : null;
+		}
 		if ( preg_match( '/SELECT COUNT\(\*\) FROM .*user_id = (\d+) AND NOT \(venue_term_id = (\d+) AND status = \'([^\']+)\'\)/', $query, $count_match ) ) {
 			$count = 0;
 			foreach ( $this->rows[ $this->prefix . 'ec_venue_members' ] ?? array() as $row ) {
@@ -402,6 +422,16 @@ final class VenueMembershipWpdb {
 		$this->last_error = '';
 		if ( false !== strpos( $query, 'ec_venue_invitations' ) ) {
 			$rows = array_values( $this->rows['wp_7_ec_venue_invitations'] ?? array() );
+			if ( preg_match( '/user_id = (\d+)/', $query, $user_match ) ) {
+				$rows = array_values(
+					array_filter(
+						$rows,
+						static function ( $row ) use ( $user_match ) {
+							return (int) $row['user_id'] === (int) $user_match[1];
+						}
+					)
+				);
+			}
 			if ( preg_match( '/venue_term_id = (\d+)/', $query, $match ) ) {
 				$rows = array_values(
 					array_filter(
@@ -414,12 +444,36 @@ final class VenueMembershipWpdb {
 			}
 			return $rows;
 		}
+		if ( false !== strpos( $query, 'ec_venue_claims' ) ) {
+			$rows = array_values( $this->rows['wp_7_ec_venue_claims'] ?? array() );
+			if ( preg_match( '/claimant_user_id = (\d+)/', $query, $claimant ) ) {
+				$rows = array_values(
+					array_filter(
+						$rows,
+						static function ( $row ) use ( $claimant ) {
+							return (int) $row['claimant_user_id'] === (int) $claimant[1];
+						}
+					)
+				);
+			}
+			return $rows;
+		}
 		if ( false !== strpos( $query, 'SELECT member.*' ) && is_callable( $this->before_list ) ) {
 			$callback          = $this->before_list;
 			$this->before_list = null;
 			$callback( $this );
 		}
 		$rows = array_values( $this->rows[ $this->prefix . 'ec_venue_members' ] ?? array() );
+		if ( preg_match( '/WHERE user_id = (\d+)/', $query, $user_match ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) use ( $user_match ) {
+						return (int) $row['user_id'] === (int) $user_match[1];
+					}
+				)
+			);
+		}
 		if ( preg_match( '/AS actor .*actor.user_id = (\d+)/', $query, $actor ) ) {
 			$authorized = false;
 			preg_match( '/member\.venue_term_id = (\d+)/', $query, $requested_venue );
@@ -575,6 +629,9 @@ final class VenueMembershipWpdb {
 			if ( preg_match( "/WHERE public_id = '([^']+)'/", $query, $public ) && $row['public_id'] === stripslashes( $public[1] ) ) {
 				return $row;
 			}
+			if ( preg_match( "/WHERE delivery_id = '([^']+)'/", $query, $delivery ) && ( $row['delivery_id'] ?? '' ) === stripslashes( $delivery[1] ) ) {
+				return $row;
+			}
 			if ( preg_match( '/venue_term_id = (\d+) AND claimant_user_id = (\d+)/', $query, $claim ) && (int) $row['venue_term_id'] === (int) $claim[1] && (int) $row['claimant_user_id'] === (int) $claim[2] ) {
 				return $row;
 			}
@@ -599,6 +656,9 @@ final class VenueMembershipWpdb {
 				$this->rows[ $table ][ $id ][ $assignment[1] ] = (int) $assignment[2];
 			}
 		}
+		if ( false !== strpos( $set, 'delivery_attempts = delivery_attempts + 1' ) ) {
+			++$this->rows[ $table ][ $id ]['delivery_attempts'];
+		}
 	}
 }
 
@@ -609,6 +669,7 @@ require_once dirname( __DIR__ ) . '/inc/Core/VenueMembershipService.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueInvitationToken.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueOnboardingRepository.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueOnboardingService.php';
+require_once dirname( __DIR__ ) . '/inc/Core/VenueInvitationDeliveryWorker.php';
 require_once dirname( __DIR__ ) . '/inc/Core/VenueBookingConfig.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueMembershipAbilities.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueBookingConfigAbilities.php';
@@ -663,10 +724,15 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 			'fail_config_audit' => false,
 			'user_meta'         => array(),
 			'ability_objects'   => array(),
-			'queued_emails'     => array(),
+			'scheduled_actions' => array(),
+			'sent_emails'       => array(),
+			'permission_boundary_failures' => array(),
+			'doing_action'      => '',
 			'rollback_attempts' => array(),
+			'reset_key_calls'   => 0,
 			'fail_reset_key'    => false,
 			'fail_delivery'     => false,
+			'fail_schedule'     => false,
 			'fail_provenance'   => false,
 			'fail_account_rollback' => false,
 		);
@@ -687,6 +753,11 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 
 	private function email_hash( string $email ): string {
 		return hash_hmac( 'sha256', strtolower( $email ), wp_salt( 'auth' ) );
+	}
+
+	private function create_prepared_invitation( VenueOnboardingRepository $repository, int $actor, int $venue, int $user, bool $is_owner, string $email, bool $account_created = false ): array {
+		$created = $repository->create_invitation( $actor, $venue, $user, $is_owner, $this->email_hash( $email ), $account_created );
+		return $repository->prepare_delivery( $created['_delivery_id'], 3600 );
 	}
 
 	private function install_account_creator(): void {
@@ -944,45 +1015,44 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	public function test_claims_and_invitations_are_reciprocally_exclusive_under_the_venue_lock(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
-		$token  = ( new VenueInvitationToken() )->generate();
-		$invite = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$invite = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ) );
 
 		$this->assertSame( VenueOnboardingRepository::INVITE_PENDING, $invite['status'] );
 		$this->assertSame( 'venue_claim_invitation_exists', $onboarding->submit_claim( 7, 55 )->get_error_code() );
 
 		$claim = $onboarding->submit_claim( 6, 55 );
 		$this->assertSame( VenueOnboardingRepository::CLAIM_PENDING, $claim['status'] );
-		$result = $onboarding->create_invitation( 2, 55, 6, false, $this->email_hash( 'member6@example.com' ), $token, 3600 );
+		$result = $onboarding->create_invitation( 2, 55, 6, false, $this->email_hash( 'member6@example.com' ) );
 		$this->assertSame( 'venue_invitation_claim_exists', $result->get_error_code() );
 	}
 
 	public function test_invitation_acceptance_is_single_use_and_exactly_bound(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
-		$token  = ( new VenueInvitationToken() )->generate();
-		$invite = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$invite = $this->create_prepared_invitation( $onboarding, 1, 55, 7, false, 'existing@example.com' );
+		$token  = $invite['_delivery_token'];
 
 		$this->assertArrayNotHasKey( 'token_hash', $invite );
 		$this->assertArrayNotHasKey( 'email_hash', $invite );
 		$this->assertArrayNotHasKey( '_email_hash', $onboarding->public_invitation( $invite ) );
-		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 56, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
-		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, true, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
-		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 6, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 56, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, true, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 6, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 
-		$accepted = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+		$accepted = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( VenueOnboardingRepository::INVITE_ACCEPTED, $accepted['status'] );
 		$this->assertSame( VenueAuthorization::STATUS_ACTIVE, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
-		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 	}
 
 	public function test_invitation_acceptance_rechecks_current_account_email_binding(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
-		$token  = ( new VenueInvitationToken() )->generate();
-		$invite = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$invite = $this->create_prepared_invitation( $onboarding, 2, 55, 7, false, 'existing@example.com' );
+		$token  = $invite['_delivery_token'];
 
 		$GLOBALS['venue_membership_test']['users'][7]->user_email = 'changed@example.com';
-		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
 
 		$this->assertSame( 'invalid_venue_invitation', $result->get_error_code() );
 		$this->assertSame( VenueAuthorization::STATUS_INVITED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
@@ -990,10 +1060,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 
 	public function test_first_active_invitation_must_bootstrap_an_owner(): void {
 		$onboarding = new VenueOnboardingRepository();
-		$token      = ( new VenueInvitationToken() )->generate();
-		$invite     = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$invite     = $this->create_prepared_invitation( $onboarding, 1, 55, 7, false, 'existing@example.com' );
+		$token      = $invite['_delivery_token'];
 
-		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+		$result = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( 'venue_membership_owner_required', $result->get_error_code() );
 		$this->assertSame( VenueAuthorization::STATUS_INVITED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
 	}
@@ -1001,44 +1071,42 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	public function test_resend_rotates_token_and_revoked_inviter_fails_closed(): void {
 		$this->create_member( 55, 2, true );
 		$onboarding = new VenueOnboardingRepository();
-		$tokens     = new VenueInvitationToken();
-		$old_token  = $tokens->generate();
-		$invite     = $onboarding->create_invitation( 2, 55, 7, true, $this->email_hash( 'existing@example.com' ), $old_token, 3600 );
-		$new_token  = $tokens->generate();
-		$rotated    = $onboarding->resend_invitation( 2, $invite['id'], 1, $new_token, 3600 );
+		$invite     = $this->create_prepared_invitation( $onboarding, 2, 55, 7, true, 'existing@example.com' );
+		$old_token  = $invite['_delivery_token'];
+		$rotated    = $onboarding->resend_invitation( 2, $invite['id'], 2 );
+		$prepared   = $onboarding->prepare_delivery( $rotated['_delivery_id'], 3600 );
+		$new_token  = $prepared['_delivery_token'];
 
-		$this->assertSame( 2, $rotated['version'] );
-		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $old_token, 55, true, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 3, $rotated['version'] );
+		$this->assertSame( 'invalid_venue_invitation', $onboarding->respond_to_invitation( 7, $invite['public_id'], $old_token, 55, true, 4, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 		foreach ( $GLOBALS['wpdb']->rows['wp_7_ec_venue_members'] as &$member ) {
 			if ( 2 === (int) $member['user_id'] ) {
 				$member['status'] = VenueAuthorization::STATUS_REVOKED;
 			}
 		}
 		unset( $member );
-		$this->assertSame( 'venue_invitation_inviter_revoked', $onboarding->respond_to_invitation( 7, $invite['public_id'], $new_token, 55, true, 2, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$this->assertSame( 'venue_invitation_inviter_revoked', $onboarding->respond_to_invitation( 7, $invite['public_id'], $new_token, 55, true, 4, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
 	}
 
 	public function test_rejection_cancellation_expiry_and_audit_are_private(): void {
 		$onboarding = new VenueOnboardingRepository();
-		$tokens     = new VenueInvitationToken();
-		$token      = $tokens->generate();
-		$invite     = $onboarding->create_invitation( 1, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
-		$rejected   = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 1, VenueOnboardingRepository::INVITE_REJECTED );
+		$invite     = $this->create_prepared_invitation( $onboarding, 1, 55, 7, false, 'existing@example.com' );
+		$token      = $invite['_delivery_token'];
+		$rejected   = $onboarding->respond_to_invitation( 7, $invite['public_id'], $token, 55, false, 2, VenueOnboardingRepository::INVITE_REJECTED );
 		$this->assertSame( VenueOnboardingRepository::INVITE_REJECTED, $rejected['status'] );
 		$this->assertSame( VenueAuthorization::STATUS_REVOKED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
 
 		$owner     = $this->create_member( 56, 2, true );
-		$token2    = $tokens->generate();
-		$invite2   = $onboarding->create_invitation( 2, 56, 6, false, $this->email_hash( 'member6@example.com' ), $token2, 3600 );
+		$invite2   = $onboarding->create_invitation( 2, 56, 6, false, $this->email_hash( 'member6@example.com' ) );
 		$cancelled = $onboarding->cancel_invitation( 2, $invite2['id'], 1 );
 		$this->assertSame( VenueOnboardingRepository::INVITE_CANCELLED, $cancelled['status'] );
 		$this->assertSame( $cancelled, $onboarding->cancel_invitation( 2, $invite2['id'], 1 ) );
 		$this->assertTrue( $owner['is_owner'] );
 
-		$token3  = $tokens->generate();
-		$invite3 = $onboarding->create_invitation( 2, 56, 5, false, $this->email_hash( 'member5@example.com' ), $token3, 3600 );
+		$invite3 = $this->create_prepared_invitation( $onboarding, 2, 56, 5, false, 'member5@example.com' );
+		$token3  = $invite3['_delivery_token'];
 		$GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'][ $invite3['id'] ]['expires_at'] = '2000-01-01 00:00:00';
-		$expired = $onboarding->respond_to_invitation( 5, $invite3['public_id'], $token3, 56, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+		$expired = $onboarding->respond_to_invitation( 5, $invite3['public_id'], $token3, 56, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( 'venue_invitation_expired', $expired->get_error_code() );
 		$this->assertSame( VenueAuthorization::STATUS_REVOKED, ( new VenueMembershipRepository() )->get( 56, 5 )['status'] );
 
@@ -1051,12 +1119,51 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		}
 	}
 
+	public static function terminal_invitation_status_provider(): array {
+		return array(
+			'cancelled' => array( VenueOnboardingRepository::INVITE_CANCELLED ),
+			'rejected'  => array( VenueOnboardingRepository::INVITE_REJECTED ),
+			'expired'   => array( VenueOnboardingRepository::INVITE_EXPIRED ),
+		);
+	}
+
+	/** @dataProvider terminal_invitation_status_provider */
+	public function test_terminal_invitation_can_be_reactivated_with_rotated_bindings_and_audit( string $terminal_status ): void {
+		$this->create_member( 55, 2, true );
+		$repository = new VenueOnboardingRepository();
+		$first      = $this->create_prepared_invitation( $repository, 2, 55, 7, false, 'existing@example.com' );
+		$old_token  = $first['_delivery_token'];
+
+		if ( VenueOnboardingRepository::INVITE_CANCELLED === $terminal_status ) {
+			$terminal = $repository->cancel_invitation( 2, $first['id'], 2 );
+		} elseif ( VenueOnboardingRepository::INVITE_REJECTED === $terminal_status ) {
+			$terminal = $repository->respond_to_invitation( 7, $first['public_id'], $old_token, 55, false, 2, VenueOnboardingRepository::INVITE_REJECTED );
+		} else {
+			$GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'][ $first['id'] ]['expires_at'] = '2000-01-01 00:00:00';
+			$expired = $repository->respond_to_invitation( 7, $first['public_id'], $old_token, 55, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
+			$this->assertSame( 'venue_invitation_expired', $expired->get_error_code() );
+			$terminal = $GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'][ $first['id'] ];
+		}
+		$this->assertSame( $terminal_status, $terminal['status'] );
+
+		$reactivated = $repository->create_invitation( 2, 55, 7, true, $this->email_hash( 'existing@example.com' ) );
+		$prepared    = $repository->prepare_delivery( $reactivated['_delivery_id'], 3600 );
+		$this->assertSame( VenueOnboardingRepository::INVITE_PENDING, $prepared['status'] );
+		$this->assertSame( VenueAuthorization::STATUS_INVITED, ( new VenueMembershipRepository() )->get( 55, 7 )['status'] );
+		$this->assertTrue( $prepared['is_owner'] );
+		$this->assertNotSame( $first['public_id'], $prepared['public_id'] );
+		$this->assertNotSame( $first['_delivery_id'], $prepared['_delivery_id'] );
+		$this->assertNotSame( $old_token, $prepared['_delivery_token'] );
+		$this->assertSame( 'invalid_venue_invitation', $repository->respond_to_invitation( 7, $first['public_id'], $old_token, 55, false, 5, VenueOnboardingRepository::INVITE_ACCEPTED )->get_error_code() );
+		$events = array_column( $GLOBALS['wpdb']->rows['wp_7_ec_venue_onboarding_audit'], 'event' );
+		$this->assertContains( 'invitation_reinvited', $events );
+	}
+
 	public function test_cancelled_invitation_is_not_disclosed_to_another_venue_owner(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
 		$this->create_member( 56, 3, true );
-		$token     = ( new VenueInvitationToken() )->generate();
-		$invite    = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$invite    = $onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ) );
 		$cancelled = $onboarding->cancel_invitation( 2, $invite['id'], 1 );
 
 		$this->assertSame( VenueOnboardingRepository::INVITE_CANCELLED, $cancelled['status'] );
@@ -1066,8 +1173,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	public function test_invitation_listing_rechecks_owner_authority_under_the_venue_lock(): void {
 		$onboarding = new VenueOnboardingRepository();
 		$this->create_member( 55, 2, true );
-		$token = ( new VenueInvitationToken() )->generate();
-		$onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ), $token, 3600 );
+		$onboarding->create_invitation( 2, 55, 7, false, $this->email_hash( 'existing@example.com' ) );
 
 		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
 			foreach ( $wpdb->rows['wp_7_ec_venue_members'] as &$row ) {
@@ -1082,15 +1188,31 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
 	}
 
-	public function test_existing_and_new_user_invitations_use_account_and_queued_mail_primitives(): void {
+	public function test_queue_persists_only_opaque_delivery_id_and_worker_sends_synchronously(): void {
+		$this->create_member( 55, 2, true );
 		$service  = new VenueOnboardingService();
-		$existing = $service->invite( 1, 55, 'existing@example.com', true );
+		$existing = $service->invite( 2, 55, 'existing@example.com', false );
 
 		$this->assertFalse( $existing['account_created'] );
 		$this->assertTrue( $existing['delivery_queued'] );
-		$this->assertSame( 'chubes@extrachill.com', $GLOBALS['venue_membership_test']['queued_emails'][0]['cc'] );
-		$this->assertSame( 'Extra Chill Bot', $GLOBALS['venue_membership_test']['queued_emails'][0]['from_name'] );
-		$this->assertStringContainsString( 'acting on Chris Huber', $GLOBALS['venue_membership_test']['queued_emails'][0]['context']['body_html'] );
+		$this->assertSame( 0, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['sent_emails'] );
+		$scheduled = $GLOBALS['venue_membership_test']['scheduled_actions'][0];
+		$this->assertSame( VenueInvitationDeliveryWorker::HOOK, $scheduled['hook'] );
+		$this->assertSame( VenueInvitationDeliveryWorker::GROUP, $scheduled['group'] );
+		$this->assertTrue( $scheduled['unique'] );
+		$this->assertCount( 1, $scheduled['args'] );
+		$this->assertMatchesRegularExpression( '/^[0-9a-f-]{36}$/', $scheduled['args'][0] );
+		$this->assertStringNotContainsString( 'token', strtolower( serialize( $scheduled ) ) );
+		$this->assertStringNotContainsString( 'existing@example.com', serialize( $scheduled ) );
+
+		$GLOBALS['venue_membership_test']['doing_action'] = 'action_scheduler_run_queue';
+		$delivered = ( new VenueInvitationDeliveryWorker() )->deliver( $scheduled['args'][0] );
+		$this->assertFalse( is_wp_error( $delivered ) );
+		$this->assertSame( 'chubes@extrachill.com', $GLOBALS['venue_membership_test']['sent_emails'][0]['cc'] );
+		$this->assertSame( 'Extra Chill Bot', $GLOBALS['venue_membership_test']['sent_emails'][0]['from_name'] );
+		$this->assertStringContainsString( 'acting on Chris Huber', $GLOBALS['venue_membership_test']['sent_emails'][0]['context']['body_html'] );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['permission_boundary_failures'] );
 
 		$this->install_account_creator();
 		$new = $service->invite( 1, 56, 'brand-new@example.com', true );
@@ -1098,7 +1220,11 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertTrue( $new['delivery_queued'] );
 		$this->assertTrue( $GLOBALS['venue_membership_test']['created_account_input']['unclaimed'] );
 		$this->assertSame( 'venue_invitation', $GLOBALS['venue_membership_test']['created_account_input']['registration_source'] );
-		$this->assertStringContainsString( 'action=rp', $GLOBALS['venue_membership_test']['queued_emails'][1]['context']['cta_url'] );
+		$this->assertSame( 0, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$delivery_id = $GLOBALS['venue_membership_test']['scheduled_actions'][1]['args'][0];
+		( new VenueInvitationDeliveryWorker() )->deliver( $delivery_id );
+		$this->assertSame( 1, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$this->assertStringContainsString( 'action=rp', $GLOBALS['venue_membership_test']['sent_emails'][1]['context']['cta_url'] );
 	}
 
 	public function test_account_creation_requires_fresh_membership_authority_but_not_booking_access(): void {
@@ -1120,18 +1246,37 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 1, $GLOBALS['venue_membership_test']['account_create_calls'] );
 	}
 
-	public function test_reset_key_failure_rolls_back_new_account_without_sending_or_persisting(): void {
+	public function test_failed_existing_unclaimed_invitation_preserves_prior_reset_handoff(): void {
+		$this->create_member( 55, 2, true );
+		$GLOBALS['venue_membership_test']['user_meta'][7] = array( 'ec_unclaimed' => '1' );
+		$GLOBALS['wpdb']->fail_invitation_insert          = true;
+
+		$result = ( new VenueOnboardingService() )->invite( 2, 55, 'existing@example.com', false );
+
+		$this->assertSame( 'venue_invitation_create_failed', $result->get_error_code() );
+		$this->assertSame( 0, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['scheduled_actions'] );
+		$this->assertArrayHasKey( 7, $GLOBALS['venue_membership_test']['users'] );
+	}
+
+	public function test_reset_key_is_deferred_until_persisted_worker_delivery(): void {
 		$this->create_member( 55, 2, true );
 		$this->install_account_creator();
 		$GLOBALS['venue_membership_test']['fail_reset_key'] = true;
 
 		$result = ( new VenueOnboardingService() )->invite( 2, 55, 'reset-failure@example.com', false );
 
-		$this->assertSame( 'venue_invitation_reset_key_failed', $result->get_error_code() );
-		$this->assertSame( array( 8 ), $GLOBALS['venue_membership_test']['rollback_attempts'] );
-		$this->assertArrayNotHasKey( 8, $GLOBALS['venue_membership_test']['users'] );
-		$this->assertSame( array(), $GLOBALS['venue_membership_test']['queued_emails'] );
-		$this->assertSame( array(), $GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'] ?? array() );
+		$this->assertFalse( is_wp_error( $result ) );
+		$this->assertSame( 0, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$GLOBALS['venue_membership_test']['doing_action'] = 'action_scheduler_run_queue';
+		$delivered = ( new VenueInvitationDeliveryWorker() )->deliver( $GLOBALS['venue_membership_test']['scheduled_actions'][0]['args'][0] );
+		$this->assertSame( 'venue_invitation_reset_key_failed', $delivered->get_error_code() );
+		$this->assertSame( 1, $GLOBALS['venue_membership_test']['reset_key_calls'] );
+		$this->assertArrayHasKey( 8, $GLOBALS['venue_membership_test']['users'] );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['sent_emails'] );
+		$invitation = array_values( $GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'] )[0];
+		$this->assertSame( VenueOnboardingRepository::DELIVERY_FAILED, $invitation['delivery_status'] );
+		$this->assertSame( str_repeat( '0', 64 ), $invitation['token_hash'] );
 	}
 
 	public function test_authority_race_and_invitation_write_failure_compensate_new_accounts(): void {
@@ -1164,10 +1309,39 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( array( 8, 8 ), $GLOBALS['venue_membership_test']['rollback_attempts'] );
 	}
 
-	public function test_delivery_failure_cancels_state_and_compensates_provenanced_account(): void {
+	public function test_compensation_locks_and_preserves_concurrently_adopted_account(): void {
 		$this->create_member( 55, 2, true );
 		$this->install_account_creator();
-		$GLOBALS['venue_membership_test']['fail_delivery'] = true;
+		$GLOBALS['venue_membership_test']['fail_schedule'] = true;
+		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
+			$wpdb->insert(
+				'wp_7_ec_venue_members',
+				array(
+					'venue_term_id'      => 56,
+					'user_id'            => 8,
+					'is_owner'           => 0,
+					'status'             => VenueAuthorization::STATUS_ACTIVE,
+					'version'            => 1,
+					'created_by_user_id' => 3,
+					'created_at'         => '2026-01-01 00:00:00',
+					'updated_at'         => '2026-01-01 00:00:00',
+					'revoked_at'         => null,
+				)
+			);
+		};
+
+		$result = ( new VenueOnboardingService() )->invite( 2, 55, 'adopted-race@example.com', false );
+
+		$this->assertSame( 'venue_invitation_delivery_failed', $result->get_error_code() );
+		$this->assertArrayHasKey( 8, $GLOBALS['venue_membership_test']['users'] );
+		$this->assertSame( array(), $GLOBALS['venue_membership_test']['rollback_attempts'] );
+		$this->assertSame( VenueAuthorization::STATUS_ACTIVE, ( new VenueMembershipRepository() )->get( 56, 8 )['status'] );
+	}
+
+	public function test_schedule_failure_cancels_state_and_compensates_provenanced_account(): void {
+		$this->create_member( 55, 2, true );
+		$this->install_account_creator();
+		$GLOBALS['venue_membership_test']['fail_schedule'] = true;
 
 		$result = ( new VenueOnboardingService() )->invite( 2, 55, 'delivery-failure@example.com', false );
 
@@ -1229,17 +1403,16 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->create_member( 56, 3, true );
 		$repository = new VenueOnboardingRepository();
 		$service    = new VenueOnboardingService( $repository );
-		$tokens     = new VenueInvitationToken();
 
 		$GLOBALS['venue_membership_test']['users'][8] = new WP_User( 8, 'reject-created@example.com' );
 		$GLOBALS['venue_membership_test']['user_meta'][8] = array(
 			'ec_unclaimed'       => '1',
 			'registration_source' => 'venue_invitation',
 		);
-		$reject_token = $tokens->generate();
-		$rejected     = $repository->create_invitation( 2, 55, 8, false, $this->email_hash( 'reject-created@example.com' ), $reject_token, 3600, true );
+		$rejected     = $this->create_prepared_invitation( $repository, 2, 55, 8, false, 'reject-created@example.com', true );
+		$reject_token = $rejected['_delivery_token'];
 		update_user_meta( 8, 'ec_venue_invitation_account', $rejected['public_id'] );
-		$result = $service->respond( 8, $rejected['public_id'], $reject_token, 55, false, 1, VenueOnboardingRepository::INVITE_REJECTED );
+		$result = $service->respond( 8, $rejected['public_id'], $reject_token, 55, false, 2, VenueOnboardingRepository::INVITE_REJECTED );
 		$this->assertSame( VenueOnboardingRepository::INVITE_REJECTED, $result['status'] );
 		$this->assertArrayNotHasKey( 8, $GLOBALS['venue_membership_test']['users'] );
 
@@ -1248,11 +1421,11 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 			'ec_unclaimed'       => '1',
 			'registration_source' => 'venue_invitation',
 		);
-		$expire_token = $tokens->generate();
-		$expired      = $repository->create_invitation( 3, 56, 9, false, $this->email_hash( 'expire-created@example.com' ), $expire_token, 3600, true );
+		$expired      = $this->create_prepared_invitation( $repository, 3, 56, 9, false, 'expire-created@example.com', true );
+		$expire_token = $expired['_delivery_token'];
 		update_user_meta( 9, 'ec_venue_invitation_account', $expired['public_id'] );
 		$GLOBALS['wpdb']->rows['wp_7_ec_venue_invitations'][ $expired['id'] ]['expires_at'] = '2000-01-01 00:00:00';
-		$result = $service->respond( 9, $expired['public_id'], $expire_token, 56, false, 1, VenueOnboardingRepository::INVITE_ACCEPTED );
+		$result = $service->respond( 9, $expired['public_id'], $expire_token, 56, false, 2, VenueOnboardingRepository::INVITE_ACCEPTED );
 		$this->assertSame( 'venue_invitation_expired', $result->get_error_code() );
 		$this->assertArrayNotHasKey( 9, $GLOBALS['venue_membership_test']['users'] );
 	}

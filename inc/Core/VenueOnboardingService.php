@@ -76,9 +76,8 @@ class VenueOnboardingService {
 			return $account;
 		}
 
-		$token      = $this->tokens->generate();
 		$email_hash = hash_hmac( 'sha256', $email, wp_salt( 'auth' ) );
-		$invitation = $this->repository->create_invitation( $actor_user_id, $venue_term_id, $account['user_id'], $is_owner, $email_hash, $token, self::INVITATION_TTL, $account['created'] );
+		$invitation = $this->repository->create_invitation( $actor_user_id, $venue_term_id, $account['user_id'], $is_owner, $email_hash, $account['created'] );
 		if ( is_wp_error( $invitation ) ) {
 			return $this->compensate_initial_account( $account, $email, $invitation );
 		}
@@ -86,7 +85,7 @@ class VenueOnboardingService {
 			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, $email, new \WP_Error( 'venue_invitation_provenance_failed', __( 'The invitation account provenance could not be saved.', 'extrachill-events' ), array( 'status' => 500 ) ), 'invitation_provenance_failed' );
 		}
 
-		$queued = $this->queue_delivery( $invitation, $token, $account['claim_url'] );
+		$queued = $this->schedule_delivery( $invitation );
 		if ( is_wp_error( $queued ) ) {
 			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, $email, $queued, 'invitation_delivery_failed' );
 		}
@@ -105,22 +104,15 @@ class VenueOnboardingService {
 	 * @param int $expected_version Expected invitation version.
 	 */
 	public function resend( int $actor_user_id, int $invitation_id, int $expected_version ) {
-		$token      = $this->tokens->generate();
-		$invitation = $this->repository->resend_invitation( $actor_user_id, $invitation_id, $expected_version, $token, self::INVITATION_TTL );
+		$invitation = $this->repository->resend_invitation( $actor_user_id, $invitation_id, $expected_version );
 		if ( is_wp_error( $invitation ) ) {
 			return $invitation;
 		}
-		$user = get_userdata( $invitation['user_id'] );
-		if ( ! $user ) {
-			return new \WP_Error( 'venue_invitation_user_missing', __( 'The invitation user no longer exists.', 'extrachill-events' ), array( 'status' => 409 ) );
-		}
-		$claim_url = '1' === (string) get_user_meta( $user->ID, 'ec_unclaimed', true ) ? $this->build_claim_url( $user ) : '';
-		if ( is_wp_error( $claim_url ) ) {
-			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, strtolower( sanitize_email( $user->user_email ) ), $claim_url, 'invitation_reset_key_failed' );
-		}
-		$queued = $this->queue_delivery( $invitation, $token, $claim_url );
+		$queued = $this->schedule_delivery( $invitation );
 		if ( is_wp_error( $queued ) ) {
-			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, strtolower( sanitize_email( $user->user_email ) ), $queued, 'invitation_delivery_failed' );
+			$user  = get_userdata( $invitation['user_id'] );
+			$email = $user instanceof \WP_User ? strtolower( sanitize_email( $user->user_email ) ) : '';
+			return $this->compensate_persisted_invitation( $invitation, $actor_user_id, $email, $queued, 'invitation_delivery_failed' );
 		}
 		$this->repository->audit_delivery( $invitation, $actor_user_id, true );
 		$result                    = $this->repository->public_invitation( $invitation );
@@ -178,14 +170,9 @@ class VenueOnboardingService {
 	private function resolve_account( string $email ) {
 		$user = get_user_by( 'email', $email );
 		if ( $user instanceof \WP_User ) {
-			$claim_url = '1' === (string) get_user_meta( $user->ID, 'ec_unclaimed', true ) ? $this->build_claim_url( $user ) : '';
-			if ( is_wp_error( $claim_url ) ) {
-				return $claim_url;
-			}
 			return array(
-				'user_id'   => (int) $user->ID,
-				'created'   => false,
-				'claim_url' => $claim_url,
+				'user_id' => (int) $user->ID,
+				'created' => false,
 			);
 		}
 		$create = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'extrachill/create-user' ) : null;
@@ -214,93 +201,23 @@ class VenueOnboardingService {
 		if ( ! $user ) {
 			return new \WP_Error( 'venue_invitation_account_missing', __( 'The invited account could not be resolved.', 'extrachill-events' ) );
 		}
-		$claim_url = $this->build_claim_url( $user );
-		if ( is_wp_error( $claim_url ) ) {
-			return $this->compensate_initial_account(
-				array(
-					'user_id' => (int) $user_id,
-					'created' => true,
-				),
-				$email,
-				$claim_url
-			);
-		}
 		return array(
-			'user_id'   => (int) $user_id,
-			'created'   => true,
-			'claim_url' => $claim_url,
+			'user_id' => (int) $user_id,
+			'created' => true,
 		);
 	}
 
 	/**
-	 * Generate the existing WordPress one-time password handoff URL.
+	 * Queue only the opaque stored delivery identity.
 	 *
-	 * @param \WP_User $user Invited network user.
+	 * @param array $invitation Internal invitation record.
 	 */
-	private function build_claim_url( \WP_User $user ) {
-		$key = get_password_reset_key( $user );
-		if ( is_wp_error( $key ) ) {
-			return new \WP_Error( 'venue_invitation_reset_key_failed', __( 'The invited account handoff could not be created.', 'extrachill-events' ), array( 'status' => 500 ) );
+	private function schedule_delivery( array $invitation ) {
+		if ( empty( $invitation['_delivery_id'] ) || ! function_exists( 'as_enqueue_async_action' ) ) {
+			return new \WP_Error( 'venue_invitation_delivery_unavailable', __( 'The invitation delivery worker is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		$base = function_exists( 'ec_get_site_url' ) ? ec_get_site_url( 'community' ) : network_site_url();
-		return trailingslashit( $base ) . 'wp-login.php?action=rp&key=' . rawurlencode( $key ) . '&login=' . rawurlencode( $user->user_login );
-	}
-
-	/**
-	 * Queue through Data Machine without logging or returning the raw token.
-	 *
-	 * @param array  $invitation Internal invitation record.
-	 * @param string $token      Raw one-time token.
-	 * @param string $claim_url  Existing account-claim URL, when needed.
-	 */
-	private function queue_delivery( array $invitation, string $token, string $claim_url ) {
-		$user  = get_userdata( $invitation['user_id'] );
-		$venue = get_term( $invitation['venue_term_id'], 'venue' );
-		if ( ! $user || ! $venue || is_wp_error( $venue ) || ! function_exists( 'ec_send_email_queued' ) ) {
-			return new \WP_Error( 'venue_invitation_delivery_unavailable', __( 'The invitation delivery could not be prepared.', 'extrachill-events' ), array( 'status' => 503 ) );
-		}
-		$accept_url = add_query_arg(
-			array(
-				'action'        => 'ec_accept_venue_invitation',
-				'invitation_id' => $invitation['public_id'],
-				'token'         => $token,
-				'venue_term_id' => $invitation['venue_term_id'],
-				'is_owner'      => $invitation['is_owner'] ? 1 : 0,
-				'version'       => $invitation['version'],
-			),
-			admin_url( 'admin-post.php' )
-		);
-		$cta_url    = $claim_url ? $claim_url : $accept_url;
-		/* translators: %s: Venue name. */
-		$body = '<p>' . esc_html( sprintf( __( 'You have been invited to help manage %s on Extra Chill.', 'extrachill-events' ), $venue->name ) ) . '</p>';
-		if ( $claim_url ) {
-			$body .= '<p>' . esc_html__( 'Set your account password first, then return to the invitation link below to accept.', 'extrachill-events' ) . '</p>';
-			$body .= '<p><a href="' . esc_url( $accept_url ) . '">' . esc_html__( 'Accept venue invitation', 'extrachill-events' ) . '</a></p>';
-		}
-		$body   .= '<p>' . esc_html__( 'This message was sent by Extra Chill Bot acting on Chris Huber\'s behalf.', 'extrachill-events' ) . '</p>';
-		$payload = array(
-			'to'        => $user->user_email,
-			'cc'        => 'chubes@extrachill.com',
-			/* translators: %s: Venue name. */
-			'subject'   => sprintf( __( 'Invitation to manage %s', 'extrachill-events' ), $venue->name ),
-			'from_name' => 'Extra Chill Bot',
-			'template'  => 'extrachill/branded',
-			'context'   => array(
-				'recipient_name' => $user->display_name,
-				'body_html'      => $body,
-				'cta_url'        => $cta_url,
-				'cta_label'      => $claim_url ? __( 'Set Your Password', 'extrachill-events' ) : __( 'Accept Invitation', 'extrachill-events' ),
-			),
-		);
-		$send    = static function () use ( $payload ) {
-			return ec_send_email_queued( $payload );
-		};
-		$result  = class_exists( '\DataMachine\Abilities\PermissionHelper' )
-			? \DataMachine\Abilities\PermissionHelper::run_as_authenticated( $send, $invitation['invited_by_user_id'] )
-			: $send();
-		return is_array( $result ) && ! empty( $result['success'] )
-			? true
-			: new \WP_Error( 'venue_invitation_delivery_failed', __( 'The invitation delivery could not be queued.', 'extrachill-events' ), array( 'status' => 503 ) );
+		$action_id = as_enqueue_async_action( VenueInvitationDeliveryWorker::HOOK, array( $invitation['_delivery_id'] ), VenueInvitationDeliveryWorker::GROUP, true );
+		return $action_id ? true : new \WP_Error( 'venue_invitation_delivery_failed', __( 'The invitation delivery could not be queued.', 'extrachill-events' ), array( 'status' => 503 ) );
 	}
 
 	/** Persist exact invitation provenance on a newly created account. */
@@ -352,16 +269,30 @@ class VenueOnboardingService {
 		if ( ! $user ) {
 			return true;
 		}
-		$matches = '1' === (string) get_user_meta( $user_id, 'ec_unclaimed', true )
-			&& 'venue_invitation' === (string) get_user_meta( $user_id, 'registration_source', true )
-			&& strtolower( sanitize_email( $user->user_email ) ) === $email;
-		if ( '' !== $public_id ) {
-			$matches = $matches && hash_equals( $public_id, (string) get_user_meta( $user_id, self::ACCOUNT_PROVENANCE_META, true ) );
-		}
-		if ( ! $matches || ( is_array( $invitation ) && ! $this->repository->account_is_exclusive_to_invitation( $invitation ) ) ) {
-			return true;
-		}
-		return function_exists( 'extrachill_users_rollback_created_user' ) && extrachill_users_rollback_created_user( $user_id );
+		$identity = is_array( $invitation ) ? $invitation : array(
+			'id'            => 0,
+			'venue_term_id' => 0,
+			'user_id'       => $user_id,
+		);
+		return $this->repository->delete_account_if_exclusive(
+			$identity,
+			static function () use ( $user_id, $email, $public_id ) {
+				$user = get_userdata( $user_id );
+				if ( ! $user ) {
+					return true;
+				}
+				$matches = '1' === (string) get_user_meta( $user_id, 'ec_unclaimed', true )
+					&& 'venue_invitation' === (string) get_user_meta( $user_id, 'registration_source', true )
+					&& strtolower( sanitize_email( $user->user_email ) ) === $email;
+				if ( '' !== $public_id ) {
+					$matches = $matches && hash_equals( $public_id, (string) get_user_meta( $user_id, self::ACCOUNT_PROVENANCE_META, true ) );
+				}
+				if ( ! $matches ) {
+					return true;
+				}
+				return function_exists( 'extrachill_users_rollback_created_user' ) && extrachill_users_rollback_created_user( $user_id );
+			}
+		);
 	}
 
 	/** Return a bounded manual-reconciliation error without leaking account data. */

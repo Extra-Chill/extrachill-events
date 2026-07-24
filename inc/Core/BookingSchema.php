@@ -171,7 +171,8 @@ class BookingSchema {
 			UNIQUE KEY public_id (public_id),
 			UNIQUE KEY venue_claimant (venue_term_id, claimant_user_id),
 			KEY status_created (status, created_at),
-			KEY venue_status (venue_term_id, status)
+			KEY venue_status (venue_term_id, status),
+			KEY claimant_status_venue (claimant_user_id, status, venue_term_id)
 		) ENGINE=InnoDB {$charset};";
 
 		$invites_sql = "CREATE TABLE {$invites} (
@@ -184,17 +185,23 @@ class BookingSchema {
 			token_hash CHAR(64) NOT NULL,
 			email_hash CHAR(64) NOT NULL,
 			account_created TINYINT UNSIGNED NOT NULL DEFAULT '0',
+			delivery_id CHAR(36) NOT NULL,
+			delivery_status VARCHAR(20) NOT NULL DEFAULT 'queued',
+			delivery_attempts BIGINT UNSIGNED NOT NULL DEFAULT '0',
 			version BIGINT UNSIGNED NOT NULL DEFAULT '1',
 			invited_by_user_id BIGINT UNSIGNED NOT NULL,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
 			expires_at DATETIME NOT NULL,
 			resolved_at DATETIME NULL,
+			delivered_at DATETIME NULL,
 			PRIMARY KEY (id),
 			UNIQUE KEY public_id (public_id),
+			UNIQUE KEY delivery_id (delivery_id),
 			UNIQUE KEY venue_user (venue_term_id, user_id),
 			KEY venue_status (venue_term_id, status),
-			KEY status_expiration (status, expires_at)
+			KEY status_expiration (status, expires_at),
+			KEY user_status_venue (user_id, status, venue_term_id)
 		) ENGINE=InnoDB {$charset};";
 
 		$audit_sql = "CREATE TABLE {$audit} (
@@ -711,25 +718,29 @@ class BookingSchema {
 					'resolved_at'         => $required( 'datetime', true ),
 				),
 				'indexes' => array(
-					'PRIMARY'        => array(
+					'PRIMARY'               => array(
 						'unique'  => true,
 						'columns' => array( 'id' ),
 					),
-					'public_id'      => array(
+					'public_id'             => array(
 						'unique'  => true,
 						'columns' => array( 'public_id' ),
 					),
-					'venue_claimant' => array(
+					'venue_claimant'        => array(
 						'unique'  => true,
 						'columns' => array( 'venue_term_id', 'claimant_user_id' ),
 					),
-					'status_created' => array(
+					'status_created'        => array(
 						'unique'  => false,
 						'columns' => array( 'status', 'created_at' ),
 					),
-					'venue_status'   => array(
+					'venue_status'          => array(
 						'unique'  => false,
 						'columns' => array( 'venue_term_id', 'status' ),
+					),
+					'claimant_status_venue' => array(
+						'unique'  => false,
+						'columns' => array( 'claimant_user_id', 'status', 'venue_term_id' ),
 					),
 				),
 			),
@@ -744,12 +755,17 @@ class BookingSchema {
 					'status'             => $required( 'varchar(20)', false, array( 'default' => 'pending' ) ),
 					'token_hash'         => $required( 'char(64)', false ),
 					'email_hash'         => $required( 'char(64)', false ),
+					'account_created'    => $required( 'tinyint unsigned', false, array( 'default' => '0' ) ),
+					'delivery_id'        => $required( 'char(36)', false ),
+					'delivery_status'    => $required( 'varchar(20)', false, array( 'default' => 'queued' ) ),
+					'delivery_attempts'  => $required( 'bigint unsigned', false, array( 'default' => '0' ) ),
 					'version'            => $required( 'bigint unsigned', false, array( 'default' => '1' ) ),
 					'invited_by_user_id' => $required( 'bigint unsigned', false ),
 					'created_at'         => $required( 'datetime', false ),
 					'updated_at'         => $required( 'datetime', false ),
 					'expires_at'         => $required( 'datetime', false ),
 					'resolved_at'        => $required( 'datetime', true ),
+					'delivered_at'       => $required( 'datetime', true ),
 				),
 				'indexes' => array(
 					'PRIMARY'           => array(
@@ -759,6 +775,10 @@ class BookingSchema {
 					'public_id'         => array(
 						'unique'  => true,
 						'columns' => array( 'public_id' ),
+					),
+					'delivery_id'       => array(
+						'unique'  => true,
+						'columns' => array( 'delivery_id' ),
 					),
 					'venue_user'        => array(
 						'unique'  => true,
@@ -771,6 +791,10 @@ class BookingSchema {
 					'status_expiration' => array(
 						'unique'  => false,
 						'columns' => array( 'status', 'expires_at' ),
+					),
+					'user_status_venue' => array(
+						'unique'  => false,
+						'columns' => array( 'user_id', 'status', 'venue_term_id' ),
 					),
 				),
 			),

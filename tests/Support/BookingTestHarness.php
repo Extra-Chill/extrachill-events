@@ -7,6 +7,7 @@
 
 use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingCommunicationService;
+use ExtraChillEvents\Core\BookingNotificationService;
 use ExtraChillEvents\Core\BookingPrivateFileProvider;
 use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingHoldRepository;
@@ -1364,6 +1365,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingNotificationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingCommunicationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMutationService.php';

@@ -96,17 +96,25 @@ jobs:
           run_artifacts_dir=$(find "$ARTIFACTS_DIR" -maxdepth 1 -type d -name 'wp-codebox-phpunit.*' -print -quit)
           test -n "$run_artifacts_dir"
           runtime_dir=$(jq -er '.paths.runtimeDirectory' "$run_artifacts_dir/latest-runtime.json")
-          result="$run_artifacts_dir/$runtime_dir/files/phpunit/.pg-test-result.txt"
-          test -f "$result"
-          grep -q '^STAGE_BEGIN:run_tests' "$result"
-          if grep -Eiq 'skip|no tests executed|OK, but' "$result"; then
-            echo "MySQL proof skipped or did not execute cleanly" >&2
-            exit 1
-          fi
-          grep -Eq 'OK \(1 test, [1-9][0-9]* assertions?\)' "$result"
-          cp "$result" "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
+          commands="$run_artifacts_dir/$runtime_dir/commands.jsonl"
+          metadata="$run_artifacts_dir/$runtime_dir/metadata.json"
+          test -f "$commands"
+          test -f "$metadata"
+          jq -ers '
+            [.[] | select(.command == "wordpress.phpunit")] as $runs
+            | ($runs | length) == 1
+              and $runs[0].exitCode == 0
+              and $runs[0].result.status == "ok"
+              and ($runs[0].stdout | test("OK \\(1 test, [1-9][0-9]* assertions?\\)"))
+              and (($runs[0].stdout | test("skip|no tests executed|OK, but"; "i")) | not)
+          ' "$commands" >/dev/null
+          jq -e '
+            any(.context.managedRuntimeServices[]; .kind == "mysql" and .provider == "docker" and .readiness == "ready")
+            and any(.context.recipe.workflow.steps[].args[]; . == "database-type=mysql")
+          ' "$metadata" >/dev/null
+          jq -rs '[.[] | select(.command == "wordpress.phpunit")][0].stdout' "$commands" > "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
           printf '%s\n' "Verified application-level MySQL proof:"
-          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$result"
+          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
 
       - name: Upload WP Codebox evidence
         if: always()

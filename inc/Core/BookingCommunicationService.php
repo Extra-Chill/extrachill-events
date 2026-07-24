@@ -130,6 +130,10 @@ class BookingCommunicationService {
 		if ( is_wp_error( $intent ) ) {
 			return $this->rollback( $intent );
 		}
+		$initialized = $this->activity->create_communication_state( $intent );
+		if ( is_wp_error( $initialized ) ) {
+			return $this->rollback( $initialized );
+		}
 		$committed = $this->commit();
 		return is_wp_error( $committed ) ? $committed : $this->resume( $intent );
 	}
@@ -379,7 +383,7 @@ class BookingCommunicationService {
 		if ( ! is_array( $locked ) || (int) $locked['venue_term_id'] !== (int) $booking['venue_term_id'] ) {
 			return $this->rollback( $this->forbidden() );
 		}
-		$rows = $this->activity->communication_state_rows( $booking_id );
+		$rows = $this->activity->list_communications( $booking_id, 200 );
 		if ( is_wp_error( $rows ) ) {
 			return $this->rollback( $rows );
 		}
@@ -387,66 +391,99 @@ class BookingCommunicationService {
 		if ( is_wp_error( $committed ) ) {
 			return $committed;
 		}
-		$rows = array_values( array_filter( $rows, array( $this, 'is_communication_activity' ) ) );
-		return array_slice( array_reverse( $rows ), 0, 200 );
-	}
-
-	public function is_communication_activity( array $activity ): bool {
-		return 0 === strpos( $activity['kind'], 'booking_message_' ) || 0 === strpos( $activity['kind'], 'booking_reminder_' );
+		return $rows;
 	}
 
 	/** Durably suppress reminders, then best-effort cancel their physical actions. */
 	public function suppress_pending_reminders( int $booking_id, string $reason ) {
-		$rows = $this->activity->communication_state_rows( $booking_id );
-		if ( is_wp_error( $rows ) ) {
-			return $rows;
+		$started = $this->begin();
+		if ( is_wp_error( $started ) ) {
+			return $started;
 		}
-		foreach ( $rows as $row ) {
-			if ( 'booking_message_requested' !== $row['kind'] || empty( $row['payload']['data']['send_at'] ) ) {
-				continue;
-			}
-			$state = $this->state_for_intent( $row );
-			if ( is_wp_error( $state ) ) {
-				return $state;
-			}
-			if ( 'scheduled' !== $state['status'] ) {
-				continue;
-			}
-			$event = $this->append_state( $row, 'booking_reminder_suppressed', 'suppressed', array( 'reason' => $reason ) );
+		$booking = $this->bookings->get_for_update( $booking_id );
+		if ( ! is_array( $booking ) ) {
+			return $this->rollback( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) ) );
+		}
+		$pending = $this->activity->pending_reminders( $booking_id );
+		if ( is_wp_error( $pending ) ) {
+			return $this->rollback( $pending );
+		}
+		$actions = array();
+		foreach ( $pending as $item ) {
+			$event = $this->append_state( $item['intent'], 'booking_reminder_suppressed', 'suppressed', array( 'reason' => $reason ), null, $item['state'] );
 			if ( is_wp_error( $event ) ) {
-				return $event;
+				return $this->rollback( $event );
 			}
-			if ( ! empty( $state['action_id'] ) ) {
-				try {
-					if ( $this->cancel ) {
-						call_user_func( $this->cancel, $state['action_id'] );
-					} elseif ( class_exists( '\ActionScheduler' ) ) {
-						\ActionScheduler::store()->cancel_action( $state['action_id'] );
-					}
-				} catch ( \Throwable $throwable ) {
-					unset( $throwable );
-					// The durable suppression remains authoritative if physical cancellation fails.
+			if ( ! empty( $item['state']['action_id'] ) ) {
+				$actions[] = $item['state']['action_id'];
+			}
+		}
+		$committed = $this->commit();
+		if ( is_wp_error( $committed ) ) {
+			return $committed;
+		}
+		foreach ( $actions as $action_id ) {
+			try {
+				if ( $this->cancel ) {
+					call_user_func( $this->cancel, $action_id );
+				} elseif ( class_exists( '\ActionScheduler' ) ) {
+					\ActionScheduler::store()->cancel_action( $action_id );
 				}
+			} catch ( \Throwable $throwable ) {
+				unset( $throwable );
+				// The durable suppression remains authoritative if physical cancellation fails.
 			}
 		}
 		return true;
 	}
 
-	private function append_state( array $intent, string $kind, string $stage, array $payload, ?string $external_id = null ) {
+	private function append_state( array $intent, string $kind, string $stage, array $payload, ?string $external_id = null, ?array $known_state = null ) {
+		$owns_transaction = false;
+		if ( ! $this->transaction_active ) {
+			$started = $this->begin();
+			if ( is_wp_error( $started ) ) {
+				return $started;
+			}
+			$owns_transaction = true;
+			$booking          = $this->bookings->get_for_update( $intent['booking_id'] );
+			if ( ! is_array( $booking ) ) {
+				return $this->rollback( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) ) );
+			}
+		}
+		$state = null === $known_state ? $this->state_for_intent( $intent ) : $this->validate_state( $intent, $known_state );
+		if ( is_wp_error( $state ) ) {
+			return $owns_transaction ? $this->rollback( $state ) : $state;
+		}
 		if ( 'booking_message_failed' === $kind ) {
 			$payload['status'] = 'failed';
 		}
-		$attempt = 1;
-		$rows    = $this->activity->communication_state_rows( $intent['booking_id'] );
-		if ( is_wp_error( $rows ) ) {
-			return $rows;
+		$count = $this->activity->communication_attempt_count( $intent['id'], $kind );
+		if ( is_wp_error( $count ) ) {
+			return $owns_transaction ? $this->rollback( $count ) : $count;
 		}
-		foreach ( $rows as $row ) {
-			if ( (int) ( $row['payload']['data']['intent_id'] ?? 0 ) === (int) $intent['id'] && $kind === $row['kind'] ) {
-				++$attempt;
-			}
+		$attempt = $count + 1;
+		$marker  = $this->state_marker(
+			array(
+				'id'          => 0,
+				'kind'        => $kind,
+				'external_id' => $external_id,
+				'payload'     => array(
+					'data' => array_merge(
+						array(
+							'stage'   => $stage,
+							'attempt' => $attempt,
+						),
+						$payload
+					),
+				),
+			),
+			$state['raw_status']
+		);
+		if ( is_wp_error( $marker ) || ! $this->transition_allowed( $state['raw_status'], is_wp_error( $marker ) ? '' : $marker['status'] ) ) {
+			$error = is_wp_error( $marker ) ? $marker : $this->invalid_state( array( 'id' => $state['updated_activity_id'] ) );
+			return $owns_transaction ? $this->rollback( $error ) : $error;
 		}
-		return $this->activity->append(
+		$event = $this->activity->append(
 			array(
 				'booking_id'      => $intent['booking_id'],
 				'kind'            => $kind,
@@ -465,27 +502,40 @@ class BookingCommunicationService {
 				),
 			)
 		);
+		if ( is_wp_error( $event ) ) {
+			return $owns_transaction ? $this->rollback( $event ) : $event;
+		}
+		$claim_stage = in_array( $marker['status'], array( 'dispatching', 'scheduling' ), true ) ? $marker['status'] : null;
+		$updated     = $this->activity->update_communication_state( $state, $marker['status'], $claim_stage, $marker['action_id'], $event['id'] );
+		if ( is_wp_error( $updated ) ) {
+			return $owns_transaction ? $this->rollback( $updated ) : $updated;
+		}
+		if ( $owns_transaction ) {
+			$committed = $this->commit();
+			if ( is_wp_error( $committed ) ) {
+				return $committed;
+			}
+		}
+		return $event;
 	}
 
 	private function state_for_intent( array $intent ) {
-		$state = array(
-			'intent_id'   => $intent['id'],
-			'booking_id'  => $intent['booking_id'],
-			'status'      => 'requested',
-			'action_id'   => null,
-			'claim_stage' => null,
-		);
-		$rows  = $this->activity->communication_state_rows( $intent['booking_id'] );
-		if ( is_wp_error( $rows ) ) {
-			return $rows;
+		$state = $this->activity->communication_state( $intent['id'] );
+		if ( is_wp_error( $state ) ) {
+			return $state;
 		}
-		usort(
-			$rows,
-			static function ( array $left, array $right ): int {
-				return $left['id'] <=> $right['id'];
-			}
-		);
-		$current = 'requested';
+		return is_array( $state ) ? $this->validate_state( $intent, $state ) : $this->invalid_state( $intent );
+	}
+
+	/** Validate the durable projection against its latest indexed audit marker. */
+	private function validate_state( array $intent, array $state ) {
+		$raw_status = $state['raw_status'] ?? $state['status'] ?? null;
+		$claim      = $state['claim_stage'] ?? null;
+		$action_id  = $state['action_id'] ?? null;
+		$updated_id = (int) ( $state['updated_activity_id'] ?? 0 );
+		if ( (int) ( $state['intent_id'] ?? 0 ) !== (int) $intent['id'] || (int) ( $state['booking_id'] ?? 0 ) !== (int) $intent['booking_id'] ) {
+			return $this->invalid_state( $intent );
+		}
 		$allowed = array(
 			'requested'   => array( 'scheduling', 'dispatching', 'suppressed', 'cancelled' ),
 			'scheduling'  => array( 'scheduled', 'failed' ),
@@ -496,24 +546,42 @@ class BookingCommunicationService {
 			'suppressed'  => array(),
 			'cancelled'   => array(),
 		);
-		foreach ( $rows as $row ) {
-			if ( (int) ( $row['payload']['data']['intent_id'] ?? 0 ) !== (int) $intent['id'] ) {
-				continue;
-			}
-			$marker = $this->state_marker( $row, $current );
-			if ( is_wp_error( $marker ) ) {
-				return $marker;
-			}
-			$status = $marker['status'];
-			if ( ! is_string( $status ) || ! isset( $allowed[ $current ] ) || ! in_array( $status, $allowed[ $current ], true ) ) {
-				return new \WP_Error( 'booking_communication_state_invalid', __( 'Booking communication history is contradictory.', 'extrachill-events' ), array( 'activity_id' => $row['id'] ) );
-			}
-			$current              = $status;
-			$state['status']      = in_array( $status, array( 'dispatching', 'scheduling' ), true ) ? 'reconciliation_required' : $status;
-			$state['claim_stage'] = in_array( $status, array( 'dispatching', 'scheduling' ), true ) ? $status : null;
-			$state['action_id']   = $marker['action_id'];
+		if ( ! is_string( $raw_status ) || ! isset( $allowed[ $raw_status ] ) || ( in_array( $raw_status, array( 'scheduling', 'dispatching' ), true ) ? $claim !== $raw_status : null !== $claim ) || ( in_array( $raw_status, array( 'scheduled', 'queued' ), true ) ? ! is_int( $action_id ) || $action_id < 1 : null !== $action_id ) ) {
+			return $this->invalid_state( array( 'id' => $updated_id ) );
 		}
+		$latest = $this->activity->latest_communication_marker( $intent['id'] );
+		if ( is_wp_error( $latest ) ) {
+			return $latest;
+		}
+		if ( 'requested' === $raw_status ) {
+			if ( null !== $latest || $updated_id !== (int) $intent['id'] ) {
+				return $this->invalid_state( null === $latest ? $intent : $latest );
+			}
+		} elseif ( ! is_array( $latest ) || (int) $latest['id'] !== $updated_id ) {
+			return $this->invalid_state( is_array( $latest ) ? $latest : $intent );
+		} else {
+			$marker = $this->state_marker( $latest, $raw_status );
+			if ( is_wp_error( $marker ) || $marker['status'] !== $raw_status || $marker['action_id'] !== $action_id ) {
+				return is_wp_error( $marker ) ? $marker : $this->invalid_state( $latest );
+			}
+		}
+		$state['raw_status'] = $raw_status;
+		$state['status']     = in_array( $raw_status, array( 'dispatching', 'scheduling' ), true ) ? 'reconciliation_required' : $raw_status;
 		return $state;
+	}
+
+	private function transition_allowed( string $current, string $next ): bool {
+		$allowed = array(
+			'requested'   => array( 'scheduling', 'dispatching', 'suppressed', 'cancelled' ),
+			'scheduling'  => array( 'scheduled', 'failed' ),
+			'scheduled'   => array( 'dispatching', 'suppressed', 'cancelled' ),
+			'dispatching' => array( 'queued', 'failed' ),
+			'failed'      => array( 'scheduling', 'dispatching' ),
+			'queued'      => array(),
+			'suppressed'  => array(),
+			'cancelled'   => array(),
+		);
+		return isset( $allowed[ $current ] ) && in_array( $next, $allowed[ $current ], true );
 	}
 
 	/** Validate one state marker before it can affect reconstructed status. */
@@ -534,8 +602,8 @@ class BookingCommunicationService {
 			'booking_reminder_suppressed' => array( 'suppressed', 'suppressed', false ),
 		);
 		if ( 'booking_message_failed' === $kind ) {
-			$expected_stage = 'scheduling' === $current ? 'schedule' : ( 'dispatching' === $current ? 'queue' : null );
-			if ( null === $expected_stage || $stage !== $expected_stage || 'failed' !== $status || null !== $external || isset( $data['action_id'] ) || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
+			$expected_stage = 'scheduling' === $current ? 'schedule' : ( 'dispatching' === $current ? 'queue' : $stage );
+			if ( ! in_array( $expected_stage, array( 'schedule', 'queue' ), true ) || $stage !== $expected_stage || 'failed' !== $status || null !== $external || isset( $data['action_id'] ) || ! is_int( $data['attempt'] ?? null ) || $data['attempt'] < 1 ) {
 				return $this->invalid_state( $row );
 			}
 			return array(

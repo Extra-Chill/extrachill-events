@@ -102,6 +102,15 @@ final class BookingCommunicationTest extends TestCase {
 		);
 	}
 
+	public function test_schema_indexes_durable_communication_state_and_audit_reads(): void {
+		$this->assertTrue( BookingSchema::install() );
+		$activity_indexes = $GLOBALS['wpdb']->schemas[ BookingSchema::activity_table() ]['indexes'];
+		$state_indexes    = $GLOBALS['wpdb']->schemas[ BookingSchema::communication_state_table() ]['indexes'];
+		$this->assertSame( array( 'booking_id', 'is_communication', 'occurred_at', 'id' ), $activity_indexes['booking_communication_occurred']['columns'] );
+		$this->assertSame( array( 'communication_intent_id', 'kind' ), $activity_indexes['communication_intent_kind']['columns'] );
+		$this->assertSame( array( 'booking_id', 'status', 'intent_id' ), $state_indexes['booking_status_intent']['columns'] );
+	}
+
 	public function test_immediate_request_is_durable_before_safe_data_machine_delegation(): void {
 		$booking = $this->booking();
 		$queued = $scheduled = $cancelled = array();
@@ -622,6 +631,61 @@ final class BookingCommunicationTest extends TestCase {
 		$this->assertSame( 'booking_activity_write_failed', $contact->get_error_code() );
 		$this->assertTrue( $contact->get_error_data()['booking_committed'] );
 		$this->assertSame( 'changed@example.com', ( new BookingRepository() )->get( $booking['id'] )['contact_email'] );
+	}
+
+	public function test_large_history_uses_bounded_state_reads_and_keeps_public_page_at_200_rows(): void {
+		$booking = $this->booking();
+		$queued = $scheduled = $cancelled = array();
+		$service = $this->service( $queued, $scheduled, $cancelled );
+		for ( $index = 0; $index < 70; ++$index ) {
+			$result = $service->request( $this->input( $booking['id'], array( 'idempotency_key' => 'history-' . $index ) ), 12 );
+			$this->assertSame( 'queued', $result['status'] );
+		}
+		$pending_ids = array();
+		for ( $index = 0; $index < 3; ++$index ) {
+			$result        = $service->request( $this->input( $booking['id'], array( 'idempotency_key' => 'pending-' . $index, 'template' => 'follow_up', 'send_at' => sprintf( '2035-01-%02d 12:00:00', $index + 1 ), 'expected_statuses' => array( 'under_review' ) ) ), 12 );
+			$pending_ids[] = $result['intent_id'];
+		}
+
+		$activity_table = BookingSchema::activity_table();
+		$next_id        = max( array_keys( $GLOBALS['wpdb']->rows[ $activity_table ] ) ) + 1;
+		for ( $index = 0; $index < 1000; ++$index ) {
+			$id = $next_id + $index;
+			$GLOBALS['wpdb']->rows[ $activity_table ][ $id ] = array(
+				'id'                      => $id,
+				'booking_id'              => $booking['id'],
+				'kind'                    => 'booking_note_added',
+				'actor_type'              => 'system',
+				'actor_id'                => null,
+				'direction'               => null,
+				'channel'                 => null,
+				'communication_intent_id' => null,
+				'is_communication'        => 0,
+				'payload'                 => '{"version":1,"data":{}}',
+				'external_id'             => null,
+				'idempotency_key'         => null,
+				'occurred_at'             => '2030-01-01 00:00:00',
+				'created_at'              => '2030-01-01 00:00:00',
+			);
+		}
+
+		$GLOBALS['wpdb']->communication_state_queries        = 0;
+		$GLOBALS['wpdb']->communication_attempt_queries      = 0;
+		$GLOBALS['wpdb']->pending_reminder_rows_returned     = 0;
+		$GLOBALS['wpdb']->communication_public_rows_returned = 0;
+		$this->assertTrue( $service->suppress_pending_reminders( $booking['id'], 'booking_status_changed' ) );
+		$this->assertSame( 3, $GLOBALS['wpdb']->pending_reminder_rows_returned );
+		$this->assertSame( 3, $GLOBALS['wpdb']->communication_attempt_queries );
+		$this->assertLessThanOrEqual( 4, $GLOBALS['wpdb']->communication_state_queries );
+		$this->assertCount( 3, $cancelled );
+
+		$public = $service->list_for_booking( $booking['id'], 12 );
+		$this->assertCount( 200, $public );
+		$this->assertSame( 200, $GLOBALS['wpdb']->communication_public_rows_returned );
+		$this->assertSame( $pending_ids[2], $public[0]['payload']['data']['intent_id'] );
+		$this->assertNotContains( 'booking_note_added', array_column( $public, 'kind' ) );
+		$this->assertArrayNotHasKey( 'communication_intent_id', $public[0] );
+		$this->assertArrayNotHasKey( 'is_communication', $public[0] );
 	}
 
 	public function test_read_model_reauthorizes_under_lock_and_abilities_are_strict(): void {

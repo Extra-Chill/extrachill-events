@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '6';
+	public const SCHEMA_VERSION = '7';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -32,6 +32,12 @@ class BookingSchema {
 	public static function activity_table(): string {
 		global $wpdb;
 		return $wpdb->prefix . 'ec_booking_activity';
+	}
+
+	/** Get the booking communication state table for the current site. */
+	public static function communication_state_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_communication_state';
 	}
 
 	/** Get the venue membership table for the current site. */
@@ -50,11 +56,12 @@ class BookingSchema {
 	public static function install() {
 		global $wpdb;
 
-		$bookings = self::bookings_table();
-		$activity = self::activity_table();
-		$members  = self::memberships_table();
-		$holds    = self::holds_table();
-		$charset  = $wpdb->get_charset_collate();
+		$bookings            = self::bookings_table();
+		$activity            = self::activity_table();
+		$communication_state = self::communication_state_table();
+		$members             = self::memberships_table();
+		$holds               = self::holds_table();
+		$charset             = $wpdb->get_charset_collate();
 
 		$bookings_sql = "CREATE TABLE {$bookings} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -106,6 +113,8 @@ class BookingSchema {
 			actor_id BIGINT UNSIGNED NULL,
 			direction VARCHAR(16) NULL,
 			channel VARCHAR(32) NULL,
+			communication_intent_id BIGINT UNSIGNED NULL,
+			is_communication TINYINT UNSIGNED NOT NULL DEFAULT '0',
 			payload LONGTEXT NOT NULL,
 			external_id VARCHAR(191) NULL,
 			idempotency_key VARCHAR(191) NULL,
@@ -114,8 +123,23 @@ class BookingSchema {
 			PRIMARY KEY (id),
 			UNIQUE KEY booking_idempotency (booking_id, idempotency_key),
 			KEY booking_occurred (booking_id, occurred_at, id),
+			KEY booking_communication_occurred (booking_id, is_communication, occurred_at, id),
+			KEY communication_intent_kind (communication_intent_id, kind),
 			KEY kind_occurred (kind, occurred_at),
 			KEY channel_external (channel, external_id)
+		) ENGINE=InnoDB {$charset};";
+
+		$communication_state_sql = "CREATE TABLE {$communication_state} (
+			intent_id BIGINT UNSIGNED NOT NULL,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'requested',
+			claim_stage VARCHAR(16) NULL,
+			action_id BIGINT UNSIGNED NULL,
+			updated_activity_id BIGINT UNSIGNED NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (intent_id),
+			KEY booking_status_intent (booking_id, status, intent_id)
 		) ENGINE=InnoDB {$charset};";
 
 		$members_sql = "CREATE TABLE {$members} (
@@ -171,19 +195,22 @@ class BookingSchema {
 		$bookings_error = (string) $wpdb->last_error;
 		dbDelta( $activity_sql );
 		$activity_error = (string) $wpdb->last_error;
+		dbDelta( $communication_state_sql );
+		$communication_state_error = (string) $wpdb->last_error;
 		dbDelta( $members_sql );
 		$members_error = (string) $wpdb->last_error;
 		dbDelta( $holds_sql );
 		$holds_error = (string) $wpdb->last_error;
-		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $members_error || '' !== $holds_error ) {
+		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $members_error || '' !== $holds_error ) {
 			$error = new \WP_Error(
 				'booking_schema_dbdelta_failed',
 				__( 'The booking schema could not be reconciled.', 'extrachill-events' ),
 				array(
-					'bookings_error' => $bookings_error,
-					'activity_error' => $activity_error,
-					'members_error'  => $members_error,
-					'holds_error'    => $holds_error,
+					'bookings_error'            => $bookings_error,
+					'activity_error'            => $activity_error,
+					'communication_state_error' => $communication_state_error,
+					'members_error'             => $members_error,
+					'holds_error'               => $holds_error,
 				)
 			);
 			self::record_failure( $error );
@@ -458,7 +485,7 @@ class BookingSchema {
 			);
 		};
 		return array(
-			self::bookings_table()    => array(
+			self::bookings_table()            => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -537,46 +564,79 @@ class BookingSchema {
 					),
 				),
 			),
-			self::activity_table()    => array(
+			self::activity_table()            => array(
 				'engine'  => 'innodb',
 				'columns' => array(
-					'id'              => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
-					'booking_id'      => $required( 'bigint unsigned', false ),
-					'kind'            => $required( 'varchar(64)', false ),
-					'actor_type'      => $required( 'varchar(32)', false, array( 'default' => 'system' ) ),
-					'actor_id'        => $required( 'bigint unsigned', true ),
-					'direction'       => $required( 'varchar(16)', true ),
-					'channel'         => $required( 'varchar(32)', true ),
-					'payload'         => $required( 'longtext', false ),
-					'external_id'     => $required( 'varchar(191)', true ),
-					'idempotency_key' => $required( 'varchar(191)', true ),
-					'occurred_at'     => $required( 'datetime', false ),
-					'created_at'      => $required( 'datetime', false ),
+					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'booking_id'              => $required( 'bigint unsigned', false ),
+					'kind'                    => $required( 'varchar(64)', false ),
+					'actor_type'              => $required( 'varchar(32)', false, array( 'default' => 'system' ) ),
+					'actor_id'                => $required( 'bigint unsigned', true ),
+					'direction'               => $required( 'varchar(16)', true ),
+					'channel'                 => $required( 'varchar(32)', true ),
+					'communication_intent_id' => $required( 'bigint unsigned', true ),
+					'is_communication'        => $required( 'tinyint unsigned', false, array( 'default' => '0' ) ),
+					'payload'                 => $required( 'longtext', false ),
+					'external_id'             => $required( 'varchar(191)', true ),
+					'idempotency_key'         => $required( 'varchar(191)', true ),
+					'occurred_at'             => $required( 'datetime', false ),
+					'created_at'              => $required( 'datetime', false ),
 				),
 				'indexes' => array(
-					'PRIMARY'             => array(
+					'PRIMARY'                        => array(
 						'unique'  => true,
 						'columns' => array( 'id' ),
 					),
-					'booking_idempotency' => array(
+					'booking_idempotency'            => array(
 						'unique'  => true,
 						'columns' => array( 'booking_id', 'idempotency_key' ),
 					),
-					'booking_occurred'    => array(
+					'booking_occurred'               => array(
 						'unique'  => false,
 						'columns' => array( 'booking_id', 'occurred_at', 'id' ),
 					),
-					'kind_occurred'       => array(
+					'booking_communication_occurred' => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'is_communication', 'occurred_at', 'id' ),
+					),
+					'communication_intent_kind'      => array(
+						'unique'  => false,
+						'columns' => array( 'communication_intent_id', 'kind' ),
+					),
+					'kind_occurred'                  => array(
 						'unique'  => false,
 						'columns' => array( 'kind', 'occurred_at' ),
 					),
-					'channel_external'    => array(
+					'channel_external'               => array(
 						'unique'  => false,
 						'columns' => array( 'channel', 'external_id' ),
 					),
 				),
 			),
-			self::memberships_table() => array(
+			self::communication_state_table() => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'intent_id'           => $required( 'bigint unsigned', false ),
+					'booking_id'          => $required( 'bigint unsigned', false ),
+					'status'              => $required( 'varchar(32)', false, array( 'default' => 'requested' ) ),
+					'claim_stage'         => $required( 'varchar(16)', true ),
+					'action_id'           => $required( 'bigint unsigned', true ),
+					'updated_activity_id' => $required( 'bigint unsigned', false ),
+					'created_at'          => $required( 'datetime', false ),
+					'updated_at'          => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'               => array(
+						'unique'  => true,
+						'columns' => array( 'intent_id' ),
+					),
+					'booking_status_intent' => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'status', 'intent_id' ),
+					),
+				),
+			),
+			self::memberships_table()         => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -609,7 +669,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::holds_table()       => array(
+			self::holds_table()               => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                   => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),

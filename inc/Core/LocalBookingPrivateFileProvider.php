@@ -275,15 +275,21 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 		);
 	}
 
-	/** Return internal active/abandoned claims for explicit reconciliation. */
-	public function inspect_claims() {
+	/**
+	 * Return one stable page of active claims for explicit reconciliation.
+	 *
+	 * @param string|null $cursor Opaque exclusive keyset cursor.
+	 */
+	public function inspect_claims( ?string $cursor = null ) {
 		if ( ! $this->is_ready() ) {
 			return $this->configuration_error();
 		}
-		$claims    = array();
-		$uncertain = 0;
-		$truncated = false;
-		$iterator  = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->objects_directory(), \FilesystemIterator::SKIP_DOTS ) );
+		if ( null !== $cursor && 1 !== preg_match( '/^[a-f0-9]{64}$/', $cursor ) ) {
+			return new \WP_Error( 'booking_private_claim_cursor_invalid', __( 'The private claim continuation is invalid.', 'extrachill-events' ) );
+		}
+		$candidates = array();
+		$uncertain  = 0;
+		$iterator   = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $this->objects_directory(), \FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $iterator as $file ) {
 			if ( ! $file->isFile() || $file->isLink() || '.json' !== substr( $file->getFilename(), -5 ) ) {
 				continue;
@@ -304,11 +310,15 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				continue;
 			}
 			foreach ( $record['claims'] as $claim_key => $claim ) {
-				if ( count( $claims ) >= 250 ) {
-					$truncated = true;
-					break 2;
+				if ( 'active' !== ( $claim['state'] ?? '' ) ) {
+					continue;
 				}
-				$claims[] = array(
+				$key = hash( 'sha256', $reference . "\0" . (string) $claim_key );
+				if ( null !== $cursor && strcmp( $key, $cursor ) <= 0 ) {
+					continue;
+				}
+				$candidates[] = array(
+					'cursor'            => $key,
 					'storage_reference' => $reference,
 					'claim_key'         => (string) $claim_key,
 					'state'             => (string) ( $claim['state'] ?? '' ),
@@ -316,10 +326,24 @@ final class LocalBookingPrivateFileProvider implements BookingPrivateFileProvide
 				);
 			}
 		}
+		usort(
+			$candidates,
+			static function ( array $left, array $right ): int {
+				return strcmp( $left['cursor'], $right['cursor'] );
+			}
+		);
+		$truncated    = count( $candidates ) > 250;
+		$claims       = array_slice( $candidates, 0, 250 );
+		$continuation = $truncated && ! empty( $claims ) ? $claims[ count( $claims ) - 1 ]['cursor'] : null;
+		foreach ( $claims as &$claim ) {
+			unset( $claim['cursor'] );
+		}
+		unset( $claim );
 		return array(
-			'claims'    => $claims,
-			'uncertain' => $uncertain,
-			'truncated' => $truncated,
+			'claims'       => $claims,
+			'uncertain'    => $uncertain,
+			'truncated'    => $truncated,
+			'continuation' => $continuation,
 		);
 	}
 

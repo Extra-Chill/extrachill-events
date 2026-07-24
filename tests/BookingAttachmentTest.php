@@ -501,7 +501,7 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertSame( array(), $wpdb->reference_locks );
 	}
 
-	public function test_committed_unlock_uncertainty_preserves_claim_and_blocks_recursive_locking(): void {
+	public function test_committed_unlock_uncertainty_quarantines_connection_for_different_reference(): void {
 		$booking = $this->booking();
 		$service = $this->service();
 		$GLOBALS['wpdb']->fail_reference_unlock = true;
@@ -511,11 +511,24 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
 		$this->assertSame( 'active', array_values( $this->provider->claim_records )[0]['state'] );
 		$this->assertSame( array(), $this->provider->released );
-		$this->assertSame( 1, $service->reference_lock_uncertainty()['count'] );
+		$this->assertTrue( $service->reference_lock_uncertainty()['connection_quarantined'] );
+		$this->assertSame( 1, $GLOBALS['wpdb']->close_calls );
+		$this->assertFalse( $GLOBALS['wpdb']->ready );
 
 		$GLOBALS['wpdb']->fail_reference_unlock = false;
-		$retry = $this->service()->attach( $this->input( $booking, array( 'uploader_type' => 'user', 'uploader_user_id' => 12 ) ) );
-		$this->assertSame( 'booking_attachment_reference_lock_uncertain', $retry->get_error_code() );
+		$retry = $this->service()->attach(
+			$this->input(
+				$booking,
+				array(
+					'uploader_type'      => 'user',
+					'uploader_user_id'   => 12,
+					'storage_reference' => 'private_object_two_123456',
+					'idempotency_key'    => 'different-reference-after-uncertainty',
+				)
+			)
+		);
+		$this->assertSame( 'booking_attachment_database_connection_quarantined', $retry->get_error_code() );
+		$this->assertTrue( $retry->get_error_data()['connection_quarantined'] );
 		$this->assertSame( 1, $GLOBALS['wpdb']->reference_lock_queries );
 		$this->assertSame( 'active', array_values( $this->provider->claim_records )[0]['state'] );
 		$this->assertSame( array(), $this->provider->released );
@@ -582,6 +595,8 @@ final class BookingAttachmentTest extends TestCase {
 		$this->assertSame( 3, $report['uncertain_claims'] );
 		$this->assertCount( 1, $report['orphan_claims'] );
 		$this->assertTrue( $report['truncated']['claims'] );
+		$this->assertMatchesRegularExpression( '/^[a-f0-9]{64}$/', $report['continuation']['claims'] );
+		$this->assertStringNotContainsString( 'private_object_', wp_json_encode( $report['continuation'] ) );
 	}
 
 	public function test_reconciliation_reports_replacement_truncation(): void {
@@ -603,5 +618,62 @@ final class BookingAttachmentTest extends TestCase {
 		$report = $this->service()->reconcile( array( 'actor_id' => 12, 'minimum_age' => 3600, 'repair' => false ) );
 		$this->assertTrue( $report['truncated']['replacements'] );
 		$this->assertSame( 250, $report['uncertain_replacements'] );
+		$this->assertSame( 250, $report['continuation']['replacements'] );
+
+		$next = $this->service()->reconcile(
+			array(
+				'actor_id'     => 12,
+				'minimum_age'  => 3600,
+				'repair'       => false,
+				'continuation' => $report['continuation'],
+			)
+		);
+		$this->assertFalse( $next['truncated']['replacements'] );
+		$this->assertSame( 1, $next['uncertain_replacements'] );
+		$this->assertNull( $next['continuation']['replacements'] );
+	}
+
+	public function test_replacement_reconciliation_advances_past_repaired_first_page(): void {
+		$this->booking();
+		$table = BookingSchema::attachments_table();
+		for ( $id = 1; $id <= 251; ++$id ) {
+			$GLOBALS['wpdb']->rows[ $table ][ $id ] = array(
+				'id'                     => $id,
+				'public_id'              => 'prior-' . $id,
+				'booking_id'             => 1,
+				'storage_reference'      => 'prior-reference-' . $id,
+				'idempotency_key'        => 'prior-' . $id,
+				'replaces_attachment_id' => null,
+				'state'                  => 'active',
+				'created_at'             => '2020-01-01 00:00:00',
+				'updated_at'             => '2020-01-01 00:00:00',
+			);
+			$replacement_id = 1000 + $id;
+			$GLOBALS['wpdb']->rows[ $table ][ $replacement_id ] = array(
+				'id'                     => $replacement_id,
+				'public_id'              => 'replacement-' . $id,
+				'booking_id'             => 1,
+				'storage_reference'      => 'replacement-reference-' . $id,
+				'idempotency_key'        => 'replacement-' . $id,
+				'replaces_attachment_id' => $id,
+				'state'                  => 'active',
+				'created_at'             => '2020-01-01 00:00:00',
+				'updated_at'             => '2020-01-01 00:00:00',
+			);
+		}
+
+		$policy = array( 'actor_id' => 12, 'minimum_age' => 3600, 'repair' => true );
+		$first  = $this->service()->reconcile( $policy );
+		$this->assertSame( 250, $first['repaired_replacements'] );
+		$this->assertTrue( $first['truncated']['replacements'] );
+		$this->assertSame( 1250, $first['continuation']['replacements'] );
+		$this->assertSame( 'active', $GLOBALS['wpdb']->rows[ $table ][251]['state'] );
+
+		$policy['continuation'] = $first['continuation'];
+		$second                 = $this->service()->reconcile( $policy );
+		$this->assertSame( 1, $second['repaired_replacements'] );
+		$this->assertFalse( $second['truncated']['replacements'] );
+		$this->assertNull( $second['continuation']['replacements'] );
+		$this->assertSame( 'replaced', $GLOBALS['wpdb']->rows[ $table ][251]['state'] );
 	}
 }

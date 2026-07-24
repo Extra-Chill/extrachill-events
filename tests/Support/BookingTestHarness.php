@@ -898,6 +898,16 @@ final class BookingWpdb {
 				);
 			}
 		}
+		if ( $is_attachment && preg_match( '/id > (\d+)/', $query, $filter ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					static function ( $row ) use ( $filter ) {
+						return (int) $row['id'] > (int) $filter[1];
+					}
+				)
+			);
+		}
 		if ( $is_hold && false !== strpos( $query, "(status = 'expired' OR (status = 'active'" ) && false !== strpos( $query, 'expires_at <= UTC_TIMESTAMP()' ) ) {
 			$now  = $this->current_database_time();
 			$rows = array_values( array_filter( $rows, static function ( $row ) use ( $now ) { return 'expired' === $row['status'] || ( 'active' === $row['status'] && $row['expires_at'] <= $now ); } ) );
@@ -1015,13 +1025,17 @@ final class BookingWpdb {
 				)
 			);
 		}
-		usort(
-			$rows,
-			static function ( $a, $b ) {
-				$date_order = $b['created_at'] <=> $a['created_at'];
-				return 0 !== $date_order ? $date_order : ( $b['id'] <=> $a['id'] );
-			}
-		);
+		if ( false !== strpos( $query, 'ORDER BY id ASC' ) ) {
+			usort( $rows, static function ( $a, $b ) { return $a['id'] <=> $b['id']; } );
+		} else {
+			usort(
+				$rows,
+				static function ( $a, $b ) {
+					$date_order = $b['created_at'] <=> $a['created_at'];
+					return 0 !== $date_order ? $date_order : ( $b['id'] <=> $a['id'] );
+				}
+			);
+		}
 		if ( preg_match( '/LIMIT (\d+) OFFSET (\d+)/', $query, $page ) ) {
 			$rows = array_slice( $rows, (int) $page[2], (int) $page[1] );
 		}
@@ -1328,11 +1342,32 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 		}
 		return $this->fail_release ? new WP_Error( 'simulated_claim_release_failure' ) : true;
 	}
-	public function inspect_claims() {
+	public function inspect_claims( ?string $cursor = null ) {
+		$candidates = array();
+		foreach ( $this->claim_records as $claim ) {
+			if ( 'active' !== ( $claim['state'] ?? '' ) ) {
+				continue;
+			}
+			$key = hash( 'sha256', $claim['storage_reference'] . "\0" . $claim['claim_key'] );
+			if ( null !== $cursor && strcmp( $key, $cursor ) <= 0 ) {
+				continue;
+			}
+			$claim['cursor'] = $key;
+			$candidates[]    = $claim;
+		}
+		usort( $candidates, static function ( array $left, array $right ): int { return strcmp( $left['cursor'], $right['cursor'] ); } );
+		$truncated    = $this->inspect_truncated || count( $candidates ) > 250;
+		$claims       = array_slice( $candidates, 0, 250 );
+		$continuation = $truncated && ! empty( $claims ) ? $claims[ count( $claims ) - 1 ]['cursor'] : null;
+		foreach ( $claims as &$claim ) {
+			unset( $claim['cursor'] );
+		}
+		unset( $claim );
 		return array(
-			'claims'    => array_values( $this->claim_records ),
-			'uncertain' => $this->inspect_uncertain,
-			'truncated' => $this->inspect_truncated,
+			'claims'       => $claims,
+			'uncertain'    => $this->inspect_uncertain,
+			'truncated'    => $truncated,
+			'continuation' => $continuation,
 		);
 	}
 	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {

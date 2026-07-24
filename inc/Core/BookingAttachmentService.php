@@ -72,6 +72,9 @@ class BookingAttachmentService {
 	 * @param array $input Attachment input.
 	 */
 	public function attach( array $input ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
@@ -159,6 +162,9 @@ class BookingAttachmentService {
 	 * @param array $input Replacement input.
 	 */
 	public function replace( array $input ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		$prior = $this->attachments->get_for_booking( (int) ( $input['booking_id'] ?? 0 ), (int) ( $input['attachment_id'] ?? 0 ) );
 		if ( is_wp_error( $prior ) ) {
 			return $prior;
@@ -232,6 +238,9 @@ class BookingAttachmentService {
 	 * @param int $actor_id      Acting user ID.
 	 */
 	public function delete( int $booking_id, int $attachment_id, int $actor_id ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		$attachment = $this->attachments->get_for_booking( $booking_id, $attachment_id );
 		if ( is_wp_error( $attachment ) ) {
 			return $attachment;
@@ -270,6 +279,9 @@ class BookingAttachmentService {
 	 * @param array $policy Explicit retention days and legal-hold callback.
 	 */
 	public function cleanup( array $policy = array() ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
@@ -429,25 +441,32 @@ class BookingAttachmentService {
 	 * @param array $policy Actor, minimum age, and explicit repair flag.
 	 */
 	public function reconcile( array $policy = array() ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
-		$actor_id    = absint( $policy['actor_id'] ?? get_current_user_id() );
-		$minimum_age = absint( $policy['minimum_age'] ?? 0 );
-		$repair      = true === ( $policy['repair'] ?? false );
+		$actor_id           = absint( $policy['actor_id'] ?? get_current_user_id() );
+		$minimum_age        = absint( $policy['minimum_age'] ?? 0 );
+		$repair             = true === ( $policy['repair'] ?? false );
+		$continuation       = is_array( $policy['continuation'] ?? null ) ? $policy['continuation'] : array();
+		$claim_cursor       = isset( $continuation['claims'] ) && is_string( $continuation['claims'] ) ? $continuation['claims'] : null;
+		$replacement_cursor = absint( $continuation['replacements'] ?? 0 );
 		if ( $actor_id < 1 || $minimum_age < HOUR_IN_SECONDS ) {
 			return new \WP_Error( 'booking_attachment_reconciliation_policy_required', __( 'Reconciliation requires an explicit actor and minimum crash-age policy.', 'extrachill-events' ) );
 		}
-		$inspection = $this->provider->inspect_claims();
+		$inspection = $this->provider->inspect_claims( $claim_cursor );
 		if ( is_wp_error( $inspection ) ) {
 			return $inspection;
 		}
-		$claims           = is_array( $inspection['claims'] ?? null ) ? $inspection['claims'] : array();
-		$claim_truncated  = true === ( $inspection['truncated'] ?? false );
-		$cutoff           = time() - $minimum_age;
-		$orphan_claims    = array();
-		$repaired_claims  = 0;
-		$uncertain_claims = absint( $inspection['uncertain'] ?? 0 );
+		$claims             = is_array( $inspection['claims'] ?? null ) ? $inspection['claims'] : array();
+		$claim_truncated    = true === ( $inspection['truncated'] ?? false );
+		$claim_continuation = $claim_truncated && is_string( $inspection['continuation'] ?? null ) ? $inspection['continuation'] : null;
+		$cutoff             = time() - $minimum_age;
+		$orphan_claims      = array();
+		$repaired_claims    = 0;
+		$uncertain_claims   = absint( $inspection['uncertain'] ?? 0 );
 		foreach ( $claims as $claim ) {
 			$updated = strtotime( (string) ( $claim['updated_at'] ?? '' ) );
 			if ( 'active' !== ( $claim['state'] ?? '' ) || false === $updated || $updated >= $cutoff ) {
@@ -508,15 +527,16 @@ class BookingAttachmentService {
 		}
 
 		$replacement_cutoff = gmdate( 'Y-m-d H:i:s', $cutoff );
-		$replacement_page   = $this->attachments->list_active_replacements_before( $replacement_cutoff );
+		$replacement_page   = $this->attachments->list_active_replacements_before( $replacement_cutoff, $replacement_cursor );
 		if ( is_wp_error( $replacement_page ) ) {
 			return $replacement_page;
 		}
-		$replacements           = is_array( $replacement_page['items'] ?? null ) ? $replacement_page['items'] : array();
-		$replacement_truncated  = true === ( $replacement_page['truncated'] ?? false );
-		$incomplete             = array();
-		$repaired_replacements  = 0;
-		$uncertain_replacements = 0;
+		$replacements             = is_array( $replacement_page['items'] ?? null ) ? $replacement_page['items'] : array();
+		$replacement_truncated    = true === ( $replacement_page['truncated'] ?? false );
+		$replacement_continuation = $replacement_truncated ? absint( $replacement_page['continuation'] ?? 0 ) : null;
+		$incomplete               = array();
+		$repaired_replacements    = 0;
+		$uncertain_replacements   = 0;
 		foreach ( $replacements as $replacement ) {
 			$prior = $this->attachments->get( (int) $replacement['replaces_attachment_id'] );
 			if ( is_wp_error( $prior ) ) {
@@ -589,6 +609,10 @@ class BookingAttachmentService {
 				'claims'       => $claim_truncated,
 				'replacements' => $replacement_truncated,
 			),
+			'continuation'            => array(
+				'claims'       => $claim_continuation,
+				'replacements' => $replacement_continuation,
+			),
 		);
 	}
 
@@ -600,6 +624,9 @@ class BookingAttachmentService {
 	 * @param int $actor_id      Authorized user ID.
 	 */
 	public function download_descriptor( int $booking_id, int $attachment_id, ?int $actor_id = null ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
@@ -664,6 +691,9 @@ class BookingAttachmentService {
 	 * @param int    $actor_id      Current user ID.
 	 */
 	public function open_download_stream( int $booking_id, int $attachment_id, string $stream_token, int $actor_id ) {
+		if ( $this->connection_is_quarantined() ) {
+			return $this->connection_quarantined_error();
+		}
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
@@ -890,16 +920,18 @@ class BookingAttachmentService {
 			$released = $this->release_reference_lock( $lock_name );
 			if ( is_wp_error( $released ) ) {
 				$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'][ $lock_name ] = true;
-				return new \WP_Error(
-					'booking_attachment_reference_unlock_uncertain',
-					is_wp_error( $result ) ? __( 'The attachment operation failed and its connection lock release is uncertain.', 'extrachill-events' ) : __( 'The attachment operation committed but its connection lock release is uncertain.', 'extrachill-events' ),
-					array(
-						'committed'      => ! is_wp_error( $result ),
-						'lock_uncertain' => true,
-						'lock_name'      => $lock_name,
-						'recovery'       => 'disconnect_and_reconcile',
-						'cause'          => is_wp_error( $result ) ? $result->get_error_code() : null,
-					)
+				return $this->quarantine_connection(
+					new \WP_Error(
+						'booking_attachment_reference_unlock_uncertain',
+						is_wp_error( $result ) ? __( 'The attachment operation failed and its connection lock release is uncertain.', 'extrachill-events' ) : __( 'The attachment operation committed but its connection lock release is uncertain.', 'extrachill-events' ),
+						array(
+							'committed'      => ! is_wp_error( $result ),
+							'lock_uncertain' => true,
+							'lock_name'      => $lock_name,
+							'cause'          => is_wp_error( $result ) ? $result->get_error_code() : null,
+						)
+					),
+					false
 				);
 			}
 		}
@@ -1047,9 +1079,10 @@ class BookingAttachmentService {
 	public function reference_lock_uncertainty(): array {
 		$uncertain_locks = $this->uncertain_reference_locks();
 		return array(
-			'count'      => count( $uncertain_locks ),
-			'lock_names' => array_keys( $uncertain_locks ),
-			'recovery'   => empty( $uncertain_locks ) ? null : 'disconnect_and_reconcile',
+			'count'                  => count( $uncertain_locks ),
+			'lock_names'             => array_keys( $uncertain_locks ),
+			'connection_quarantined' => $this->connection_is_quarantined(),
+			'recovery'               => empty( $uncertain_locks ) ? null : 'abort_request_and_reconcile',
 		);
 	}
 
@@ -1188,9 +1221,10 @@ class BookingAttachmentService {
 	/**
 	 * Prevent any further query on a connection with unknown transaction state.
 	 *
-	 * @param \WP_Error $cause Failure that exposed rollback uncertainty.
+	 * @param \WP_Error $cause              Failure that made connection reuse unsafe.
+	 * @param bool      $rollback_uncertain Whether transaction rollback is also uncertain.
 	 */
-	private function quarantine_connection( \WP_Error $cause ): \WP_Error {
+	private function quarantine_connection( \WP_Error $cause, bool $rollback_uncertain = true ): \WP_Error {
 		global $wpdb;
 		$GLOBALS['extrachill_events_booking_database_connection_quarantined'] = true;
 		$closed = false;
@@ -1202,8 +1236,10 @@ class BookingAttachmentService {
 		if ( property_exists( $wpdb, 'ready' ) ) {
 			$wpdb->ready = false;
 		}
-		$data                           = (array) $cause->get_error_data();
-		$data['rollback_uncertain']     = true;
+		$data = (array) $cause->get_error_data();
+		if ( $rollback_uncertain ) {
+			$data['rollback_uncertain'] = true;
+		}
 		$data['connection_quarantined'] = true;
 		$data['disconnect_confirmed']   = $closed;
 		$data['lock_uncertain']         = true;
@@ -1211,7 +1247,7 @@ class BookingAttachmentService {
 		return new \WP_Error( $cause->get_error_code(), $cause->get_error_message(), $data );
 	}
 
-	/** Whether this request has retired its database connection after rollback uncertainty. */
+	/** Whether this request has retired its database connection after uncertainty. */
 	private function connection_is_quarantined(): bool {
 		return true === ( $GLOBALS['extrachill_events_booking_database_connection_quarantined'] ?? false );
 	}
@@ -1220,7 +1256,7 @@ class BookingAttachmentService {
 	private function connection_quarantined_error(): \WP_Error {
 		return new \WP_Error(
 			'booking_attachment_database_connection_quarantined',
-			__( 'The database connection is unavailable after an uncertain attachment rollback.', 'extrachill-events' ),
+			__( 'The database connection is unavailable after an uncertain attachment operation.', 'extrachill-events' ),
 			array(
 				'connection_quarantined' => true,
 				'recovery'               => 'abort_request_and_reconcile',

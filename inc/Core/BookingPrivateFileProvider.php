@@ -44,8 +44,10 @@ interface BookingPrivateFileProvider {
 	 * Inspect claim lifecycle for explicit domain reconciliation.
 	 *
 	 * This internal result may contain opaque references and must never be exposed.
+	 *
+	 * @param string|null $cursor Opaque exclusive keyset cursor from a prior inspection.
 	 */
-	public function inspect_claims();
+	public function inspect_claims( ?string $cursor = null );
 
 	/**
 	 * Return an authorized stream handoff without a public URL or filesystem path.

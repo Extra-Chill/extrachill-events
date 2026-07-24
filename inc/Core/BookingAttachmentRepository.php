@@ -154,19 +154,23 @@ class BookingAttachmentRepository {
 	/**
 	 * List active replacement rows whose prior retirement may have crashed.
 	 *
-	 * @param string $cutoff UTC database datetime.
+	 * @param string $cutoff   UTC database datetime.
+	 * @param int    $after_id Exclusive stable keyset cursor.
 	 */
-	public function list_active_replacements_before( string $cutoff ) {
+	public function list_active_replacements_before( string $cutoff, int $after_id = 0 ) {
 		global $wpdb;
 		$table = BookingSchema::attachments_table();
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state = 'active' AND replaces_attachment_id IS NOT NULL AND created_at < %s ORDER BY created_at ASC, id ASC LIMIT 251", $cutoff ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit bounded reconciliation candidates.
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE state = 'active' AND replaces_attachment_id IS NOT NULL AND created_at < %s AND id > %d ORDER BY id ASC LIMIT 251", $cutoff, $after_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit bounded keyset reconciliation candidates.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_attachment_reconciliation_read_failed', __( 'Incomplete attachment replacements could not be inspected.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}
-		$rows = array_map( array( $this, 'hydrate' ), (array) $rows );
+		$rows      = array_map( array( $this, 'hydrate' ), (array) $rows );
+		$items     = array_slice( $rows, 0, 250 );
+		$truncated = count( $rows ) > 250;
 		return array(
-			'items'     => array_slice( $rows, 0, 250 ),
-			'truncated' => count( $rows ) > 250,
+			'items'        => $items,
+			'truncated'    => $truncated,
+			'continuation' => $truncated && ! empty( $items ) ? $items[ count( $items ) - 1 ]['id'] : null,
 		);
 	}
 

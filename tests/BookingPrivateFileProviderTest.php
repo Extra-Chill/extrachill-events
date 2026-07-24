@@ -301,6 +301,28 @@ final class BookingPrivateFileProviderTest extends TestCase {
 		$this->assertFalse( $inspection['truncated'] );
 	}
 
+	public function test_claim_inspection_continuation_advances_past_abandoned_first_page(): void {
+		$provider  = new LocalBookingPrivateFileProvider( $this->root );
+		$reference = $provider->stage( $this->source( 'claims.txt', 'claims' ), 'claims.txt', 'epk' );
+		for ( $index = 1; $index <= 251; ++$index ) {
+			$provider->claim( $reference, 'claim-' . $index, 'epk' );
+		}
+
+		$first = $provider->inspect_claims();
+		$this->assertCount( 250, $first['claims'] );
+		$this->assertTrue( $first['truncated'] );
+		$this->assertMatchesRegularExpression( '/^[a-f0-9]{64}$/', $first['continuation'] );
+		$this->assertStringNotContainsString( $reference, $first['continuation'] );
+		foreach ( $first['claims'] as $claim ) {
+			$provider->release_claim( $claim['storage_reference'], $claim['claim_key'] );
+		}
+
+		$second = $provider->inspect_claims( $first['continuation'] );
+		$this->assertCount( 1, $second['claims'] );
+		$this->assertFalse( $second['truncated'] );
+		$this->assertNull( $second['continuation'] );
+	}
+
 	private function source( string $filename, string $contents ): string {
 		$path = $this->incoming . '/' . $filename;
 		file_put_contents( $path, $contents );

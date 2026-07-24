@@ -531,6 +531,12 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueMembershipAbilities.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueBookingConfigAbilities.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 
+/**
+ * Venue membership and profile composition coverage uses isolated WP doubles.
+ *
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
+ */
 final class VenueMembershipAuthorizationTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['venue_membership_test'] = array(
@@ -947,147 +953,56 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) )->get_error_code() );
 	}
 
-	public function legacy_profile_read_write_roundtrip_stale_write_and_audit_boundary(): void {
+	public function test_profile_read_delegates_to_dme_after_authorization(): void {
 		$this->create_member( 55, 2, true );
-		$GLOBALS['venue_membership_test']['current_user_id'] = 2;
-		$GLOBALS['venue_membership_test']['term_meta'][55]   = array(
-			'_venue_address'     => '970 Morrison Drive',
-			'_venue_city'        => 'Charleston',
-			'_venue_state'       => 'SC',
-			'_venue_zip'         => '29403',
-			'_venue_country'     => 'US',
-			'_venue_phone'       => '843-555-1212',
-			'_venue_website'     => 'https://theroyalamerican.com',
-			'_venue_capacity'    => '300',
-			'_venue_coordinates' => '32.801,-79.943',
-			'_venue_timezone'    => 'America/New_York',
-			'_ec_priority_venue' => '1',
-		);
-		$abilities = new VenueProfileAbilities();
-		$abilities->register();
-		$get        = $GLOBALS['venue_membership_test']['abilities']['extrachill/get-venue-profile'];
-		$update     = $GLOBALS['venue_membership_test']['abilities']['extrachill/update-venue-profile'];
+		$result = ( new VenueProfile() )->get( 55, 2 );
 
-		$current = call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) );
-		$this->assertSame( 0, $current['revision'] );
-		$this->assertSame( 300, $current['profile']['capacity'] );
-		$this->assertArrayNotHasKey( 'coordinates', $current['profile'] );
-		$this->assertArrayNotHasKey( 'timezone', $current['profile'] );
-		$this->assertArrayNotHasKey( '_ec_priority_venue', $current['profile'] );
-
-		$replacement                = $current['profile'];
-		$replacement['description'] = '<p>Independent venue and neighborhood bar.</p>';
-		$replacement['address']     = '970 Morrison Dr';
-		$replacement['phone']       = '';
-		$replacement['capacity']    = 350;
-		$saved                      = call_user_func(
-			$update['execute_callback'],
-			array(
-				'venue_term_id'     => 55,
-				'expected_revision' => 0,
-				'profile'           => $replacement,
-			)
-		);
-
-		$this->assertSame( 1, $saved['revision'] );
-		$this->assertSame( 2, $saved['updated_by_user_id'] );
-		$this->assertSame( $replacement, $saved['profile'] );
-		$this->assertArrayNotHasKey( '_venue_phone', $GLOBALS['venue_membership_test']['term_meta'][55] );
-		$this->assertArrayNotHasKey( '_venue_coordinates', $GLOBALS['venue_membership_test']['term_meta'][55] );
-		$this->assertSame( 'America/New_York', $GLOBALS['venue_membership_test']['term_meta'][55]['_venue_timezone'] );
-		$this->assertSame( '1', $GLOBALS['venue_membership_test']['term_meta'][55]['_ec_priority_venue'] );
-		$this->assertSame( array( 55 ), $GLOBALS['venue_membership_test']['location_cache_deletes'] );
-
-		$history = $GLOBALS['venue_membership_test']['term_history'][55][ VenueProfile::HISTORY_META_KEY ];
-		$this->assertCount( 1, $history );
-		$this->assertSame( 2, $history[0]['actor_user_id'] );
-		$this->assertSame( array( 'description', 'address', 'phone', 'capacity' ), $history[0]['changed_fields'] );
-		$this->assertArrayNotHasKey( 'profile', $history[0] );
-		$this->assertArrayNotHasKey( 'previous', $history[0] );
-
-		$roundtrip = call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) );
-		$this->assertSame( $saved, $roundtrip );
-		$stale = call_user_func(
-			$update['execute_callback'],
-			array(
-				'venue_term_id'     => 55,
-				'expected_revision' => 0,
-				'profile'           => $replacement,
-			)
-		);
-		$this->assertSame( 'venue_profile_revision_conflict', $stale->get_error_code() );
-		$this->assertSame( 1, $stale->get_error_data()['current_revision'] );
-		$this->assertCount( 1, $GLOBALS['venue_membership_test']['term_history'][55][ VenueProfile::HISTORY_META_KEY ] );
-	}
-
-	public function legacy_profile_validation_rejects_unknown_missing_and_invalid_values_atomically(): void {
-		$this->create_member( 55, 2, true );
-		$profiles = new VenueProfile();
-		$current  = $profiles->get( 55 );
-		$profile  = $current['profile'];
-
-		$unknown             = $profile;
-		$unknown['timezone'] = 'UTC';
-		$this->assertSame( 'invalid_venue_profile_fields', $profiles->update( 55, $unknown, 0, 2 )->get_error_code() );
-		$missing = $profile;
-		unset( $missing['city'] );
-		$this->assertSame( 'invalid_venue_profile_fields', $profiles->update( 55, $missing, 0, 2 )->get_error_code() );
-		$invalid_website            = $profile;
-		$invalid_website['website'] = 'javascript:alert(1)';
-		$this->assertSame( 'invalid_venue_profile_value', $profiles->update( 55, $invalid_website, 0, 2 )->get_error_code() );
-		$invalid_capacity             = $profile;
-		$invalid_capacity['capacity'] = 0;
-		$this->assertSame( 'invalid_venue_profile_value', $profiles->update( 55, $invalid_capacity, 0, 2 )->get_error_code() );
-		$this->assertArrayNotHasKey( VenueProfile::STATE_META_KEY, $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
+		$this->assertSame( $GLOBALS['venue_membership_test']['dme_profile'], $result );
 		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
 	}
 
-	public function legacy_profile_update_reauthorizes_and_audit_failure_rolls_back_every_field(): void {
+	public function test_profile_propagates_dme_validation_errors_without_audit(): void {
 		$this->create_member( 55, 2, true );
-		$profiles    = new VenueProfile();
-		$replacement = $profiles->get( 55 )['profile'];
-		$replacement['name']    = 'Updated Name';
-		$replacement['website'] = 'https://example.com';
-
-		$GLOBALS['wpdb']->after_start = static function ( VenueMembershipWpdb $wpdb ): void {
-			foreach ( $wpdb->rows['wp_7_ec_venue_members'] as &$row ) {
-				if ( 2 === (int) $row['user_id'] ) {
-					$row['status'] = VenueAuthorization::STATUS_REVOKED;
-				}
-			}
-			unset( $row );
+		$GLOBALS['venue_membership_test']['dme_update'] = static function () {
+			return new WP_Error( 'venue_meta_update_failed', 'Canonical owner rejected the mutation.' );
 		};
-		$denied = $profiles->update( 55, $replacement, 0, 2 );
-		$this->assertSame( 'venue_action_forbidden', $denied->get_error_code() );
-		$this->assertSame( 'The Royal American', $GLOBALS['venue_membership_test']['terms'][55]->name );
 
-		foreach ( $GLOBALS['wpdb']->rows['wp_7_ec_venue_members'] as &$row ) {
-			if ( 2 === (int) $row['user_id'] ) {
-				$row['status'] = VenueAuthorization::STATUS_ACTIVE;
-			}
-		}
-		unset( $row );
-		$GLOBALS['venue_membership_test']['fail_profile_audit'] = true;
-		$failed = $profiles->update( 55, $replacement, 0, 2 );
-		$this->assertSame( 'venue_profile_audit_failed', $failed->get_error_code() );
-		$this->assertSame( 'The Royal American', $GLOBALS['venue_membership_test']['terms'][55]->name );
-		$this->assertArrayNotHasKey( '_venue_website', $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
-		$this->assertArrayNotHasKey( VenueProfile::STATE_META_KEY, $GLOBALS['venue_membership_test']['term_meta'][55] ?? array() );
-		$this->assertSame( array(), $GLOBALS['venue_membership_test']['fired_actions'] );
+		$result = ( new VenueProfile() )->update( 55, array( 'website' => 'invalid' ), str_repeat( 'a', 64 ), 2 );
+
+		$this->assertSame( 'venue_meta_update_failed', $result->get_error_code() );
+		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
 	}
 
-	public function legacy_profile_requires_canonical_events_site_and_does_not_change_resolution_inputs_on_noop(): void {
-		$this->create_member( 55, 2, true );
-		$profiles = new VenueProfile();
-		$current  = $profiles->get( 55 );
-		$noop     = $profiles->update( 55, $current['profile'], 0, 2 );
-		$this->assertSame( 0, $noop['revision'] );
-		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
-		$this->assertSame( 'The Royal American', get_term( 55, 'venue' )->name );
+	public function test_profile_authorization_denial_prevents_dme_mutation(): void {
+		$this->create_member( 55, 2, true, VenueAuthorization::STATUS_REVOKED );
+		$called = false;
+		$GLOBALS['venue_membership_test']['dme_update'] = static function () use ( &$called ) {
+			$called = true;
+			return array();
+		};
 
-		$GLOBALS['venue_membership_test']['current_blog_id'] = 1;
-		$this->assertSame( 'canonical_events_site_required', $profiles->get( 55 )->get_error_code() );
-		$this->assertSame( 'canonical_events_site_required', $profiles->update( 55, $current['profile'], 0, 2 )->get_error_code() );
+		$result = ( new VenueProfile() )->update( 55, array( 'name' => 'Blocked' ), str_repeat( 'a', 64 ), 2 );
+
+		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
+		$this->assertFalse( $called );
+	}
+
+	public function test_profile_noop_owner_result_does_not_create_audit(): void {
+		$this->create_member( 55, 2, true );
+		$GLOBALS['venue_membership_test']['dme_update'] = static function ( $term_id ) {
+			return array(
+				'success'        => true,
+				'term_id'        => $term_id,
+				'updated_fields' => array(),
+				'revision'       => str_repeat( 'a', 64 ),
+				'profile'        => $GLOBALS['venue_membership_test']['dme_profile'],
+			);
+		};
+
+		$result = ( new VenueProfile() )->update( 55, array( 'name' => 'The Royal American' ), str_repeat( 'a', 64 ), 2 );
+
+		$this->assertSame( array(), $result['updated_fields'] );
+		$this->assertArrayNotHasKey( 55, $GLOBALS['venue_membership_test']['term_history'] );
 	}
 
 	public function test_profile_composes_dme_contract_and_audits_only_member_fields_across_timezones(): void {

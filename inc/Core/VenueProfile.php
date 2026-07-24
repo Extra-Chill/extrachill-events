@@ -87,7 +87,7 @@ class VenueProfile {
 			return $result;
 		}
 
-		$audit = array(
+		$audit        = array(
 			'version'           => 1,
 			'previous_revision' => $expected_revision,
 			'revision'          => (string) ( $result['revision'] ?? '' ),

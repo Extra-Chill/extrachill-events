@@ -145,6 +145,9 @@ if ( ! function_exists( 'apply_filters' ) ) {
 
 if ( ! function_exists( 'get_query_var' ) ) {
 	function get_query_var( $name, $default = '' ) {
+		if ( array_key_exists( $name, $GLOBALS['test_query_vars'] ?? array() ) ) {
+			return $GLOBALS['test_query_vars'][ $name ];
+		}
 		if ( 'ec_events_router' === $name && ! empty( $GLOBALS['test_is_all_events_page'] ) ) {
 			return 'all';
 		}
@@ -292,6 +295,7 @@ if ( ! function_exists( 'wp_verify_nonce' ) ) {
 }
 
 require_once dirname( __DIR__, 3 ) . '/inc/core/router-pages.php';
+require_once dirname( __DIR__, 3 ) . '/inc/core/discovery-pages.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/account-market.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
 
@@ -580,6 +584,96 @@ final class AccountMarketTest extends TestCase {
 		$this->assertCount( 1, $pagination_rule );
 		$this->assertSame( 'index.php?ec_events_router=all&paged=$matches[1]', $pagination_rule[0]['query'] );
 		$this->assertSame( 'past=1', (string) wp_parse_url( 'https://events.example/all/page/2/?past=1', PHP_URL_QUERY ) );
+	}
+
+	public function test_scoped_location_pagination_rewrite_precedes_base_route(): void {
+		$GLOBALS['ec_locations_blog_id'] = 7;
+		$GLOBALS['test_rewrite_rules']   = array();
+
+		extrachill_events_discovery_rewrite_rules();
+
+		$this->assertSame(
+			array(
+				'regex' => 'location/(.+?)/(today|tonight|this-weekend|this-week)/page/([0-9]{1,})/?$',
+				'query' => 'index.php?location=$matches[1]&event_scope=$matches[2]&paged=$matches[3]',
+				'after' => 'top',
+			),
+			$GLOBALS['test_rewrite_rules'][0]
+		);
+		$this->assertSame( 'location/(.+?)/(today|tonight|this-weekend|this-week)/?$', $GLOBALS['test_rewrite_rules'][1]['regex'] );
+	}
+
+	/**
+	 * @dataProvider scoped_pagination_paths
+	 */
+	public function test_scoped_location_pretty_route_preserves_identity( string $path ): void {
+		$GLOBALS['ec_locations_blog_id'] = 7;
+		$GLOBALS['test_rewrite_rules']   = array();
+		extrachill_events_discovery_rewrite_rules();
+		$rule = $GLOBALS['test_rewrite_rules'][0];
+
+		$this->assertSame( 1, preg_match( '#^' . $rule['regex'] . '#', $path, $matches ) );
+		$this->assertSame( 'usa/south-carolina/charleston', $matches[1] );
+		$this->assertSame( 'this-weekend', $matches[2] );
+		$this->assertSame( '2', $matches[3] );
+		$this->assertSame(
+			'index.php?location=usa/south-carolina/charleston&event_scope=this-weekend&paged=2',
+			str_replace(
+				array( '$matches[1]', '$matches[2]', '$matches[3]' ),
+				array( $matches[1], $matches[2], $matches[3] ),
+				$rule['query']
+			)
+		);
+	}
+
+	public static function scoped_pagination_paths(): array {
+		return array(
+			'without trailing slash' => array( 'location/usa/south-carolina/charleston/this-weekend/page/2' ),
+			'with trailing slash'    => array( 'location/usa/south-carolina/charleston/this-weekend/page/2/' ),
+		);
+	}
+
+	public function test_scoped_query_pagination_canonicalizes_to_pretty_self_url(): void {
+		$GLOBALS['ec_locations_blog_id'] = 7;
+		$GLOBALS['test_is_tax']           = true;
+		$GLOBALS['test_query_vars']       = array(
+			'event_scope' => 'this-weekend',
+			'paged'       => 2,
+		);
+		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
+
+		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=2' );
+		$og_data   = extrachill_events_discovery_og_data( array( 'og:url' => $canonical ) );
+
+		$this->assertSame( 'https://events.example/location/charleston/this-weekend/page/2/', $canonical );
+		$this->assertSame( $canonical, $og_data['og:url'] );
+	}
+
+	public function test_scoped_page_one_canonical_omits_pagination_segment(): void {
+		$GLOBALS['ec_locations_blog_id'] = 7;
+		$GLOBALS['test_is_tax']           = true;
+		$GLOBALS['test_query_vars']       = array(
+			'event_scope' => 'tonight',
+			'paged'       => 1,
+		);
+		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
+
+		$this->assertSame(
+			'https://events.example/location/charleston/tonight/',
+			extrachill_events_discovery_canonical( 'https://events.example/?paged=1' )
+		);
+	}
+
+	public function test_discovery_canonical_and_open_graph_preserve_other_pages(): void {
+		$GLOBALS['test_is_tax']     = false;
+		$GLOBALS['test_query_vars'] = array();
+		$og_data                    = array(
+			'og:url'   => 'https://events.example/original/',
+			'og:title' => 'Original',
+		);
+
+		$this->assertSame( 'https://events.example/original/', extrachill_events_discovery_canonical( 'https://events.example/original/' ) );
+		$this->assertSame( $og_data, extrachill_events_discovery_og_data( $og_data ) );
 	}
 
 	public function test_router_query_flags_use_the_query_being_parsed(): void {

@@ -45,7 +45,7 @@ define(
 // --- Rewrite Rules ---
 
 /**
- * Register the event_scope rewrite tag and discovery page rewrite rule.
+ * Register the event_scope rewrite tag and discovery page rewrite rules.
  *
  * The rewrite tag auto-registers the query var. The rule uses 'top' priority
  * to match before the existing location catch-all rule.
@@ -61,6 +61,12 @@ function extrachill_events_discovery_rewrite_rules() {
 	$scope_pattern = implode( '|', array_keys( EXTRACHILL_EVENTS_DISCOVERY_SCOPES ) );
 
 	add_rewrite_tag( '%event_scope%', '(' . $scope_pattern . ')' );
+
+	add_rewrite_rule(
+		'location/(.+?)/(' . $scope_pattern . ')/page/([0-9]{1,})/?$',
+		'index.php?location=$matches[1]&event_scope=$matches[2]&paged=$matches[3]',
+		'top'
+	);
 
 	add_rewrite_rule(
 		'location/(.+?)/(' . $scope_pattern . ')/?$',
@@ -198,7 +204,7 @@ add_filter( 'extrachill_seo_meta_description', 'extrachill_events_discovery_desc
 /**
  * Override canonical URL for discovery pages via extrachill-seo filter.
  *
- * Appends the scope segment to the base location term URL.
+ * Appends the scope and pagination segments to the base location term URL.
  *
  * @hook extrachill_seo_canonical_url
  * @param string $canonical Default canonical from extrachill-seo.
@@ -219,7 +225,14 @@ function extrachill_events_discovery_canonical( string $canonical ): string {
 		return $canonical;
 	}
 
-	return trailingslashit( $term_link ) . extrachill_events_get_current_scope() . '/';
+	$canonical = trailingslashit( $term_link ) . extrachill_events_get_current_scope() . '/';
+	$paged     = max( 1, (int) get_query_var( 'paged', 1 ) );
+
+	if ( $paged > 1 ) {
+		$canonical .= 'page/' . $paged . '/';
+	}
+
+	return $canonical;
 }
 add_filter( 'extrachill_seo_canonical_url', 'extrachill_events_discovery_canonical' );
 

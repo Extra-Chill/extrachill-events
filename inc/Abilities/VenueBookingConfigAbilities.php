@@ -82,7 +82,7 @@ class VenueBookingConfigAbilities {
 							'type'    => 'integer',
 							'minimum' => 0,
 						),
-						'config'            => $this->config_schema( false ),
+						'config'            => $this->config_schema( false, true ),
 					),
 					'required'             => array( 'venue_term_id', 'expected_revision', 'config' ),
 					'additionalProperties' => false,
@@ -179,7 +179,7 @@ class VenueBookingConfigAbilities {
 	}
 
 	/** Return the complete settings schema, optionally with read metadata. */
-	private function config_schema( bool $include_metadata ): array {
+	private function config_schema( bool $include_metadata, bool $accept_legacy = false ): array {
 		$field_schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
@@ -323,12 +323,19 @@ class VenueBookingConfigAbilities {
 			$required[]                       = 'updated_at';
 		}
 
-		return array(
+		$schema = array(
 			'type'                 => 'object',
 			'properties'           => $properties,
 			'required'             => $required,
 			'additionalProperties' => false,
 		);
+		if ( ! $accept_legacy ) {
+			return $schema;
+		}
+		$legacy                                  = $schema;
+		$legacy['properties']['version']['enum'] = array( VenueBookingConfig::LEGACY_VERSION );
+		$legacy['required']                      = array_values( array_diff( $legacy['required'], array( 'correspondence' ) ) );
+		return array( 'oneOf' => array( $legacy, $schema ) );
 	}
 
 	/** Return the strict correspondence configuration schema. */

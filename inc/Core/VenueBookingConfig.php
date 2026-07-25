@@ -16,7 +16,8 @@ class VenueBookingConfig {
 
 	public const META_KEY                 = '_extrachill_booking_config';
 	public const HISTORY_META_KEY         = '_extrachill_booking_config_history';
-	public const VERSION                  = 1;
+	public const VERSION                  = 2;
+	public const LEGACY_VERSION           = 1;
 	public const CORRESPONDENCE_VERSION   = 1;
 	public const TEMPLATE_VERSION         = 1;
 	public const REMINDER_POLICY_VERSION  = 1;
@@ -193,8 +194,8 @@ class VenueBookingConfig {
 
 	/** Normalize and validate the complete versioned contract. */
 	public function normalize( array $config ) {
-		$version = $config['version'] ?? self::VERSION;
-		if ( ! is_int( $version ) || self::VERSION !== $version ) {
+		$version = $config['version'] ?? self::LEGACY_VERSION;
+		if ( ! is_int( $version ) || ! in_array( $version, array( self::LEGACY_VERSION, self::VERSION ), true ) ) {
 			return new \WP_Error( 'booking_config_version_unsupported', __( 'The venue booking configuration version is unsupported.', 'extrachill-events' ), array( 'version' => $version ) );
 		}
 		$intake_version         = $config['intake']['version'] ?? 1;
@@ -349,8 +350,8 @@ class VenueBookingConfig {
 		);
 	}
 
-	/** Render a configured template with one non-recursive, allowlisted variable pass. */
-	public function preview( int $venue_term_id, string $template_key, int $expected_template_version, array $variables ) {
+	/** Resolve a configured template and policy with one bounded rendering pass. */
+	public function prepare_correspondence( int $venue_term_id, string $template_key, ?int $expected_template_version, array $variables ) {
 		$config = $this->get( $venue_term_id );
 		if ( is_wp_error( $config ) ) {
 			return $config;
@@ -360,7 +361,7 @@ class VenueBookingConfig {
 		if ( ! is_array( $template ) ) {
 			return new \WP_Error( 'booking_correspondence_template_invalid', __( 'The correspondence template is invalid.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
-		if ( $expected_template_version !== $template['version'] ) {
+		if ( null !== $expected_template_version && $expected_template_version !== $template['version'] ) {
 			return new \WP_Error( 'booking_correspondence_template_version_conflict', __( 'The correspondence template changed since it was read.', 'extrachill-events' ), array(
 				'status'          => 409,
 				'current_version' => $template['version'],
@@ -379,13 +380,26 @@ class VenueBookingConfig {
 				$source
 			);
 		};
-		return array(
+		$result = array(
 			'template'         => $template_key,
 			'template_version' => $template['version'],
 			'config_revision'  => $config['revision'],
 			'subject'          => $render( $template['subject'] ),
-			'body'             => $render( $template['body'] ),
+			'body'             => $render( $template['body'] ) . "\n\nExtra Chill Bot sending on Chris's behalf.",
+			'booking_address'  => $config['correspondence']['booking_address'],
+			'reminder_policy'  => $config['correspondence']['reminder_policies'][ $template_key ] ?? null,
 		);
+		return $result;
+	}
+
+	/** Render the same allowlisted output used by actual delivery. */
+	public function preview( int $venue_term_id, string $template_key, int $expected_template_version, array $variables ) {
+		$result = $this->prepare_correspondence( $venue_term_id, $template_key, $expected_template_version, $variables );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		unset( $result['booking_address'], $result['reminder_policy'] );
+		return $result;
 	}
 
 	private function venue( int $venue_term_id ) {

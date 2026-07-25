@@ -1,6 +1,6 @@
 <?php
 /**
- * Booking operator notification tests.
+ * Booking notification outbox tests.
  *
  * @package ExtraChillEvents\Tests
  */
@@ -14,8 +14,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
 
-
-/** Covers booking-owned selection, authorization, and delivery evidence. */
+/** Covers recovery, authorization, and structured receipt reconciliation. */
 final class BookingNotificationTest extends TestCase {
 	/** Reset booking persistence. */
 	protected function setUp(): void {
@@ -52,15 +51,8 @@ final class BookingNotificationTest extends TestCase {
 		);
 	}
 
-	/**
-	 * Append one source activity fixture.
-	 *
-	 * @param array  $booking Booking fixture.
-	 * @param string $kind    Activity kind.
-	 * @param array  $payload Activity payload.
-	 * @return array Activity record.
-	 */
-	private function activity( array $booking, string $kind = 'inquiry_submitted', array $payload = array( 'status' => 'submitted' ) ): array {
+	/** Append one source activity fixture. */
+	private function source( array $booking, string $kind = 'inquiry_submitted', array $payload = array( 'status' => 'submitted' ) ): array {
 		return ( new BookingActivityRepository() )->append(
 			array(
 				'booking_id' => $booking['id'],
@@ -71,21 +63,13 @@ final class BookingNotificationTest extends TestCase {
 		);
 	}
 
-	/**
-	 * Add one membership fixture.
-	 *
-	 * @param int    $id       Membership ID.
-	 * @param int    $venue    Venue term ID.
-	 * @param int    $user     User ID.
-	 * @param string $status   Membership status.
-	 * @param bool   $is_owner Structural ownership flag.
-	 */
-	private function member( int $id, int $venue, int $user, string $status, bool $is_owner ): void {
+	/** Add one membership fixture. */
+	private function member( int $id, int $venue, int $user, string $status, bool $owner ): void {
 		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][ $id ] = array(
 			'id'                 => $id,
 			'venue_term_id'      => $venue,
 			'user_id'            => $user,
-			'is_owner'           => $is_owner ? 1 : 0,
+			'is_owner'           => $owner ? 1 : 0,
 			'status'             => $status,
 			'version'            => 1,
 			'created_by_user_id' => 1,
@@ -95,159 +79,203 @@ final class BookingNotificationTest extends TestCase {
 		);
 	}
 
-	/**
-	 * Build a service with isolated dependencies.
-	 *
-	 * @param callable $notify Users delivery test double.
-	 * @return BookingNotificationService Isolated service.
-	 */
-	private function service( callable $notify ): BookingNotificationService {
-		return new BookingNotificationService(
-			null,
-			null,
-			$notify,
-			static function (): int {
-				return 99;
-			},
-			static function ( array $booking ): string {
-				return 'https://events.example/?booking=' . rawurlencode( $booking['public_id'] ) . '&venue=' . (int) $booking['venue_term_id'];
-			}
+	/** Build an authorized destination resolver that follows canonical policy. */
+	private function destination( array &$resolved ): callable {
+		$authorization = new BookingTestAuthorization(
+			array(
+				'10:55' => true,
+				'11:55' => true,
+			)
 		);
+		return static function ( array $booking, array $recipient_ids, array $members ) use ( &$resolved, $authorization ) {
+			foreach ( $recipient_ids as $recipient_id ) {
+				$allowed = $authorization->authorize_locked( $recipient_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE, $members );
+				if ( true !== $allowed ) {
+					return $allowed;
+				}
+			}
+			$resolved[] = array(
+				'booking_id' => $booking['id'],
+				'recipients' => $recipient_ids,
+			);
+			return 'https://events.example/manage/booking/' . rawurlencode( $booking['public_id'] );
+		};
 	}
 
-	/** Active owner and member receive one PII-free Users payload. */
-	public function test_exact_active_owner_and_member_receive_safe_digest_payload_once(): void {
+	/** Source recovery creates an idempotent outbox request after emit failure. */
+	public function test_recovery_creates_missing_request_once(): void {
 		$booking = $this->booking();
-		$source  = $this->activity( $booking );
+		$ignored = $this->source( $booking, 'status_changed', array( 'from_status' => 'submitted', 'to_status' => 'under_review' ) );
+		$source  = $this->source( $booking );
+		$service = new BookingNotificationService();
+
+		$first  = $service->reconcile_pending();
+		$second = $service->reconcile_pending();
+
+		$this->assertSame( 1, $first['recovered'] );
+		$this->assertSame( 0, $second['recovered'] );
+		$requests = array_values(
+			array_filter(
+				$GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ],
+				static function ( $row ) {
+					return 'notification_requested' === $row['kind'];
+				}
+			)
+		);
+		$this->assertCount( 1, $requests );
+		$this->assertSame( (string) $source['id'], $requests[0]['external_id'] );
+		$ignored_rows = array_values( array_filter( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ], static function ( $row ) { return 'notification_source_ignored' === $row['kind']; } ) );
+		$this->assertSame( (string) $ignored['id'], $ignored_rows[0]['external_id'] );
+	}
+
+	/** Production reconciliation remains pending until both dependencies land. */
+	public function test_missing_destination_and_users_receipts_do_not_terminally_dedupe(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$request = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+
+		$result = ( new BookingNotificationService() )->reconcile( $request['id'] );
+
+		$this->assertSame( 'booking_notification_destination_unavailable', $result->get_error_code() );
+		$this->assertNull( ( new BookingActivityRepository() )->notification_terminal( $request['id'] ) );
+		$this->assertSame( 0, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
+		$resolved = array();
+		$result   = ( new BookingNotificationService( null, null, null, $this->destination( $resolved ), static function (): int { return 99; } ) )->reconcile( $request['id'] );
+		$this->assertSame( 'booking_notification_receipts_unavailable', $result->get_error_code() );
+		$this->assertNull( ( new BookingActivityRepository() )->notification_terminal( $request['id'] ) );
+	}
+
+	/** Partial and zero delivery receipts remain retryable until every user resolves. */
+	public function test_partial_and_zero_receipts_retry_safely_to_completion(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
 		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
 		$this->member( 2, 55, 11, VenueAuthorization::STATUS_ACTIVE, false );
 		$this->member( 3, 55, 12, VenueAuthorization::STATUS_INVITED, false );
-		$this->member( 4, 55, 13, VenueAuthorization::STATUS_REVOKED, true );
-		$this->member( 5, 77, 14, VenueAuthorization::STATUS_ACTIVE, true );
-		$calls   = array();
-		$notify  = static function ( array $recipients, array $payload ) use ( &$calls ): int {
-			$calls[] = array(
-				'recipients' => $recipients,
-				'payload'    => $payload,
+		$this->member( 4, 77, 13, VenueAuthorization::STATUS_ACTIVE, true );
+		$request  = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$resolved = array();
+		$calls    = 0;
+		$delivery = function ( array $recipients, array $payload, string $producer, string $key ) use ( &$calls ): array {
+			++$calls;
+			$this_call = $calls;
+			if ( 1 === $this_call ) {
+				return array(
+					'recipients' => array(
+						10 => array( 'status' => 'failed' ),
+						11 => array( 'status' => 'failed' ),
+					),
+				);
+			}
+			if ( 2 === $this_call ) {
+				return array(
+					'recipients' => array(
+						10 => array(
+							'status'          => 'inserted',
+							'notification_id' => 100,
+						),
+						11 => array( 'status' => 'failed' ),
+					),
+				);
+			}
+			$this->assertSame( array( 10, 11 ), $recipients );
+			$this->assertSame( 'extrachill-events-booking', $producer );
+			$this->assertStringStartsWith( 'notification-request:', $key );
+			$this->assertStringNotContainsString( 'Private', wp_json_encode( $payload ) );
+			return array(
+				'recipients' => array(
+					10 => array(
+						'status'          => 'existing',
+						'notification_id' => 100,
+					),
+					11 => array(
+						'status'          => 'inserted',
+						'notification_id' => 101,
+					),
+				),
 			);
-			return count( $recipients );
 		};
-		$service = $this->service( $notify );
+		$service  = new BookingNotificationService(
+			null,
+			null,
+			$delivery,
+			$this->destination( $resolved ),
+			static function (): int {
+				return 99;
+			}
+		);
 
-		$receipt = $service->deliver( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
-		$replay  = $service->deliver( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$zero     = $service->reconcile( $request['id'] );
+		$partial  = $service->reconcile( $request['id'] );
+		$complete = $service->reconcile( $request['id'] );
+		$replay   = $service->reconcile( $request['id'] );
 
-		$this->assertCount( 1, $calls );
-		$this->assertSame( array( 10, 11 ), $calls[0]['recipients'] );
-		$this->assertSame( array( 'actor_id', 'type', 'link', 'title', 'item_id' ), array_keys( $calls[0]['payload'] ) );
-		$this->assertSame( 99, $calls[0]['payload']['actor_id'] );
-		$this->assertSame( 'booking_inquiry_submitted', $calls[0]['payload']['type'] );
-		$this->assertSame( 'https://events.example/?booking=' . rawurlencode( $booking['public_id'] ) . '&venue=55', $calls[0]['payload']['link'] );
-		$this->assertStringNotContainsString( 'Private', wp_json_encode( $calls[0] ) );
-		$this->assertStringNotContainsString( 'private@example.com', wp_json_encode( $receipt ) );
-		$this->assertSame( 'delivered', $receipt['payload']['data']['status'] );
-		$this->assertSame( $receipt['id'], $replay['id'] );
+		$this->assertSame( 'notification_delivery_attempted', $zero['kind'] );
+		$this->assertSame( 2, $zero['payload']['data']['failed_count'] );
+		$this->assertSame( 'notification_delivery_attempted', $partial['kind'] );
+		$this->assertSame( 'notification_delivered', $complete['kind'] );
+		$this->assertSame( $complete['id'], $replay['id'] );
+		$this->assertSame( 3, $calls );
+		$this->assertCount( 3, $resolved );
 	}
 
-	/** A member revoked before locked selection is suppressed. */
-	public function test_revocation_race_is_resolved_from_locked_membership_rows(): void {
+	/** Revocation between attempts suppresses the user before retry delivery. */
+	public function test_revocation_race_reselects_exact_active_recipients(): void {
 		$booking = $this->booking();
-		$source  = $this->activity( $booking );
+		$source  = $this->source( $booking, 'assignment_changed', array( 'to_assignee_user_id' => 11 ) );
 		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
 		$this->member( 2, 55, 11, VenueAuthorization::STATUS_ACTIVE, false );
-		$GLOBALS['wpdb']->after_membership_lock = static function (): void {
-			$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][2]['status'] = VenueAuthorization::STATUS_REVOKED;
-		};
-		$recipients                             = array();
-		$service                                = $this->service(
-			static function ( array $ids ) use ( &$recipients ): int {
-				$recipients = $ids;
-				return count( $ids );
-			}
-		);
-
-		$service->deliver( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
-
-		$this->assertSame( array( 10 ), $recipients );
-	}
-
-	/** An ambiguous Users result is durable and never blindly retried. */
-	public function test_unknown_result_is_recorded_and_replay_does_not_redeliver(): void {
-		$booking = $this->booking();
-		$source  = $this->activity(
-			$booking,
-			'assignment_changed',
-			array(
-				'from_assignee_user_id' => null,
-				'to_assignee_user_id'   => 10,
-			)
-		);
-		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
-		$calls   = 0;
-		$service = $this->service(
-			static function () use ( &$calls ) {
-				++$calls;
-				return array( 'unexpected' => true );
-			}
-		);
-
-		$receipt = $service->deliver( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, $source['id'] );
-		$replay  = $service->deliver( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, $source['id'] );
-
-		$this->assertSame( 1, $calls );
-		$this->assertSame( 'unknown', $receipt['payload']['data']['status'] );
-		$this->assertNull( $receipt['payload']['data']['inserted_count'] );
-		$this->assertSame( $receipt['id'], $replay['id'] );
-	}
-
-	/** Notification types cannot be paired with unrelated activity. */
-	public function test_source_contract_and_deep_link_fail_closed(): void {
-		$booking = $this->booking();
-		$source  = $this->activity(
-			$booking,
-			'status_changed',
-			array(
-				'from_status' => 'submitted',
-				'to_status'   => 'under_review',
-			)
-		);
-		$service = $this->service(
+		$request    = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, $source['id'] );
+		$deliveries = array();
+		$resolved   = array();
+		$service    = new BookingNotificationService(
+			null,
+			null,
+			static function ( array $recipients ) use ( &$deliveries ): array {
+				$deliveries[] = $recipients;
+				$rows         = array();
+				foreach ( $recipients as $recipient ) {
+					$rows[ $recipient ] = array( 'status' => 1 === count( $deliveries ) ? 'failed' : 'existing' );
+				}
+				return array( 'recipients' => $rows );
+			},
+			$this->destination( $resolved ),
 			static function (): int {
-				return 1;
-			}
+				return 99; }
 		);
 
-		$result = $service->deliver( BookingNotificationService::TYPE_INFORMATION_RECEIVED, $source['id'] );
+		$service->reconcile( $request['id'] );
+		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][2]['status'] = VenueAuthorization::STATUS_REVOKED;
+		$service->reconcile( $request['id'] );
 
-		$this->assertSame( 'booking_notification_source_invalid', $result->get_error_code() );
-		$this->assertArrayNotHasKey( BookingSchema::memberships_table(), $GLOBALS['wpdb']->rows );
+		$this->assertSame( array( 10, 11 ), $deliveries[0] );
+		$this->assertSame( array( 10 ), $deliveries[1] );
 	}
 
-	/** The landed activity contracts emit exactly the five current types. */
-	public function test_landed_source_contracts_emit_exact_notification_types(): void {
+	/** Recovery emits only the five landed event mappings. */
+	public function test_landed_and_future_source_seams_remain_explicit(): void {
 		$booking = $this->booking();
-		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
-		$events = array(
-			array( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, 'inquiry_submitted', array( 'status' => 'submitted' ) ),
-			array( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, 'assignment_changed', array( 'to_assignee_user_id' => 10 ) ),
-			array( BookingNotificationService::TYPE_INFORMATION_RECEIVED, 'status_changed', array( 'from_status' => 'needs_info', 'to_status' => 'submitted' ) ),
-			array( BookingNotificationService::TYPE_HOLD_EXPIRED, 'hold_expired', array( 'hold_id' => 20 ) ),
-			array( BookingNotificationService::TYPE_EVENT_HANDOFF_FAILED, 'event_conversion_failed', array( 'attempt' => 1 ) ),
+		$events  = array(
+			array( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, 'inquiry_submitted', array() ),
+			array( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, 'assignment_changed', array() ),
+			array(
+				BookingNotificationService::TYPE_INFORMATION_RECEIVED,
+				'status_changed',
+				array(
+					'from_status' => 'needs_info',
+					'to_status'   => 'submitted',
+				),
+			),
+			array( BookingNotificationService::TYPE_HOLD_EXPIRED, 'hold_expired', array() ),
+			array( BookingNotificationService::TYPE_EVENT_HANDOFF_FAILED, 'event_conversion_failed', array() ),
 		);
-		$types   = array();
-		$service = $this->service(
-			static function ( array $recipients, array $payload ) use ( &$types ): int {
-				$types[] = $payload['type'];
-				return count( $recipients );
-			}
-		);
-
+		$service = new BookingNotificationService();
 		foreach ( $events as $event ) {
-			$source = $this->activity( $booking, $event[1], $event[2] );
-			$result = $service->deliver( $event[0], $source['id'] );
-			$this->assertSame( 'delivered', $result['payload']['data']['status'] );
+			$source = $this->source( $booking, $event[1], $event[2] );
+			$this->assertSame( $event[0], $service->request( $event[0], $source['id'] )['payload']['data']['notification_type'] );
 		}
-
-		$this->assertSame( array_column( $events, 0 ), $types );
+		$future = $this->source( $booking, 'settlement_ready', array() );
+		$this->assertSame( BookingNotificationService::TYPE_SETTLEMENT_READY, $service->request( BookingNotificationService::TYPE_SETTLEMENT_READY, $future['id'] )['payload']['data']['notification_type'] );
 	}
 }

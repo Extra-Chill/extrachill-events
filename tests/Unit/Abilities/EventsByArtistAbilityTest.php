@@ -139,10 +139,6 @@ if ( ! function_exists( 'wp_get_ability' ) ) {
 
 require_once dirname( __DIR__, 3 ) . '/inc/abilities/events-by-artist.php';
 
-/**
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
- */
 final class EventsByArtistAbilityTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['ec_artist_test'] = array(

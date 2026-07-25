@@ -24,35 +24,31 @@ use ExtraChillEvents\Cli\FlowOps;
  * loads a fake FlowOps in the same namespace; without isolation, whichever
  * test file loads first wins the class-resolution race.
  *
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
  */
 class FlowOpsResumeTest extends TestCase {
+	private $original_wpdb;
+	private $log_callback;
 
 	protected function setUp(): void {
 		parent::setUp();
+		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
 
-		// Loaded here (rather than at file top) so the parent PHPUnit
-		// process that collects tests never pulls in the real FlowOps
-		// class. QualifyRecheckHandlerTest installs a same-namespace
-		// fake FlowOps and needs to win the class-resolution race in
-		// its own process. Tests in THIS class run in isolated
-		// subprocesses (see @runTestsInSeparateProcesses) so the real
-		// FlowOps gets a clean load each time.
+		// Load the focused fake database before exercising the real FlowOps class.
 		require_once __DIR__ . '/Stubs/flowops-resume-stubs.php';
 		require_once dirname( __DIR__, 3 ) . '/inc/Cli/FlowOps.php';
 
 		$GLOBALS['wpdb']                  = new FlowOpsFakeWpdb();
 		$GLOBALS['ec_test_log_entries']   = array();
-		$GLOBALS['ec_test_async_actions'] = array();
+		$this->log_callback               = static function ( string $level, string $message, array $context ): void {
+			$GLOBALS['ec_test_log_entries'][] = compact( 'level', 'message', 'context' );
+		};
+		add_action( 'datamachine_log', $this->log_callback, 10, 3 );
 	}
 
 	protected function tearDown(): void {
-		unset(
-			$GLOBALS['wpdb'],
-			$GLOBALS['ec_test_log_entries'],
-			$GLOBALS['ec_test_async_actions']
-		);
+		$GLOBALS['wpdb'] = $this->original_wpdb;
+		remove_action( 'datamachine_log', $this->log_callback, 10 );
+		unset( $GLOBALS['ec_test_log_entries'] );
 		parent::tearDown();
 	}
 

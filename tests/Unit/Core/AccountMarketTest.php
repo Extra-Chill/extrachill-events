@@ -300,8 +300,6 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
  */
 final class AccountMarketTest extends TestCase {
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_resolves_coordinates_from_user_ability(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -336,8 +334,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_fails_open_when_ability_is_unavailable(): void {
 		$GLOBALS['test_is_user_logged_in'] = true;
@@ -346,8 +342,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_adds_taxonomy_default_without_mutating_request_globals(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -400,8 +394,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_explore_all_suppresses_fallback_without_mutating_preference(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -443,8 +435,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_near_me_adds_geo_defaults_without_taxonomy_filter(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -494,8 +484,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_my_shows_route_map_uses_account_market_center(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -631,8 +619,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_active_market_context_escapes_label_and_links_to_account_details(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -660,8 +646,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_logged_in_without_market_and_anonymous_prompts(): void {
 		$GLOBALS['test_is_front_page']     = true;
@@ -681,8 +665,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_homepage_promotes_saved_market_as_primary_city_route(): void {
 		$GLOBALS['test_is_user_logged_in']      = true;
@@ -735,8 +717,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_archive_cta_only_renders_for_selectable_city(): void {
 		$GLOBALS['test_is_tax']         = true;
@@ -757,8 +737,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_archive_cta_shows_save_form_or_current_confirmation(): void {
 		$GLOBALS['test_is_tax']            = true;
@@ -775,8 +753,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_archive_cta_confirms_current_scene_without_save_form(): void {
 		$GLOBALS['test_is_tax']                 = true;
@@ -802,8 +778,6 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
 	 */
 	public function test_archive_update_requires_login_and_nonce_and_uses_settings_ability(): void {
 		$term                                 = new WP_Term( 1618, 'Charleston', 'charleston' );

@@ -795,8 +795,6 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 /**
  * Venue membership and profile composition coverage uses isolated WP doubles.
  *
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
  */
 final class VenueMembershipAuthorizationTest extends TestCase {
 	protected function setUp(): void {

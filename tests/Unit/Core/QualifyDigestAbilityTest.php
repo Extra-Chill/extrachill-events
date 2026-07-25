@@ -21,9 +21,25 @@ require_once dirname( __DIR__, 3 ) . '/inc/Core/QualifyVerdictsTable.php';
 require_once dirname( __DIR__, 3 ) . '/inc/Abilities/QualifyDigestAbilities.php';
 
 class QualifyDigestAbilityTest extends TestCase {
+	private $original_wpdb;
+	private string $original_timezone;
+
+	protected function setUp(): void {
+		parent::setUp();
+		$this->original_wpdb     = $GLOBALS['wpdb'] ?? null;
+		$this->original_timezone = function_exists( 'get_option' ) ? (string) get_option( 'timezone_string', '' ) : '';
+		if ( function_exists( 'update_option' ) ) {
+			update_option( 'timezone_string', 'America/New_York' );
+			wp_timezone();
+		}
+	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['wpdb'], $GLOBALS['ec_digest_timezone'] );
+		$GLOBALS['wpdb'] = $this->original_wpdb;
+		if ( function_exists( 'update_option' ) ) {
+			update_option( 'timezone_string', $this->original_timezone );
+		}
+		unset( $GLOBALS['ec_digest_timezone'] );
 		parent::tearDown();
 	}
 

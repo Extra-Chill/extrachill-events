@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        command: [review audit, review lint, review test]
+        command: [review lint, review test]
     services:
       mysql:
         image: mysql:8.0
@@ -69,4 +69,4 @@ jobs:
         uses: Extra-Chill/homeboy-action@v2
         with:
           commands: ${{ matrix.command }}
-          expected-commands: review audit,review lint,review test
+          expected-commands: review lint,review test

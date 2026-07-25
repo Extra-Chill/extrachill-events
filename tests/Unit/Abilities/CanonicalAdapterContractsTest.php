@@ -285,6 +285,9 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		if ( false === $root || '' === $root ) {
 			$root = defined( 'DATA_MACHINE_EVENTS_PATH' ) ? DATA_MACHINE_EVENTS_PATH . 'contracts' : '';
 		}
+		if ( '' === $root && defined( 'WP_PLUGIN_DIR' ) ) {
+			$root = WP_PLUGIN_DIR . '/data-machine-events/contracts';
+		}
 		$this->assertDirectoryExists( $root, 'A composed Data Machine Events contract source is required.' );
 
 		return rtrim( $root, '/' );

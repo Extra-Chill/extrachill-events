@@ -843,6 +843,17 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	protected function setUp(): void {
 		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
 		if ( $this->original_wpdb ) {
+			$user_emails = array(
+				1 => 'admin@example.com',
+				2 => 'owner@example.com',
+				3 => 'member3@example.com',
+				4 => 'member4@example.com',
+				5 => 'member5@example.com',
+				6 => 'member6@example.com',
+				7 => 'existing@example.com',
+				8 => 'member8@example.com',
+				9 => 'member9@example.com',
+			);
 			for ( $user_id = 1; $user_id <= 9; ++$user_id ) {
 				if ( ! get_user_by( 'id', $user_id ) ) {
 					$this->original_wpdb->insert(
@@ -852,7 +863,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 							'user_login'      => 'venue-member-' . $user_id,
 							'user_pass'       => wp_hash_password( 'test-password' ),
 							'user_nicename'   => 'venue-member-' . $user_id,
-							'user_email'      => 'member' . $user_id . '@example.com',
+							'user_email'      => $user_emails[ $user_id ],
 							'user_registered' => current_time( 'mysql' ),
 							'user_status'     => 0,
 							'display_name'    => 'Venue Member ' . $user_id,
@@ -860,7 +871,47 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 					);
 					clean_user_cache( $user_id );
 				}
+				$this->original_wpdb->update(
+					$this->original_wpdb->users,
+					array( 'user_email' => $user_emails[ $user_id ] ),
+					array( 'ID' => $user_id )
+				);
+				clean_user_cache( $user_id );
 			}
+
+			register_taxonomy( 'venue', 'data_machine_events' );
+			register_taxonomy( 'artist', 'data_machine_events' );
+			foreach (
+				array(
+					55 => array( 'The Royal American', 'the-royal-american', 'venue', 'Neighborhood venue.' ),
+					56 => array( 'Music Farm', 'music-farm', 'venue', '' ),
+					57 => array( 'Test Artist', 'test-artist', 'artist', '' ),
+				) as $term_id => $term_data
+			) {
+				$this->original_wpdb->replace(
+					$this->original_wpdb->terms,
+					array(
+						'term_id'    => $term_id,
+						'name'       => $term_data[0],
+						'slug'       => $term_data[1],
+						'term_group' => 0,
+					)
+				);
+				$this->original_wpdb->replace(
+					$this->original_wpdb->term_taxonomy,
+					array(
+						'term_taxonomy_id' => $term_id,
+						'term_id'          => $term_id,
+						'taxonomy'         => $term_data[2],
+						'description'      => $term_data[3],
+						'parent'           => 0,
+						'count'            => 0,
+					)
+				);
+				clean_term_cache( $term_id, $term_data[2] );
+			}
+
+			( new WP_User( 1 ) )->set_role( 'administrator' );
 		}
 		wp_set_current_user( 1 );
 		$GLOBALS['venue_membership_test'] = array(

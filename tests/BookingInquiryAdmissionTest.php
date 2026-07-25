@@ -1,0 +1,347 @@
+<?php
+/**
+ * Inquiry attachment admission contract tests.
+ *
+ * @package ExtraChillEvents\Tests
+ */
+
+use ExtraChillEvents\Core\BookingAttachmentRepository;
+use ExtraChillEvents\Core\BookingAttachmentService;
+use ExtraChillEvents\Core\BookingInquiryAdmissionService;
+use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingRepository;
+use ExtraChillEvents\Core\BookingSchema;
+use PHPUnit\Framework\TestCase;
+
+require_once __DIR__ . '/Support/BookingTestHarness.php';
+
+/** Verifies the hidden inquiry ability's complete attachment saga. */
+final class BookingInquiryAdmissionTest extends TestCase {
+
+	/**
+	 * Fake private provider.
+	 *
+	 * @var BookingTestPrivateFileProvider
+	 */
+	private $provider;
+	/**
+	 * Temporary upload fixture paths.
+	 *
+	 * @var string[]
+	 */
+	private $temporary_files = array();
+
+	/** Initialize one Events-site admission fixture. */
+	protected function setUp(): void {
+		$GLOBALS['ec_artist_test'] = array(
+			'blog_id'         => 7,
+			'stack'           => array(),
+			'uuid'            => 0,
+			'options'         => array(),
+			'dbdelta'         => array(),
+			'abilities'       => array(),
+			'actions'         => array(),
+			'max_upload_size' => 20 * 1024 * 1024,
+			'terms'           => array(
+				7 => array(
+					55 => (object) array(
+						'term_id'  => 55,
+						'taxonomy' => 'venue',
+						'name'     => 'The Room',
+					),
+				),
+			),
+			'meta'            => array(
+				7 => array(
+					55 => array( '_extrachill_booking_config' => array( 'enabled' => true ) ),
+				),
+			),
+			'posts'           => array(),
+			'post_meta'       => array(),
+		);
+		$GLOBALS['wpdb']           = new BookingWpdb();
+		$GLOBALS['extrachill_events_booking_reference_lock_uncertainty']         = array();
+		$GLOBALS['extrachill_events_booking_database_connection_quarantined']    = false;
+		$GLOBALS['ec_test_filters']['extrachill_events_allow_test_booking_file'] = array(
+			10 => array(
+				array(
+					static function (): bool {
+						return true;
+					},
+					1,
+				),
+			),
+		);
+		$this->provider = new BookingTestPrivateFileProvider();
+	}
+
+	/** Remove temporary upload fixtures. */
+	protected function tearDown(): void {
+		foreach ( $this->temporary_files as $file ) {
+			if ( is_file( $file ) ) {
+				unlink( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Test fixture cleanup.
+			}
+		}
+	}
+
+	/**
+	 * Build a coordinator sharing repositories and the fake provider.
+	 *
+	 * @param BookingTestAuthorization|null $authorization Authorization spy.
+	 */
+	private function service( ?BookingTestAuthorization $authorization = null ): BookingInquiryAdmissionService {
+		$bookings           = new BookingRepository();
+		$attachments        = new BookingAttachmentRepository();
+		$lifecycle          = new BookingLifecycle( $bookings );
+		$attachment_service = new BookingAttachmentService( $attachments, $bookings, null, null, $this->provider, $authorization ? $authorization : new BookingTestAuthorization() );
+		return new BookingInquiryAdmissionService( $lifecycle, $attachments, $attachment_service, $this->provider );
+	}
+
+	/**
+	 * Build valid scalar inquiry input.
+	 *
+	 * @param array  $files Staged files.
+	 * @param string $key   Inquiry idempotency key.
+	 */
+	private function input( array $files = array(), string $key = 'inquiry-admission' ): array {
+		return array(
+			'idempotency_key' => $key,
+			'venue_term_id'   => 55,
+			'artist_name'     => 'New Band',
+			'intake'          => array( 'message' => 'Please consider us.' ),
+			'attachments'     => $files,
+		);
+	}
+
+	/**
+	 * Create one trusted staged-upload fixture.
+	 *
+	 * @param string $name     Original filename.
+	 * @param string $contents File contents.
+	 * @param string $purpose  Booking purpose.
+	 */
+	private function upload( string $name, string $contents, string $purpose ): array {
+		$path = tempnam( sys_get_temp_dir(), 'ec-inquiry-' );
+		file_put_contents( $path, $contents ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Test fixture.
+		$this->temporary_files[] = $path;
+		return array(
+			'name'     => $name,
+			'tmp_name' => $path,
+			'error'    => UPLOAD_ERR_OK,
+			'size'     => filesize( $path ),
+			'purpose'  => $purpose,
+		);
+	}
+
+	/**
+	 * Create a sparse staged-upload fixture with an exact byte size.
+	 *
+	 * @param string $name    Original filename.
+	 * @param int    $size    File size.
+	 * @param string $purpose Booking purpose.
+	 */
+	private function sized_upload( string $name, int $size, string $purpose ): array {
+		$path   = tempnam( sys_get_temp_dir(), 'ec-inquiry-' );
+		$handle = fopen( $path, 'wb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Test fixture.
+		ftruncate( $handle, $size );
+		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- Test fixture.
+		$this->temporary_files[] = $path;
+		return array(
+			'name'     => $name,
+			'tmp_name' => $path,
+			'error'    => UPLOAD_ERR_OK,
+			'size'     => $size,
+			'purpose'  => $purpose,
+		);
+	}
+
+	/** Verify caller attribution and completed replay. */
+	public function test_anonymous_and_authenticated_attribution_are_actual_and_replay_safe(): void {
+		$authorization = new BookingTestAuthorization();
+		$service       = $this->service( $authorization );
+		$anonymous     = $service->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ) ), null );
+		$this->assertSame( array( 'public_id', 'venue_term_id', 'submitted_at' ), array_keys( $anonymous ) );
+		$this->assertSame( $anonymous, $service->admit( $this->input( array( $this->temporary_upload( 0, 'press.txt', 'press_release' ) ) ), null ) );
+		$this->assertSame( 1, $this->provider->stage_count );
+
+		$authenticated = $service->admit( $this->input( array( $this->upload( 'rider.txt', 'rider', 'technical_rider' ) ), 'authenticated-admission' ), 42 );
+		$this->assertIsArray( $authenticated );
+		$rows = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+		$this->assertSame( 'anonymous', $rows[0]['uploader_type'] );
+		$this->assertNull( $rows[0]['uploader_user_id'] );
+		$this->assertSame( 'user', $rows[1]['uploader_type'] );
+		$this->assertSame( 42, $rows[1]['uploader_user_id'] );
+		$this->assertSame( array(), $authorization->calls, 'Inquiry submitters are attributed but are not venue operators.' );
+	}
+
+	/**
+	 * Rebuild an upload record for an existing temporary file.
+	 *
+	 * @param int    $index   Fixture index.
+	 * @param string $name    Original filename.
+	 * @param string $purpose Booking purpose.
+	 */
+	private function temporary_upload( int $index, string $name, string $purpose ): array {
+		$path = $this->temporary_files[ $index ];
+		return array(
+			'name'     => $name,
+			'tmp_name' => $path,
+			'error'    => UPLOAD_ERR_OK,
+			'size'     => filesize( $path ),
+			'purpose'  => $purpose,
+		);
+	}
+
+	/** Verify partial batches resume without duplicating committed slots. */
+	public function test_partial_multi_file_failure_resumes_only_missing_slots(): void {
+		$files                         = array(
+			$this->upload( 'press.txt', 'press', 'press_release' ),
+			$this->upload( 'rider.txt', 'rider', 'technical_rider' ),
+		);
+		$this->provider->fail_stage_at = 2;
+		$service                       = $this->service();
+		$failed                        = $service->admit( $this->input( $files ) );
+		$this->assertSame( 'booking_inquiry_unavailable', $failed->get_error_code() );
+		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
+		$this->assertCount( 1, $this->provider->retired );
+
+		$this->provider->fail_stage_at = 0;
+		$replayed                      = $service->admit( $this->input( $files ) );
+		$this->assertIsArray( $replayed );
+		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+		$this->assertSame( 4, $this->provider->stage_count );
+	}
+
+	/** Verify a later provider-claim failure retains and reuses earlier committed slots. */
+	public function test_partial_attachment_failure_compensates_uncommitted_slots_and_resumes(): void {
+		$files = array(
+			$this->upload( 'press.txt', 'press', 'press_release' ),
+			$this->upload( 'rider.txt', 'rider', 'technical_rider' ),
+		);
+		$this->provider->fail_claim_at = 2;
+		$service                       = $this->service();
+		$error                         = $service->admit( $this->input( $files, 'partial-claim' ) );
+		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+		$this->assertCount( 1, $this->provider->retired );
+
+		$this->provider->fail_claim_at = 0;
+		$this->assertIsArray( $service->admit( $this->input( $files, 'partial-claim' ) ) );
+		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+		$this->assertSame( 3, $this->provider->stage_count, 'The committed first slot must not be staged again.' );
+	}
+
+	/** Verify confirmed database failures compensate both stores. */
+	public function test_known_database_failure_releases_claim_and_retires_staged_object(): void {
+		$this->provider->after_stage = static function () {
+			$GLOBALS['wpdb']->fail_activity_inserts = true;
+		};
+		$error                       = $this->service()->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ) ) );
+		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
+		$this->assertCount( 1, $this->provider->released );
+		$this->assertCount( 1, $this->provider->retired );
+		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
+	}
+
+	/** Verify uncertain commits never trigger destructive guesses. */
+	public function test_booking_and_attachment_commit_uncertainty_never_guess_or_cleanup(): void {
+		$files                                    = array( $this->upload( 'press.txt', 'press', 'press_release' ) );
+		$GLOBALS['wpdb']->fail_transaction_commit = true;
+		$booking_error                            = $this->service()->admit( $this->input( $files, 'booking-commit-uncertain' ) );
+		$this->assertReconciliationErrorWithoutLeaks( $booking_error, $files[0]['tmp_name'] );
+		$this->assertSame( 0, $this->provider->stage_count, 'Booking uncertainty occurs before staging.' );
+
+		$GLOBALS['wpdb']             = new BookingWpdb();
+		$this->provider              = new BookingTestPrivateFileProvider();
+		$this->provider->after_stage = static function () {
+			$GLOBALS['wpdb']->fail_transaction_commit = true;
+		};
+		$attachment_error            = $this->service()->admit( $this->input( $files, 'attachment-commit-uncertain' ) );
+		$this->assertReconciliationErrorWithoutLeaks( $attachment_error, $files[0]['tmp_name'] );
+		$this->assertSame( array(), $this->provider->retired );
+		$this->assertCount( 1, $this->provider->claims );
+	}
+
+	/** Verify a committed result survives advisory unlock uncertainty and replay. */
+	public function test_committed_unlock_uncertainty_replays_without_duplicate_or_cleanup(): void {
+		$files                       = array( $this->upload( 'press.txt', 'press', 'press_release' ) );
+		$this->provider->after_stage = static function () {
+			$GLOBALS['wpdb']->fail_reference_unlock = true;
+		};
+		$service                     = $this->service();
+		$error                       = $service->admit( $this->input( $files, 'unlock-uncertain' ) );
+		$this->assertReconciliationErrorWithoutLeaks( $error, $files[0]['tmp_name'] );
+		$this->assertSame( array(), $this->provider->retired );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+
+		$GLOBALS['wpdb']->fail_reference_unlock                          = false;
+		$GLOBALS['wpdb']->last_error                                     = '';
+		$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'] = array();
+		$GLOBALS['extrachill_events_booking_database_connection_quarantined'] = false;
+		$this->provider->after_stage = null;
+		$this->assertIsArray( $this->service()->admit( $this->input( $files, 'unlock-uncertain' ) ) );
+		$this->assertSame( 1, $this->provider->stage_count );
+	}
+
+	/** Verify failed cleanup exposes only a reconciliation marker. */
+	public function test_cleanup_uncertainty_is_safe_and_does_not_leak_internal_data(): void {
+		$this->provider->fail_retire = true;
+		$this->provider->after_stage = static function () {
+			$GLOBALS['wpdb']->fail_activity_inserts = true;
+		};
+		$file                        = $this->upload( 'press.txt', 'press', 'press_release' );
+		$error                       = $this->service()->admit( $this->input( array( $file ), 'cleanup-uncertain' ) );
+		$this->assertReconciliationErrorWithoutLeaks( $error, $file['tmp_name'] );
+	}
+
+	/** Verify all cheap bounds run before persistence or staging. */
+	public function test_preflight_rejects_partial_unsupported_oversized_and_excess_files_before_work(): void {
+		$partial          = $this->upload( 'press.txt', 'press', 'press_release' );
+		$partial['error'] = UPLOAD_ERR_PARTIAL;
+		$this->assertSame( 'booking_attachment_upload_failed', $this->service()->admit( $this->input( array( $partial ), 'partial' ) )->get_error_code() );
+		$this->assertSame( 'invalid_booking_attachment_type', $this->service()->admit( $this->input( array( $this->upload( 'press.exe', 'press', 'press_release' ) ), 'type' ) )->get_error_code() );
+		$oversized = $this->sized_upload( 'press.txt', 21 * 1024 * 1024, 'press_release' );
+		$this->assertSame( 'invalid_booking_attachment_size', $this->service()->admit( $this->input( array( $oversized ), 'size' ) )->get_error_code() );
+		$aggregate = array_fill( 0, BookingInquiryAdmissionService::MAX_FILES, $this->sized_upload( 'press.txt', 11 * 1024 * 1024, 'press_release' ) );
+		$this->assertSame( 'invalid_booking_attachment_aggregate_size', $this->service()->admit( $this->input( $aggregate, 'aggregate' ) )->get_error_code() );
+		$too_many = array_fill( 0, BookingInquiryAdmissionService::MAX_FILES + 1, $this->upload( 'press.txt', 'press', 'press_release' ) );
+		$this->assertSame( 'invalid_booking_attachment_count', $this->service()->admit( $this->input( $too_many, 'count' ) )->get_error_code() );
+		$this->assertSame( 0, $this->provider->stage_count );
+		$this->assertArrayNotHasKey( BookingSchema::bookings_table(), $GLOBALS['wpdb']->rows );
+	}
+
+	/** Verify current-prefix writes cannot run on the main site. */
+	public function test_wrong_site_fails_before_main_prefix_write(): void {
+		$GLOBALS['ec_artist_test']['blog_id'] = 1;
+		$GLOBALS['wpdb']->prefix              = 'wp_';
+		$error                                = $this->service()->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ) ) );
+		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['wpdb']->rows );
+		$this->assertSame( 0, $this->provider->stage_count );
+	}
+
+	/**
+	 * Assert uncertainty remains actionable without leaking private internals.
+	 *
+	 * @param WP_Error $error Facade error.
+	 * @param string   $path  Private source path.
+	 */
+	private function assertReconciliationErrorWithoutLeaks( WP_Error $error, string $path ): void {
+		$this->assertSame( 'booking_inquiry_reconciliation_required', $error->get_error_code() );
+		$this->assertSame(
+			array(
+				'status'                  => 503,
+				'retryable'               => true,
+				'reconciliation_required' => true,
+			),
+			$error->get_error_data()
+		);
+		$encoded = wp_json_encode( array( $error->get_error_code(), $error->get_error_message(), $error->get_error_data() ) );
+		$this->assertStringNotContainsString( $path, $encoded );
+		$this->assertStringNotContainsString( 'private_staged_object', $encoded );
+		$this->assertStringNotContainsString( 'database_error', $encoded );
+		$this->assertStringNotContainsString( 'lock_name', $encoded );
+		$this->assertStringNotContainsString( 'sha256', $encoded );
+		$this->assertStringNotContainsString( 'handoff', $encoded );
+	}
+}

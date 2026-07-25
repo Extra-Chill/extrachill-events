@@ -1065,6 +1065,10 @@ final class BookingFoundationTest extends TestCase {
 		}
 		$this->assertSame( BookingLifecycle::STATUSES, $registered['extrachill/transition-venue-booking']['input_schema']['properties']['to_status']['enum'] );
 		$this->assertSame( array( 'idempotency_key', 'venue_term_id', 'intake' ), $registered['extrachill/create-booking-inquiry']['input_schema']['required'] );
+		$attachment_schema = $registered['extrachill/create-booking-inquiry']['input_schema']['properties']['attachments'];
+		$this->assertSame( 5, $attachment_schema['maxItems'] );
+		$this->assertSame( array( 'name', 'tmp_name', 'error', 'size', 'purpose' ), $attachment_schema['items']['required'] );
+		$this->assertFalse( $attachment_schema['items']['additionalProperties'] );
 		$this->assertSame( array( 'venue_term_id' ), $registered['extrachill/list-venue-bookings']['input_schema']['required'] );
 		$this->assertSame( array( 'booking_id', 'to_status', 'expected_version' ), $registered['extrachill/transition-venue-booking']['input_schema']['required'] );
 		$this->assertSame( array( 'booking_id', 'expected_version' ), $registered['extrachill/bind-venue-booking-artist']['input_schema']['required'] );

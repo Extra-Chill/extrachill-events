@@ -6,9 +6,11 @@
  */
 
 use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingAttachmentPolicy;
 use ExtraChillEvents\Core\BookingCommunicationService;
 use ExtraChillEvents\Core\BookingPrivateFileProvider;
 use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingInquiryAdmissionService;
 use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingMutationService;
 use ExtraChillEvents\Core\BookingEventConversionService;
@@ -1375,6 +1377,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProviders.php'
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentPolicy.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentService.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingInquiryAdmissionService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueBookingConfig.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/CanonicalEventPublicationGuard.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingAbilities.php';
@@ -1429,14 +1432,38 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	public $throw_claim = false;
 	public $inspect_uncertain = 0;
 	public $inspect_truncated = false;
+	public $stage_count = 0;
+	public $fail_stage_at = 0;
+	public $after_stage;
+	public $claim_count = 0;
+	public $fail_claim_at = 0;
 	public function stage( string $source_path, string $filename, string $purpose ) {
-		unset( $source_path, $filename, $purpose );
-		return new WP_Error( 'not_implemented' );
+		++$this->stage_count;
+		if ( $this->fail_stage_at === $this->stage_count ) {
+			return new WP_Error( 'simulated_stage_failure' );
+		}
+		$reference = sprintf( 'private_staged_object_%06d', $this->stage_count );
+		$filetype  = wp_check_filetype( $filename, BookingAttachmentPolicy::allowed_mimes() );
+		$this->objects[ $reference ] = array(
+			'filename'     => $filename,
+			'mime_type'    => $filetype['type'],
+			'byte_size'    => filesize( $source_path ),
+			'content_hash' => hash_file( 'sha256', $source_path ),
+			'scan_status'  => BookingAttachmentPolicy::requires_malware_scan( $filetype['type'] ) ? 'clean' : 'not_required',
+		);
+		if ( is_callable( $this->after_stage ) ) {
+			call_user_func( $this->after_stage, $reference, $purpose );
+		}
+		return $reference;
 	}
 	public function claim( string $storage_reference, string $claim_key, string $purpose = '' ) {
 		unset( $purpose );
 		if ( $this->throw_claim ) {
 			throw new RuntimeException( 'simulated provider crash' );
+		}
+		++$this->claim_count;
+		if ( $this->fail_claim_at === $this->claim_count ) {
+			return new WP_Error( 'simulated_claim_failure' );
 		}
 		$this->claims[] = array( $storage_reference, $claim_key );
 		$this->claim_records[ $storage_reference . '|' . $claim_key ] = array(

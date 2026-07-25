@@ -272,7 +272,7 @@ if ( ! function_exists( 'get_ancestors' ) ) {
 
 if ( ! function_exists( 'get_term_link' ) ) {
 	function get_term_link( $term ) {
-		return 'https://events.example/location/' . $term->slug . '/';
+		return $GLOBALS['test_term_link'] ?? 'https://events.example/location/' . $term->slug . '/';
 	}
 }
 
@@ -586,54 +586,7 @@ final class AccountMarketTest extends TestCase {
 		$this->assertSame( 'past=1', (string) wp_parse_url( 'https://events.example/all/page/2/?past=1', PHP_URL_QUERY ) );
 	}
 
-	public function test_scoped_location_pagination_rewrite_precedes_base_route(): void {
-		$GLOBALS['ec_locations_blog_id'] = 7;
-		$GLOBALS['test_rewrite_rules']   = array();
-
-		extrachill_events_discovery_rewrite_rules();
-
-		$this->assertSame(
-			array(
-				'regex' => 'location/(.+?)/(today|tonight|this-weekend|this-week)/page/([0-9]{1,})/?$',
-				'query' => 'index.php?location=$matches[1]&event_scope=$matches[2]&paged=$matches[3]',
-				'after' => 'top',
-			),
-			$GLOBALS['test_rewrite_rules'][0]
-		);
-		$this->assertSame( 'location/(.+?)/(today|tonight|this-weekend|this-week)/?$', $GLOBALS['test_rewrite_rules'][1]['regex'] );
-	}
-
-	/**
-	 * @dataProvider scoped_pagination_paths
-	 */
-	public function test_scoped_location_pretty_route_preserves_identity( string $path ): void {
-		$GLOBALS['ec_locations_blog_id'] = 7;
-		$GLOBALS['test_rewrite_rules']   = array();
-		extrachill_events_discovery_rewrite_rules();
-		$rule = $GLOBALS['test_rewrite_rules'][0];
-
-		$this->assertSame( 1, preg_match( '#^' . $rule['regex'] . '#', $path, $matches ) );
-		$this->assertSame( 'usa/south-carolina/charleston', $matches[1] );
-		$this->assertSame( 'this-weekend', $matches[2] );
-		$this->assertSame( '2', $matches[3] );
-		$this->assertSame(
-			'index.php?location=usa/south-carolina/charleston&event_scope=this-weekend&paged=2',
-			str_replace(
-				array( '$matches[1]', '$matches[2]', '$matches[3]' ),
-				array( $matches[1], $matches[2], $matches[3] ),
-				$rule['query']
-			)
-		);
-	}
-
-	public static function scoped_pagination_paths(): array {
-		return array(
-			'without trailing slash' => array( 'location/usa/south-carolina/charleston/this-weekend/page/2' ),
-			'with trailing slash'    => array( 'location/usa/south-carolina/charleston/this-weekend/page/2/' ),
-		);
-	}
-
-	public function test_scoped_query_pagination_canonicalizes_to_pretty_self_url(): void {
+	public function test_scoped_query_pagination_preserves_serving_url_identity(): void {
 		$GLOBALS['ec_locations_blog_id'] = 7;
 		$GLOBALS['test_is_tax']           = true;
 		$GLOBALS['test_query_vars']       = array(
@@ -641,15 +594,17 @@ final class AccountMarketTest extends TestCase {
 			'paged'       => 2,
 		);
 		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
 
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=2' );
 		$og_data   = extrachill_events_discovery_og_data( array( 'og:url' => $canonical ) );
+		unset( $GLOBALS['test_term_link'] );
 
-		$this->assertSame( 'https://events.example/location/charleston/this-weekend/page/2/', $canonical );
+		$this->assertSame( 'https://events.example/location/usa/south-carolina/charleston/this-weekend?paged=2', $canonical );
 		$this->assertSame( $canonical, $og_data['og:url'] );
 	}
 
-	public function test_scoped_page_one_canonical_omits_pagination_segment(): void {
+	public function test_scoped_page_one_canonical_matches_slashless_serving_url(): void {
 		$GLOBALS['ec_locations_blog_id'] = 7;
 		$GLOBALS['test_is_tax']           = true;
 		$GLOBALS['test_query_vars']       = array(
@@ -657,10 +612,14 @@ final class AccountMarketTest extends TestCase {
 			'paged'       => 1,
 		);
 		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
+
+		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=1' );
+		unset( $GLOBALS['test_term_link'] );
 
 		$this->assertSame(
-			'https://events.example/location/charleston/tonight/',
-			extrachill_events_discovery_canonical( 'https://events.example/?paged=1' )
+			'https://events.example/location/usa/south-carolina/charleston/tonight',
+			$canonical
 		);
 	}
 

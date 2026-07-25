@@ -64,10 +64,10 @@ function extrachill_events_location_directory_enabled(): bool {
 }
 
 /**
- * Flush rewrites once when public event route definitions change.
+ * Flush rewrites once when the public location directory route is introduced.
  */
 function extrachill_events_maybe_flush_router_rewrites(): void {
-	$rewrite_version = '4';
+	$rewrite_version = '3';
 	if ( get_option( 'extrachill_events_router_rewrite_version' ) === $rewrite_version ) {
 		return;
 	}

@@ -14,6 +14,26 @@ final class CanonicalLocationsAbilityTest extends WP_UnitTestCase {
 		parent::setUp();
 
 		$this->original_blog_id = get_current_blog_id();
+		wp_cache_set(
+			$this->original_blog_id,
+			new WP_Site(
+				(object) array(
+					'blog_id'    => $this->original_blog_id,
+					'domain'     => 'example.org',
+					'path'       => '/',
+					'site_id'    => 1,
+					'registered' => current_time( 'mysql' ),
+					'last_updated' => current_time( 'mysql' ),
+					'public'     => 1,
+					'archived'   => 0,
+					'mature'     => 0,
+					'spam'       => 0,
+					'deleted'    => 0,
+					'lang_id'    => 0,
+				)
+			),
+			'sites'
+		);
 		register_taxonomy( 'location', 'post', array( 'public' => true ) );
 		add_filter( 'extrachill_events_canonical_blog_id', array( $this, 'canonical_blog_id' ) );
 

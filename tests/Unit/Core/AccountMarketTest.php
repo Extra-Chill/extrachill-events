@@ -299,6 +299,27 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
  * Verifies the account preference integration and its precedence gates.
  */
 final class AccountMarketTest extends TestCase {
+	private function term( int $term_id, string $name, string $slug ): WP_Term {
+		$constructor = new ReflectionMethod( WP_Term::class, '__construct' );
+		if ( 1 === $constructor->getNumberOfParameters() ) {
+			return new WP_Term(
+				(object) array(
+					'term_id'          => $term_id,
+					'name'             => $name,
+					'slug'             => $slug,
+					'term_group'       => 0,
+					'term_taxonomy_id' => $term_id,
+					'taxonomy'         => 'location',
+					'description'      => '',
+					'parent'           => 0,
+					'count'            => 0,
+					'filter'           => 'raw',
+				)
+			);
+		}
+
+		return new WP_Term( $term_id, $name, $slug );
+	}
 	/**
 	 */
 	public function test_resolves_coordinates_from_user_ability(): void {
@@ -720,7 +741,7 @@ final class AccountMarketTest extends TestCase {
 	 */
 	public function test_archive_cta_only_renders_for_selectable_city(): void {
 		$GLOBALS['test_is_tax']         = true;
-		$GLOBALS['test_queried_term']   = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_queried_term']   = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors'] = array( 22 );
 
 		ob_start();
@@ -741,7 +762,7 @@ final class AccountMarketTest extends TestCase {
 	public function test_archive_cta_shows_save_form_or_current_confirmation(): void {
 		$GLOBALS['test_is_tax']            = true;
 		$GLOBALS['test_is_user_logged_in'] = true;
-		$GLOBALS['test_queried_term']      = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors']    = array( 22, 1 );
 
 		ob_start();
@@ -757,7 +778,7 @@ final class AccountMarketTest extends TestCase {
 	public function test_archive_cta_confirms_current_scene_without_save_form(): void {
 		$GLOBALS['test_is_tax']                 = true;
 		$GLOBALS['test_is_user_logged_in']      = true;
-		$GLOBALS['test_queried_term']           = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_queried_term']           = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors']         = array( 22, 1 );
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
@@ -780,7 +801,7 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_archive_update_requires_login_and_nonce_and_uses_settings_ability(): void {
-		$term                                 = new WP_Term( 1618, 'Charleston', 'charleston' );
+		$term                                 = $this->term( 1618, 'Charleston', 'charleston' );
 		$calls                                = new ArrayObject();
 		$GLOBALS['test_update_scene_ability'] = new class( $calls ) {
 			private ArrayObject $calls;

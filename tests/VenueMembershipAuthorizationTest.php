@@ -397,6 +397,10 @@ final class VenueMembershipWpdb {
 		return $this->wordpress_wpdb ? $this->wordpress_wpdb->suppress_errors( $suppress ) : false;
 	}
 
+	public function get_blog_prefix( $blog_id = null ) {
+		return $this->wordpress_wpdb ? $this->wordpress_wpdb->get_blog_prefix( $blog_id ) : $this->prefix;
+	}
+
 	public function prepare( $query, ...$args ) {
 		if ( 1 === count( $args ) && is_array( $args[0] ) ) {
 			$args = $args[0];

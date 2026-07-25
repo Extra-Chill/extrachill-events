@@ -64,7 +64,7 @@ jobs:
       - name: Run Homeboy ${{ matrix.command }}
         env:
           HOMEBOY_SETTINGS_JSON: >-
-            {"database_type":"mysql","validation_dependencies":[{"type":"local","path":"${{ github.workspace }}/.ci/data-machine","plugin_slug":"data-machine","activate":true},{"type":"local","path":"${{ github.workspace }}/.ci/data-machine-events","plugin_slug":"data-machine-events","activate":true}],"wp_codebox_multisite":true,"wp_codebox_phpunit_bootstrap_mode":"managed"}
+            {"database_type":"mysql","validation_dependencies":["${{ github.workspace }}/.ci/data-machine","${{ github.workspace }}/.ci/data-machine-events"],"wp_codebox_multisite":true,"wp_codebox_phpunit_bootstrap_mode":"managed"}
           HOMEBOY_WORDPRESS_MULTISITE: '1'
         uses: Extra-Chill/homeboy-action@v2
         with:

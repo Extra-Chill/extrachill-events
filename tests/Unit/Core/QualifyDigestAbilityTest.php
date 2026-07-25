@@ -30,12 +30,17 @@ class QualifyDigestAbilityTest extends TestCase {
 		$this->original_timezone = function_exists( 'get_option' ) ? (string) get_option( 'timezone_string', '' ) : '';
 		if ( function_exists( 'update_option' ) ) {
 			update_option( 'timezone_string', 'America/New_York' );
-			wp_timezone();
 		}
+		add_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
+	}
+
+	public function filter_timezone_string(): string {
+		return 'America/New_York';
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
+		remove_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
 		if ( function_exists( 'update_option' ) ) {
 			update_option( 'timezone_string', $this->original_timezone );
 		}

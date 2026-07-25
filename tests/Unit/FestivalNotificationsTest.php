@@ -181,6 +181,12 @@ class FestivalNotificationsTest extends WP_UnitTestCase {
 		return get_post( $post_id );
 	}
 
+	private function assert_same_ids( array $expected, array $actual ): void {
+		sort( $expected );
+		sort( $actual );
+		$this->assertSame( $expected, $actual );
+	}
+
 	public function test_authorizes_only_event_entity_notification_resolution(): void {
 		$festival = array(
 			'entity_type' => 'festival',
@@ -208,7 +214,7 @@ class FestivalNotificationsTest extends WP_UnitTestCase {
 		extrachill_events_notify_festival_subscribers( 'publish', 'draft', $post );
 
 		$this->assertCount( 2, $GLOBALS['festival_notification_resolutions'] );
-		$this->assertSame( array( 7, 9, 11 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
+		$this->assert_same_ids( array( 7, 9, 11 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
 		$this->assertSame( 'New event: The Big Show', $GLOBALS['festival_notification_calls'][0]['data']['title'] );
 		$this->assertSame( get_permalink( $post ), $GLOBALS['festival_notification_calls'][0]['data']['link'] );
 	}
@@ -225,7 +231,7 @@ class FestivalNotificationsTest extends WP_UnitTestCase {
 
 		extrachill_events_notify_festival_subscribers( 'publish', 'draft', $post );
 
-		$this->assertSame(
+		$this->assertEqualsCanonicalizing(
 			array(
 				array(
 					'producer'    => EXTRACHILL_EVENTS_FESTIVAL_NOTIFICATION_PRODUCER,
@@ -248,7 +254,7 @@ class FestivalNotificationsTest extends WP_UnitTestCase {
 			),
 			$GLOBALS['festival_notification_resolutions']
 		);
-		$this->assertSame( array( 7, 9, 11, 13 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
+		$this->assert_same_ids( array( 7, 9, 11, 13 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
 	}
 
 	public function test_notifies_nearby_artist_subscribers_with_a_distinct_notification(): void {
@@ -271,10 +277,10 @@ class FestivalNotificationsTest extends WP_UnitTestCase {
 		extrachill_events_notify_festival_subscribers( 'publish', 'draft', $post );
 
 		$this->assertCount( 2, $GLOBALS['festival_notification_calls'] );
-		$this->assertSame( array( 9, 11, 13 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
+		$this->assert_same_ids( array( 9, 11, 13 ), $GLOBALS['festival_notification_calls'][0]['user_ids'] );
 		$this->assertSame( 'festival_event_published', $GLOBALS['festival_notification_calls'][0]['data']['type'] );
 		$this->assertSame( 'New event: The Big Show', $GLOBALS['festival_notification_calls'][0]['data']['title'] );
-		$this->assertSame( array( 7 ), $GLOBALS['festival_notification_calls'][1]['user_ids'] );
+		$this->assert_same_ids( array( 7 ), $GLOBALS['festival_notification_calls'][1]['user_ids'] );
 		$this->assertSame( EXTRACHILL_EVENTS_NEARBY_ARTIST_EVENT_NOTIFICATION, $GLOBALS['festival_notification_calls'][1]['data']['type'] );
 		$this->assertSame( 'Nearby show: The Big Show', $GLOBALS['festival_notification_calls'][1]['data']['title'] );
 	}

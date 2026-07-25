@@ -43,11 +43,17 @@ class FlowOpsResumeTest extends TestCase {
 			$GLOBALS['ec_test_log_entries'][] = compact( 'level', 'message', 'context' );
 		};
 		add_action( 'datamachine_log', $this->log_callback, 10, 3 );
+		add_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
+	}
+
+	public function filter_timezone_string(): string {
+		return 'UTC';
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
 		remove_action( 'datamachine_log', $this->log_callback, 10 );
+		remove_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
 		unset( $GLOBALS['ec_test_log_entries'] );
 		parent::tearDown();
 	}

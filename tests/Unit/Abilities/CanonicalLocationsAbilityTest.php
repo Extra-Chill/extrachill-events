@@ -85,7 +85,7 @@ final class CanonicalLocationsAbilityTest extends WP_UnitTestCase {
 		$this->assertSame( 'charleston-sc', $result['location']['slug'] );
 		$this->assertSame( 32.7765, $result['location']['coordinates']['lat'] );
 		$this->assertSame( 'USA', $result['location']['hierarchy']['region'] );
-		$this->assertStringContainsString( '/location/charleston-sc/', $result['location']['archive_url'] );
+		$this->assertSame( get_term_link( get_term_by( 'slug', 'charleston-sc', 'location' ) ), $result['location']['archive_url'] );
 		$this->assertSame( $this->original_blog_id, get_current_blog_id() );
 	}
 

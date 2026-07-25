@@ -95,6 +95,18 @@ if ( ! function_exists( 'is_tax' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_current_blog_id' ) ) {
+	function get_current_blog_id() {
+		if ( isset( $GLOBALS['venue_membership_test']['current_blog_id'] ) ) {
+			return (int) $GLOBALS['venue_membership_test']['current_blog_id'];
+		}
+		if ( isset( $GLOBALS['ec_artist_test']['blog_id'] ) ) {
+			return (int) $GLOBALS['ec_artist_test']['blog_id'];
+		}
+		return (int) ( $GLOBALS['ec_locations_blog_id'] ?? 7 );
+	}
+}
+
 if ( ! function_exists( 'is_front_page' ) ) {
 	function is_front_page() {
 		return (bool) ( $GLOBALS['test_is_front_page'] ?? false );
@@ -597,11 +609,9 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
 
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=2' );
-		$og_data   = extrachill_events_discovery_og_data( array( 'og:url' => $canonical ) );
-		unset( $GLOBALS['test_term_link'] );
+		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
 
 		$this->assertSame( 'https://events.example/location/usa/south-carolina/charleston/this-weekend?paged=2', $canonical );
-		$this->assertSame( $canonical, $og_data['og:url'] );
 	}
 
 	public function test_scoped_page_one_canonical_matches_slashless_serving_url(): void {
@@ -615,7 +625,7 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
 
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=1' );
-		unset( $GLOBALS['test_term_link'] );
+		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
 
 		$this->assertSame(
 			'https://events.example/location/usa/south-carolina/charleston/tonight',

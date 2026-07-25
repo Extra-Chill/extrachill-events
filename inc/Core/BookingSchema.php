@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '8';
+	public const SCHEMA_VERSION = '9';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -44,6 +44,12 @@ class BookingSchema {
 	public static function attachments_table(): string {
 		global $wpdb;
 		return $wpdb->prefix . 'ec_booking_attachments';
+	}
+
+	/** Get the private attachment delivery correlation table for the current site. */
+	public static function attachment_deliveries_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_attachment_deliveries';
 	}
 
 	/** Get the venue membership table for the current site. */
@@ -84,6 +90,7 @@ class BookingSchema {
 		$activity            = self::activity_table();
 		$communication_state = self::communication_state_table();
 		$attachments         = self::attachments_table();
+		$deliveries          = self::attachment_deliveries_table();
 		$members             = self::memberships_table();
 		$claims              = self::claims_table();
 		$invites             = self::invitations_table();
@@ -201,6 +208,27 @@ class BookingSchema {
 			KEY artist_term_purpose (artist_term_id, purpose),
 			KEY artist_profile_purpose (artist_profile_id, purpose),
 			KEY state_retired (state, retired_at)
+		) ENGINE=InnoDB {$charset};";
+
+		$deliveries_sql = "CREATE TABLE {$deliveries} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			correlation_id CHAR(36) NOT NULL,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			attachment_id BIGINT UNSIGNED NOT NULL,
+			actor_id BIGINT UNSIGNED NOT NULL,
+			state VARCHAR(16) NOT NULL DEFAULT 'issued',
+			outcome VARCHAR(16) NULL,
+			bytes_sent BIGINT UNSIGNED NULL,
+			issued_at DATETIME NOT NULL,
+			consumed_at DATETIME NULL,
+			terminal_at DATETIME NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY correlation_id (correlation_id),
+			KEY booking_issued (booking_id, issued_at, id),
+			KEY attachment_actor (attachment_id, actor_id),
+			KEY state_updated (state, updated_at),
+			KEY terminal_retention (state, terminal_at)
 		) ENGINE=InnoDB {$charset};";
 
 		$members_sql = "CREATE TABLE {$members} (
@@ -324,6 +352,8 @@ class BookingSchema {
 		$communication_state_error = (string) $wpdb->last_error;
 		dbDelta( $attachments_sql );
 		$attachments_error = (string) $wpdb->last_error;
+		dbDelta( $deliveries_sql );
+		$deliveries_error = (string) $wpdb->last_error;
 		dbDelta( $members_sql );
 		$members_error = (string) $wpdb->last_error;
 		dbDelta( $claims_sql );
@@ -334,7 +364,7 @@ class BookingSchema {
 		$audit_error = (string) $wpdb->last_error;
 		dbDelta( $holds_sql );
 		$holds_error = (string) $wpdb->last_error;
-		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $attachments_error || '' !== $members_error || '' !== $claims_error || '' !== $invites_error || '' !== $audit_error || '' !== $holds_error ) {
+		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $attachments_error || '' !== $deliveries_error || '' !== $members_error || '' !== $claims_error || '' !== $invites_error || '' !== $audit_error || '' !== $holds_error ) {
 			$error = new \WP_Error(
 				'booking_schema_dbdelta_failed',
 				__( 'The booking schema could not be reconciled.', 'extrachill-events' ),
@@ -343,6 +373,7 @@ class BookingSchema {
 					'activity_error'            => $activity_error,
 					'communication_state_error' => $communication_state_error,
 					'attachments_error'         => $attachments_error,
+					'deliveries_error'          => $deliveries_error,
 					'members_error'             => $members_error,
 					'claims_error'              => $claims_error,
 					'invites_error'             => $invites_error,
@@ -622,7 +653,7 @@ class BookingSchema {
 			);
 		};
 		return array(
-			self::bookings_table()            => array(
+			self::bookings_table()              => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -701,7 +732,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::activity_table()            => array(
+			self::activity_table()              => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -750,7 +781,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::communication_state_table() => array(
+			self::communication_state_table()   => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'intent_id'           => $required( 'bigint unsigned', false ),
@@ -773,7 +804,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::attachments_table()         => array(
+			self::attachments_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                     => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -834,7 +865,50 @@ class BookingSchema {
 					),
 				),
 			),
-			self::memberships_table()         => array(
+			self::attachment_deliveries_table() => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'id'             => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'correlation_id' => $required( 'char(36)', false ),
+					'booking_id'     => $required( 'bigint unsigned', false ),
+					'attachment_id'  => $required( 'bigint unsigned', false ),
+					'actor_id'       => $required( 'bigint unsigned', false ),
+					'state'          => $required( 'varchar(16)', false, array( 'default' => 'issued' ) ),
+					'outcome'        => $required( 'varchar(16)', true ),
+					'bytes_sent'     => $required( 'bigint unsigned', true ),
+					'issued_at'      => $required( 'datetime', false ),
+					'consumed_at'    => $required( 'datetime', true ),
+					'terminal_at'    => $required( 'datetime', true ),
+					'updated_at'     => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'            => array(
+						'unique'  => true,
+						'columns' => array( 'id' ),
+					),
+					'correlation_id'     => array(
+						'unique'  => true,
+						'columns' => array( 'correlation_id' ),
+					),
+					'booking_issued'     => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'issued_at', 'id' ),
+					),
+					'attachment_actor'   => array(
+						'unique'  => false,
+						'columns' => array( 'attachment_id', 'actor_id' ),
+					),
+					'state_updated'      => array(
+						'unique'  => false,
+						'columns' => array( 'state', 'updated_at' ),
+					),
+					'terminal_retention' => array(
+						'unique'  => false,
+						'columns' => array( 'state', 'terminal_at' ),
+					),
+				),
+			),
+			self::memberships_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -867,7 +941,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::claims_table()              => array(
+			self::claims_table()                => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                  => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -908,7 +982,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::invitations_table()         => array(
+			self::invitations_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -962,7 +1036,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::onboarding_audit_table()    => array(
+			self::onboarding_audit_table()      => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'              => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -994,7 +1068,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::holds_table()               => array(
+			self::holds_table()                 => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                   => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),

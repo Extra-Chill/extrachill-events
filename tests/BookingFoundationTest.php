@@ -109,6 +109,11 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertTrue( BookingSchema::health() );
 		$this->assertArrayHasKey( 'is_owner', $GLOBALS['wpdb']->schemas['wp_7_ec_venue_members']['columns'] );
 		$this->assertArrayNotHasKey( 'role', $GLOBALS['wpdb']->schemas['wp_7_ec_venue_members']['columns'] );
+		$deliveries = BookingSchema::attachment_deliveries_table();
+		$this->assertSame( 'wp_7_ec_booking_attachment_deliveries', $deliveries );
+		$this->assertSame( 'InnoDB', $GLOBALS['wpdb']->engines[ $deliveries ] );
+		$this->assertTrue( $GLOBALS['wpdb']->schemas[ $deliveries ]['indexes']['correlation_id']['unique'] );
+		$this->assertSame( array( 'state', 'terminal_at' ), $GLOBALS['wpdb']->schemas[ $deliveries ]['indexes']['terminal_retention']['columns'] );
 
 		$columns                   =& $GLOBALS['wpdb']->schemas['wp_7_ec_bookings']['columns'];
 		$columns['status']['Type'] = 'text';

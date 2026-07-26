@@ -555,6 +555,36 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_supported_surfaces_are_limited_to_primary_discovery_pages(): void {
+		if ( isset( $GLOBALS['wp_query'] ) && $GLOBALS['wp_query'] instanceof WP_Query ) {
+			$this->use_events_blog();
+			$original_query              = $GLOBALS['wp_query'];
+			$GLOBALS['wp_query']         = clone $original_query;
+			$GLOBALS['wp_query']->is_home = true;
+			$GLOBALS['wp_query']->is_page = false;
+			$this->assertTrue( extrachill_events_supports_account_market() );
+
+			$GLOBALS['wp_query']->is_home    = false;
+			$GLOBALS['wp_query']->query_vars = array( 'ec_events_router' => 'all' );
+			$this->assertTrue( extrachill_events_supports_account_market() );
+
+			$GLOBALS['wp_query']->query_vars    = array();
+			$GLOBALS['wp_query']->is_page       = true;
+			$GLOBALS['wp_query']->queried_object = new WP_Post(
+				(object) array(
+					'ID'        => 77,
+					'post_name' => 'near-me',
+					'post_type' => 'page',
+				)
+			);
+			$this->assertTrue( extrachill_events_supports_account_market() );
+
+			$GLOBALS['wp_query']->is_page        = false;
+			$GLOBALS['wp_query']->queried_object = null;
+			$this->assertFalse( extrachill_events_supports_account_market() );
+			$GLOBALS['wp_query'] = $original_query;
+			return;
+		}
+
 		$GLOBALS['test_is_front_page'] = true;
 		$this->assertTrue( extrachill_events_supports_account_market() );
 

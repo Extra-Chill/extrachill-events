@@ -25,11 +25,10 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		add_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
 		$path        = wp_tempnam( 'booking-inquiry.txt' );
 		$event_log   = wp_tempnam( 'booking-inquiry-events.txt' );
-		$staging     = $path . '.staging';
-		$contending  = $path . '.contending';
-		$result_file = $path . '.result';
+		$stage_held  = $path . '.stage-held';
+		$release     = $path . '.release';
+		$winner_file = $path . '.winner';
 		file_put_contents( $path, 'concurrent inquiry' );
-		$this->provider->event_log = $event_log;
 		$input = array(
 			'idempotency_key' => 'mysql-concurrent-inquiry',
 			'venue_term_id'   => $this->venue_id,
@@ -45,54 +44,65 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 				),
 			),
 		);
-		$this->provider->stage_probe = function () use ( $staging, $contending ): void {
-			file_put_contents( $staging, 'ready', LOCK_EX );
-			$deadline = microtime( true ) + 5;
-			while ( ! file_exists( $contending ) && microtime( true ) < $deadline ) {
-				usleep( 10000 );
-			}
-			if ( ! file_exists( $contending ) ) {
-				throw new RuntimeException( 'The contender did not reach the staging barrier.' );
-			}
-			usleep( 250000 );
-		};
-		$bookings    = new BookingRepository();
-		$attachments = new BookingAttachmentRepository();
-		$service     = new BookingInquiryAdmissionService( new BookingLifecycle( $bookings ), $attachments, null, $this->provider, null, $bookings, new BookingActivityRepository() );
-
+		$this->provider->event_log = $event_log;
 		$pid = pcntl_fork();
-		$this->assertGreaterThanOrEqual( 0, $pid, 'The contender process could not be created.' );
+		$this->assertGreaterThanOrEqual( 0, $pid, 'The winner process could not be created.' );
 		if ( 0 === $pid ) {
 			$this->reconnect_wordpress_database();
-			$deadline = microtime( true ) + 10;
-			while ( ! file_exists( $staging ) && microtime( true ) < $deadline ) {
-				usleep( 10000 );
-			}
-			file_put_contents( $contending, 'ready', LOCK_EX );
-			$provider            = new BookingAttachmentMySQLProbeProvider();
-			$provider->event_log = $event_log;
-			$child_bookings      = new BookingRepository();
-			$child_service       = new BookingInquiryAdmissionService( new BookingLifecycle( $child_bookings ), new BookingAttachmentRepository(), null, $provider, null, $child_bookings, new BookingActivityRepository() );
-			$result              = $child_service->admit( $input );
+			$winner_provider              = new BookingAttachmentMySQLProbeProvider();
+			$winner_provider->event_log   = $event_log;
+			$winner_provider->stage_probe = static function () use ( $stage_held, $release ): void {
+				file_put_contents( $stage_held, 'ready', LOCK_EX );
+				$deadline = microtime( true ) + 20;
+				while ( ! file_exists( $release ) && microtime( true ) < $deadline ) {
+					usleep( 10000 );
+				}
+				if ( ! file_exists( $release ) ) {
+					throw new RuntimeException( 'The held winner was not released.' );
+				}
+			};
+			$winner_bookings = new BookingRepository();
+			$winner_service  = new BookingInquiryAdmissionService( new BookingLifecycle( $winner_bookings ), new BookingAttachmentRepository(), null, $winner_provider, null, $winner_bookings, new BookingActivityRepository() );
+			$result          = $winner_service->admit( $input );
 			file_put_contents(
-				$result_file,
+				$winner_file,
 				wp_json_encode( is_wp_error( $result ) ? array( 'error' => $result->get_error_code(), 'data' => $result->get_error_data() ) : array( 'receipt' => $result ) ),
 				LOCK_EX
 			);
 			exit( 0 );
 		}
 
-		$winner = $service->admit( $input );
+		$deadline = microtime( true ) + 5;
+		while ( ! file_exists( $stage_held ) && microtime( true ) < $deadline ) {
+			usleep( 10000 );
+		}
+		$this->assertFileExists( $stage_held, 'The winner never entered provider stage while holding the saga lock.' );
+		$bookings    = new BookingRepository();
+		$attachments = new BookingAttachmentRepository();
+		$service     = new BookingInquiryAdmissionService( new BookingLifecycle( $bookings ), $attachments, null, $this->provider, null, $bookings, new BookingActivityRepository() );
+		$contention  = $service->admit( $input );
+		$this->assertWPError( $contention );
+		$this->assertSame( 'booking_inquiry_processing', $contention->get_error_code() );
+		$this->assertSame(
+			array(
+				'status'      => 423,
+				'retryable'   => true,
+				'retry_after' => 1,
+			),
+			$contention->get_error_data()
+		);
+		$this->assertFileDoesNotExist( $winner_file, 'The winner completed before the lock-timeout contender returned.' );
+		file_put_contents( $release, 'continue', LOCK_EX );
 		$status = 0;
 		pcntl_waitpid( $pid, $status );
-		$child = json_decode( (string) file_get_contents( $result_file ), true );
-		$retry = $child['receipt'] ?? new WP_Error( (string) ( $child['error'] ?? 'missing_contender_receipt' ), '', $child['data'] ?? array() );
+		$winner_result = json_decode( (string) file_get_contents( $winner_file ), true );
+		$winner        = $winner_result['receipt'] ?? new WP_Error( (string) ( $winner_result['error'] ?? 'missing_winner_receipt' ), '', $winner_result['data'] ?? array() );
+		$retry         = $service->admit( $input );
 
 		$this->assertIsArray( $winner, is_wp_error( $winner ) ? $winner->get_error_code() : 'winner was not a receipt' );
 		$this->assertIsArray( $retry, is_wp_error( $retry ) ? $retry->get_error_code() : 'retry was not a receipt' );
-		$this->assertTrue( pcntl_wifexited( $status ) && 0 === pcntl_wexitstatus( $status ), 'The contender process did not exit cleanly.' );
+		$this->assertTrue( pcntl_wifexited( $status ) && 0 === pcntl_wexitstatus( $status ), 'The winner process did not exit cleanly.' );
 		$this->assertSame( $winner, $retry );
-		$this->assertSame( 1, $this->provider->stage_count );
 		$provider_events = file( $event_log, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES );
 		$this->assertSame( array( 'stage' ), $provider_events, 'The overlapping loser staged or retired winner bytes.' );
 		$this->assertSame( array(), $this->provider->retired );
@@ -102,11 +112,11 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$bookings_table} WHERE inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
 		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$attachments_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
 		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s AND a.kind = 'inquiry_submitted'", $input['idempotency_key'] ) ) );
-		unlink( $path );
-		unlink( $event_log );
-		unlink( $staging );
-		unlink( $contending );
-		unlink( $result_file );
+		foreach ( array( $path, $event_log, $stage_held, $release, $winner_file ) as $temporary_file ) {
+			if ( file_exists( $temporary_file ) ) {
+				unlink( $temporary_file );
+			}
+		}
 		remove_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
 	}
 }

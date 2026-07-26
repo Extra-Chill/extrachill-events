@@ -156,9 +156,10 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$venue          = self::factory()->term->create_and_get(
 			array(
 				'taxonomy' => 'venue',
-				'name'     => 'Integration Room',
+				'name'     => 'Integration Room ' . wp_generate_uuid4(),
 			)
 		);
+		$this->assertNotWPError( $venue );
 		$this->venue_id = (int) $venue->term_id;
 		$this->actor_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
 		get_user_by( 'id', $this->actor_id )->add_cap( VenueAuthorization::ACCESS_CAPABILITY );

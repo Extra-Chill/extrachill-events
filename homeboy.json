@@ -6,7 +6,6 @@
       "php": "8.3",
       "database_type": "mysql",
       "settings": {
-        "validation_dependencies": ["data-machine", "data-machine-events"],
         "wp_codebox_multisite": true,
         "wp_codebox_phpunit_bootstrap_mode": "managed"
       }

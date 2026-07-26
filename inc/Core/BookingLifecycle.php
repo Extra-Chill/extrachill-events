@@ -179,6 +179,24 @@ class BookingLifecycle {
 		return is_wp_error( $committed ) ? $committed : $this->bookings->get( $booking['id'], true );
 	}
 
+	/** Return a completed canonical inquiry after bounded lock contention. */
+	public function replay_completed_inquiry( array $data, ?int $actor_id = null, array $fingerprint_context = array() ) {
+		unset( $data['attachments'] );
+		unset( $data['space_key'], $data['performance_start_at'], $data['performance_end_at'], $data['production'], $data['deal'], $data['confirmed_deal'] );
+		$key      = (string) ( $data['idempotency_key'] ?? '' );
+		$venue_id = absint( $data['venue_term_id'] ?? 0 );
+		$hash     = $this->request_hash( $data, $actor_id, $fingerprint_context );
+		if ( is_wp_error( $hash ) ) {
+			return $hash;
+		}
+		$existing = $this->bookings->find_inquiry( $venue_id, $key );
+		if ( ! is_array( $existing ) ) {
+			return $existing;
+		}
+		$resolved = $this->resolve_retry( $existing, $hash );
+		return is_array( $resolved ) && 'admission_pending' !== $resolved['status'] ? $resolved : null;
+	}
+
 	/** Publish an admitted inquiry exactly once after every attachment succeeds. */
 	public function publish_inquiry( array $booking ) {
 		$started = $this->begin();

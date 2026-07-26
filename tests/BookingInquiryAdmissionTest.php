@@ -216,6 +216,32 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'inquiry_submitted' === $row['kind']; } ) );
 	}
 
+	/** A bounded lock loser replays a completed exact winner instead of failing. */
+	public function test_lock_timeout_rechecks_and_replays_completed_exact_winner(): void {
+		$input   = $this->input( array(), 'lock-timeout-replay' );
+		$service = $this->service();
+		$winner  = $service->admit( $input );
+
+		$GLOBALS['wpdb']->get_lock_result = 0;
+		$this->assertSame( $winner, $service->admit( $input ) );
+	}
+
+	/** An unfinished exact winner always produces explicit retry guidance. */
+	public function test_lock_timeout_for_pending_exact_winner_is_retryable(): void {
+		$input     = $this->input( array(), 'lock-timeout-pending' );
+		$lifecycle = new BookingLifecycle();
+		$reserved  = $lifecycle->reserve_inquiry( $input, null, array(), wp_generate_uuid4() );
+		$this->assertIsArray( $reserved );
+
+		$GLOBALS['wpdb']->get_lock_result = 0;
+		$error                            = $this->service()->admit( $input );
+
+		$this->assertSame( 'booking_inquiry_processing', $error->get_error_code() );
+		$this->assertSame( 423, $error->get_error_data()['status'] );
+		$this->assertTrue( $error->get_error_data()['retryable'] );
+		$this->assertSame( 1, $error->get_error_data()['retry_after'] );
+	}
+
 	/** Verify reconciliation cannot observe an inquiry while its bytes are staging. */
 	public function test_reconciliation_during_staging_sees_no_notification_source(): void {
 		$observed = null;

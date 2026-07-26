@@ -104,7 +104,17 @@ final class BookingInquiryAdmissionService {
 		}
 		$lock = $this->acquire_inquiry_lock( absint( $input['venue_term_id'] ?? 0 ), (string) ( $input['idempotency_key'] ?? '' ) );
 		if ( is_wp_error( $lock ) ) {
-			return $this->public_error( $lock );
+			$manifest = array_map(
+				static function ( array $file ): array {
+					return $file['manifest'];
+				},
+				$files
+			);
+			$replay   = $this->lifecycle->replay_completed_inquiry( $input, $actor_id, $manifest ? array( 'attachments' => $manifest ) : array() );
+			if ( is_wp_error( $replay ) ) {
+				return $this->public_error( $replay );
+			}
+			return is_array( $replay ) ? $this->receipt( $replay ) : $this->public_error( $lock );
 		}
 		$result   = $this->admit_locked( $input, $actor_id, $files );
 		$released = $this->release_inquiry_lock( $lock );
@@ -190,10 +200,15 @@ final class BookingInquiryAdmissionService {
 			return is_wp_error( $cleanup ) ? $this->public_error( $cleanup ) : $this->public_error( $published );
 		}
 
+		return $this->receipt( $published );
+	}
+
+	/** Build the stable public admission receipt. */
+	private function receipt( array $booking ): array {
 		return array(
-			'public_id'     => $published['public_id'],
-			'venue_term_id' => $published['venue_term_id'],
-			'submitted_at'  => $published['created_at'],
+			'public_id'     => $booking['public_id'],
+			'venue_term_id' => $booking['venue_term_id'],
+			'submitted_at'  => $booking['created_at'],
 		);
 	}
 
@@ -205,7 +220,15 @@ final class BookingInquiryAdmissionService {
 		}
 		$name     = self::inquiry_lock_name( $venue_id, $idempotency_key );
 		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, 10 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Serializes the cross-store inquiry saga.
-		return 1 === (int) $acquired ? $name : new \WP_Error( 'booking_inquiry_lock_unavailable', __( 'The inquiry is already being processed.', 'extrachill-events' ), array( 'status' => 409 ) );
+		return 1 === (int) $acquired ? $name : new \WP_Error(
+			'booking_inquiry_processing',
+			__( 'The inquiry is still being processed. Retry shortly.', 'extrachill-events' ),
+			array(
+				'status'      => 423,
+				'retryable'   => true,
+				'retry_after' => 1,
+			)
+		);
 	}
 
 	/** Return the stable complete-saga lock identity. */
@@ -408,6 +431,9 @@ final class BookingInquiryAdmissionService {
 	 */
 	private function public_error( \WP_Error $error ): \WP_Error {
 		$code = $error->get_error_code();
+		if ( 'booking_inquiry_processing' === $code ) {
+			return new \WP_Error( $code, $error->get_error_message(), (array) $error->get_error_data() );
+		}
 		if ( $this->is_uncertain( $error ) || in_array( $code, array( 'booking_transaction_commit_uncertain', 'booking_transaction_rollback_failed', 'booking_inquiry_attachment_reconciliation_required', 'booking_inquiry_attachment_cleanup_uncertain', 'booking_inquiry_compensation_uncertain' ), true ) ) {
 			return new \WP_Error(
 				'booking_inquiry_reconciliation_required',

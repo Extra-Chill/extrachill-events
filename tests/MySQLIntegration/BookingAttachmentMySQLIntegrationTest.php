@@ -285,9 +285,13 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			),
 		);
 		$blocked = false;
-		$lock    = BookingInquiryAdmissionService::inquiry_lock_name( $this->venue_id, $input['idempotency_key'] );
-		$this->provider->stage_probe = function () use ( $lock, &$blocked ): void {
-			$escaped = $this->contender->real_escape_string( $lock );
+		$this->provider->stage_probe = function () use ( &$blocked ): void {
+			$locks = $this->contender->query( "SELECT OBJECT_NAME FROM performance_schema.metadata_locks WHERE OBJECT_TYPE = 'USER LEVEL LOCK' AND LOCK_STATUS = 'GRANTED' AND OBJECT_NAME LIKE 'ec_booking_inquiry_%' LIMIT 1" );
+			$name  = $locks instanceof mysqli_result ? (string) ( $locks->fetch_row()[0] ?? '' ) : '';
+			if ( '' === $name ) {
+				return;
+			}
+			$escaped = $this->contender->real_escape_string( $name );
 			$result  = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
 			$blocked = $result instanceof mysqli_result && 0 === (int) $result->fetch_row()[0];
 		};

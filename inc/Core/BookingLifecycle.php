@@ -80,16 +80,18 @@ class BookingLifecycle {
 	 * Create a submitted inquiry and its receipt event exactly once.
 	 *
 	 * @param array    $data     Inquiry fields.
-	 * @param int|null $actor_id Authenticated submitter, when present.
+	 * @param int|null $actor_id            Authenticated submitter, when present.
+	 * @param array    $fingerprint_context Admission-only fingerprint context.
 	 */
-	public function create_inquiry( array $data, ?int $actor_id = null ) {
+	public function create_inquiry( array $data, ?int $actor_id = null, array $fingerprint_context = array() ) {
+		unset( $data['attachments'] );
 		unset( $data['space_key'], $data['performance_start_at'], $data['performance_end_at'], $data['production'], $data['deal'], $data['confirmed_deal'] );
 		$key = mb_substr( sanitize_text_field( (string) ( $data['idempotency_key'] ?? '' ) ), 0, 191 );
 		if ( '' === $key ) {
 			return new \WP_Error( 'booking_idempotency_key_required', __( 'Inquiry creation requires an idempotency key.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
 		$venue_id = absint( $data['venue_term_id'] ?? 0 );
-		$hash     = $this->request_hash( $data, $actor_id );
+		$hash     = $this->request_hash( $data, $actor_id, $fingerprint_context );
 		if ( is_wp_error( $hash ) ) {
 			return $hash;
 		}
@@ -581,15 +583,19 @@ class BookingLifecycle {
 	 * Create a deterministic actor-bound HMAC for public inquiry retries.
 	 *
 	 * @param array    $data     Inquiry request.
-	 * @param int|null $actor_id Authenticated actor.
+	 * @param int|null $actor_id            Authenticated actor.
+	 * @param array    $fingerprint_context Admission-only context.
 	 */
-	private function request_hash( array $data, ?int $actor_id ) {
+	private function request_hash( array $data, ?int $actor_id, array $fingerprint_context = array() ) {
 		unset( $data['idempotency_key'] );
 		$payload = array(
 			'actor_id' => $actor_id,
 			'request'  => $this->canonicalize( $data ),
 		);
-		$json    = wp_json_encode( $payload );
+		if ( $fingerprint_context ) {
+			$payload['context'] = $this->canonicalize( $fingerprint_context );
+		}
+		$json = wp_json_encode( $payload );
 		return false === $json
 			? new \WP_Error( 'booking_request_hash_failed', __( 'The booking request could not be fingerprinted.', 'extrachill-events' ) )
 			: hash_hmac( 'sha256', $json, wp_salt( 'auth' ) );

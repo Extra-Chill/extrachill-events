@@ -72,6 +72,28 @@ class BookingAttachmentService {
 	 * @param array $input Attachment input.
 	 */
 	public function attach( array $input ) {
+		return $this->attach_with_authorization( $input, false );
+	}
+
+	/**
+	 * Attach bytes admitted by the hidden inquiry boundary.
+	 *
+	 * Attribution remains exact, while venue-operator authorization is not
+	 * required from a public inquiry submitter.
+	 *
+	 * @param array $input Attachment input.
+	 */
+	public function attach_admitted( array $input ) {
+		return $this->attach_with_authorization( $input, true );
+	}
+
+	/**
+	 * Run attachment admission with operator or trusted-inquiry authorization.
+	 *
+	 * @param array $input             Attachment input.
+	 * @param bool  $trusted_admission Whether the hidden inquiry boundary admitted it.
+	 */
+	private function attach_with_authorization( array $input, bool $trusted_admission ) {
 		if ( $this->connection_is_quarantined() ) {
 			return $this->connection_quarantined_error();
 		}
@@ -87,18 +109,19 @@ class BookingAttachmentService {
 			return $normalized;
 		}
 
-		$claim_key = $this->claim_key( $booking['id'], $normalized['idempotency_key'] );
-		$claimed   = false;
-		$result    = $this->authorized_reference_transaction(
+		$claim_key           = $this->claim_key( $booking['id'], $normalized['idempotency_key'] );
+		$claimed             = false;
+		$authorization_actor = $trusted_admission ? null : $normalized['uploader_user_id'];
+		$result              = $this->authorized_reference_transaction(
 			$booking,
-			$normalized['uploader_user_id'],
+			$authorization_actor,
 			$normalized['storage_reference'],
 			function () use ( $booking, $normalized, $claim_key, &$claimed ) {
 				return $this->attach_locked( $booking, $normalized, $claim_key, $claimed );
 			}
 		);
 		return is_wp_error( $result ) && $claimed
-			? $this->compensate_claim( $booking, $normalized['uploader_user_id'], $normalized['storage_reference'], $claim_key, $result )
+			? $this->compensate_claim( $booking, $authorization_actor, $normalized['storage_reference'], $claim_key, $result )
 			: $result;
 	}
 

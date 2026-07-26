@@ -9,11 +9,16 @@ on:
       - composer.lock
       - inc/Core/BookingAttachmentService.php
       - inc/Core/BookingAttachmentRepository.php
+      - inc/Core/BookingAttachmentPolicy.php
+      - inc/Core/BookingInquiryAdmissionService.php
+      - inc/Core/BookingLifecycle.php
       - inc/Core/BookingRepository.php
       - inc/Core/BookingSchema.php
       - inc/Core/VenueAuthorization.php
       - inc/Core/VenueMembershipRepository.php
       - phpunit-booking-mysql.xml.dist
+      - inc/Abilities/VenueBookingAbilities.php
+      - tests/BookingInquiryAdmissionTest.php
       - tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php
       - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
 

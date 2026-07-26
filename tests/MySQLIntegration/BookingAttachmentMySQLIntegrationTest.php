@@ -304,9 +304,12 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertTrue( $blocked, 'A second MySQL session acquired the deterministic inquiry lock during staging.' );
 		$this->assertSame( $winner, $retry );
 		$this->assertSame( 1, $this->provider->stage_count );
-		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ) );
-		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::attachments_table() ) );
-		$this->assertSame( 1, (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . BookingSchema::activity_table() . " WHERE kind = 'inquiry_submitted'" ) );
+		$bookings_table    = BookingSchema::bookings_table();
+		$attachments_table = BookingSchema::attachments_table();
+		$activity_table    = BookingSchema::activity_table();
+		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$bookings_table} WHERE inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
+		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$attachments_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
+		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s AND a.kind = 'inquiry_submitted'", $input['idempotency_key'] ) ) );
 		unlink( $path );
 		remove_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
 	}

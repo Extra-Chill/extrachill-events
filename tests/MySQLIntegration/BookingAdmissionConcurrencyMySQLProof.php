@@ -3,6 +3,14 @@
 
 require_once __DIR__ . '/BookingAttachmentMySQLIntegrationTest.php';
 
+use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingAttachmentRepository;
+use ExtraChillEvents\Core\BookingInquiryAdmissionService;
+use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingRepository;
+use ExtraChillEvents\Core\BookingSchema;
+use ExtraChillEvents\Core\VenueBookingConfig;
+
 /** Prove overlapping application processes converge on one complete winner. */
 final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
 	/** Prove the loser replays the completed exact winner without duplicate effects. */

@@ -319,6 +319,8 @@ final class AccountMarketTest extends TestCase {
 	private $original_current_user;
 	private $original_wp_query;
 	private $original_blog_id;
+	private $ancestor_filter;
+	private $term_link_filter;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -349,11 +351,25 @@ final class AccountMarketTest extends TestCase {
 		$this->original_blog_id      = $GLOBALS['blog_id'] ?? null;
 		if ( class_exists( 'WP_Abilities_Registry' ) ) {
 			$this->register_account_abilities();
+			if ( ! taxonomy_exists( 'location' ) ) {
+				register_taxonomy( 'location', 'post', array( 'hierarchical' => true ) );
+			}
+			$this->ancestor_filter = static function ( $ancestors, $object_id, $object_type ) {
+				unset( $object_id );
+				return 'location' === $object_type && isset( $GLOBALS['test_term_ancestors'] ) ? $GLOBALS['test_term_ancestors'] : $ancestors;
+			};
+			$this->term_link_filter = static function ( $url ) {
+				return $GLOBALS['test_term_link'] ?? $url;
+			};
+			add_filter( 'get_ancestors', $this->ancestor_filter, 10, 3 );
+			add_filter( 'term_link', $this->term_link_filter );
 		}
 	}
 
 	protected function tearDown(): void {
 		if ( class_exists( 'WP_Abilities_Registry' ) ) {
+			remove_filter( 'get_ancestors', $this->ancestor_filter, 10 );
+			remove_filter( 'term_link', $this->term_link_filter );
 			foreach ( array( 'extrachill/get-user-settings', 'extrachill/update-user-settings' ) as $ability ) {
 				if ( wp_has_ability( $ability ) ) {
 					wp_unregister_ability( $ability );
@@ -464,6 +480,17 @@ final class AccountMarketTest extends TestCase {
 			$GLOBALS['wp_query']             = clone $GLOBALS['wp_query'];
 			$GLOBALS['wp_query']->is_home    = false;
 			$GLOBALS['wp_query']->query_vars = array( 'ec_events_router' => 'all' );
+		}
+	}
+
+	private function use_archive_query( WP_Term $term ): void {
+		$this->use_events_blog();
+		if ( isset( $GLOBALS['wp_query'] ) && $GLOBALS['wp_query'] instanceof WP_Query ) {
+			$GLOBALS['wp_query']                    = clone $GLOBALS['wp_query'];
+			$GLOBALS['wp_query']->is_home           = false;
+			$GLOBALS['wp_query']->is_tax            = true;
+			$GLOBALS['wp_query']->queried_object    = $term;
+			$GLOBALS['wp_query']->queried_object_id = $term->term_id;
 		}
 	}
 	private function use_events_blog(): void {
@@ -977,7 +1004,7 @@ final class AccountMarketTest extends TestCase {
 					'local_scene' => array(
 						'slug'      => 'charleston',
 						'term_id'   => 1618,
-						'hierarchy' => array( 'label' => '<script>Charleston</script>' ),
+						'hierarchy' => array( 'label' => '<b>Charleston</b>' ),
 					),
 				);
 			}
@@ -1077,6 +1104,7 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_is_tax']         = true;
 		$GLOBALS['test_queried_term']   = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors'] = array( 22 );
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
 
 		ob_start();
 		extrachill_events_render_archive_scene_cta();
@@ -1099,6 +1127,7 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_is_user_logged_in'] = true;
 		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors']    = array( 22, 1 );
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
 
 		ob_start();
 		extrachill_events_render_archive_scene_cta();
@@ -1116,6 +1145,7 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_queried_term']           = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_ancestors']         = array( 22, 1 );
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
 				return array(
@@ -1138,6 +1168,7 @@ final class AccountMarketTest extends TestCase {
 	 */
 	public function test_archive_update_requires_login_and_nonce_and_uses_settings_ability(): void {
 		$term                                 = $this->term( 1618, 'Charleston', 'charleston' );
+		$valid_nonce                          = class_exists( 'WP_Abilities_Registry' ) ? wp_create_nonce( 'extrachill_events_save_scene_' . $term->term_id ) : 'nonce-extrachill_events_save_scene_1618';
 		$calls                                = new ArrayObject();
 		$GLOBALS['test_update_scene_ability'] = new class( $calls ) {
 			private ArrayObject $calls;
@@ -1150,11 +1181,12 @@ final class AccountMarketTest extends TestCase {
 			}
 		};
 
-		$this->assertFalse( extrachill_events_update_archive_scene( $term, 'nonce-extrachill_events_save_scene_1618' ) );
+		$this->assertFalse( extrachill_events_update_archive_scene( $term, $valid_nonce ) );
 		$this->use_logged_in_user();
 		$GLOBALS['test_is_user_logged_in'] = true;
 		$this->assertFalse( extrachill_events_update_archive_scene( $term, 'wrong' ) );
-		$this->assertTrue( extrachill_events_update_archive_scene( $term, 'nonce-extrachill_events_save_scene_1618' ) );
+		$valid_nonce = class_exists( 'WP_Abilities_Registry' ) ? wp_create_nonce( 'extrachill_events_save_scene_' . $term->term_id ) : $valid_nonce;
+		$this->assertTrue( extrachill_events_update_archive_scene( $term, $valid_nonce ) );
 		$this->assertSame( array( array( 'local_scene' => 'charleston' ) ), $calls->getArrayCopy() );
 	}
 }

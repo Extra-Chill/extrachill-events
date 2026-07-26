@@ -315,6 +315,35 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
  * Verifies the account preference integration and its precedence gates.
  */
 final class AccountMarketTest extends TestCase {
+	private function use_events_blog(): void {
+		if ( function_exists( 'wp_get_ability' ) ) {
+			$GLOBALS['blog_id'] = 7;
+		}
+	}
+
+	private function all_events_pagination_rule(): array {
+		$this->use_events_blog();
+		if ( isset( $GLOBALS['wp_rewrite'] ) && $GLOBALS['wp_rewrite'] instanceof WP_Rewrite ) {
+			$GLOBALS['wp_rewrite']->extra_rules_top = array();
+			extrachill_events_router_rewrite_rules();
+			$query = $GLOBALS['wp_rewrite']->extra_rules_top['^all/page/([0-9]{1,})/?$'] ?? null;
+			return null === $query ? array() : array(
+				'regex' => '^all/page/([0-9]{1,})/?$',
+				'query' => $query,
+				'after' => 'top',
+			);
+		}
+
+		$GLOBALS['test_rewrite_rules'] = array();
+		extrachill_events_router_rewrite_rules();
+		foreach ( $GLOBALS['test_rewrite_rules'] as $rule ) {
+			if ( '^all/page/([0-9]{1,})/?$' === $rule['regex'] ) {
+				return $rule;
+			}
+		}
+		return array();
+	}
+
 	private function term( int $term_id, string $name, string $slug ): WP_Term {
 		$constructor = new ReflectionMethod( WP_Term::class, '__construct' );
 		if ( 1 === $constructor->getNumberOfParameters() ) {
@@ -574,36 +603,20 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_all_events_pagination_rewrite_routes_upcoming_page_two(): void {
-		$GLOBALS['test_rewrite_rules'] = array();
-
-		extrachill_events_router_rewrite_rules();
-
-		$this->assertContains(
+		$this->assertSame(
 			array(
 				'regex' => '^all/page/([0-9]{1,})/?$',
 				'query' => 'index.php?ec_events_router=all&paged=$matches[1]',
 				'after' => 'top',
 			),
-			$GLOBALS['test_rewrite_rules']
+			$this->all_events_pagination_rule()
 		);
 	}
 
 	public function test_all_events_pagination_rewrite_keeps_past_requests_on_router_page(): void {
-		$GLOBALS['test_rewrite_rules'] = array();
-
-		extrachill_events_router_rewrite_rules();
-
-		$pagination_rule = array_values(
-			array_filter(
-				$GLOBALS['test_rewrite_rules'],
-				static function ( array $rule ): bool {
-					return '^all/page/([0-9]{1,})/?$' === $rule['regex'];
-				}
-			)
-		);
-
-		$this->assertCount( 1, $pagination_rule );
-		$this->assertSame( 'index.php?ec_events_router=all&paged=$matches[1]', $pagination_rule[0]['query'] );
+		$pagination_rule = $this->all_events_pagination_rule();
+		$this->assertNotEmpty( $pagination_rule );
+		$this->assertSame( 'index.php?ec_events_router=all&paged=$matches[1]', $pagination_rule['query'] );
 		$this->assertSame( 'past=1', (string) wp_parse_url( 'https://events.example/all/page/2/?past=1', PHP_URL_QUERY ) );
 	}
 
@@ -655,6 +668,7 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_router_query_flags_use_the_query_being_parsed(): void {
+		$this->use_events_blog();
 		$query = new class( array( 'ec_events_router' => 'all' ) ) {
 			public bool $is_404     = true;
 			public bool $is_archive = false;
@@ -682,14 +696,28 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_router_pages_preempt_core_404_handling(): void {
+		$this->use_events_blog();
 		$query = new class() {
 			public function get( $key, $default = '' ) {
 				return 'ec_events_location_index' === $key ? '1' : $default;
 			}
 		};
 
+		$status_code = null;
+		$capture     = static function ( $header, $code ) use ( &$status_code ) {
+			unset( $header );
+			$status_code = (int) $code;
+			return 'HTTP/1.1 200 OK';
+		};
+		if ( isset( $GLOBALS['wp_filter'] ) ) {
+			add_filter( 'status_header', $capture, 10, 2 );
+		}
+
 		$this->assertTrue( extrachill_events_router_pre_handle_404( false, $query ) );
-		$this->assertSame( 200, $GLOBALS['test_status_header'] );
+		$this->assertSame( 200, null !== $status_code ? $status_code : $GLOBALS['test_status_header'] );
+		if ( isset( $GLOBALS['wp_filter'] ) ) {
+			remove_filter( 'status_header', $capture, 10 );
+		}
 	}
 
 	public function test_unrelated_queries_preserve_core_404_handling(): void {

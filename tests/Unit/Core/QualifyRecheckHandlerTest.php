@@ -29,6 +29,7 @@ class QualifyRecheckHandlerTest extends TestCase {
 	private $original_wpdb;
 	private $original_log_hooks;
 	private $schedule_callback;
+	private $enqueue_callback;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -45,6 +46,8 @@ class QualifyRecheckHandlerTest extends TestCase {
 			return 12345;
 		};
 		add_filter( 'pre_as_schedule_single_action', $this->schedule_callback, 10, 5 );
+		$this->enqueue_callback = static fn() => 1;
+		add_filter( 'pre_as_enqueue_async_action', $this->enqueue_callback, 10, 1 );
 		$this->register_ability();
 	}
 
@@ -56,6 +59,7 @@ class QualifyRecheckHandlerTest extends TestCase {
 			wp_unregister_ability_category( 'extrachill-events-tests' );
 		}
 		remove_filter( 'pre_as_schedule_single_action', $this->schedule_callback, 10 );
+		remove_filter( 'pre_as_enqueue_async_action', $this->enqueue_callback, 10 );
 		if ( null === $this->original_log_hooks ) {
 			unset( $GLOBALS['wp_filter']['datamachine_log'] );
 		} else {

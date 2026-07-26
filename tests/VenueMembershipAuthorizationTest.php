@@ -847,6 +847,7 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
  */
 final class VenueMembershipAuthorizationTest extends TestCase {
 	private $original_wpdb;
+	private $switched_blog = false;
 
 	private function set_current_user( int $user_id ): void {
 		if ( function_exists( 'wp_set_current_user' ) ) {
@@ -855,6 +856,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	}
 
 	protected function setUp(): void {
+		if ( function_exists( 'get_current_blog_id' ) && function_exists( 'switch_to_blog' ) && 7 !== get_current_blog_id() ) {
+			switch_to_blog( 7 );
+			$this->switched_blog = true;
+		}
 		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
 		if ( $this->original_wpdb ) {
 			$user_emails = array(
@@ -1012,12 +1017,19 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 				return new WP_Error( 'unexpected_dme_update' );
 			},
 		);
+		if ( function_exists( 'update_option' ) ) {
+			update_option( BookingSchema::VERSION_OPTION, BookingSchema::SCHEMA_VERSION );
+		}
 		$GLOBALS['wpdb']                  = new VenueMembershipWpdb( $this->original_wpdb );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
 		$this->set_current_user( 0 );
+		if ( $this->switched_blog ) {
+			restore_current_blog();
+			$this->switched_blog = false;
+		}
 		parent::tearDown();
 	}
 

@@ -262,10 +262,10 @@ if ( ! class_exists( 'WP_Term' ) ) {
 		public int $term_id;
 		public string $name;
 		public string $slug;
-		public function __construct( int $term_id, string $name, string $slug ) {
-			$this->term_id = $term_id;
-			$this->name    = $name;
-			$this->slug    = $slug;
+		public function __construct( $term ) {
+			foreach ( get_object_vars( $term ) as $key => $value ) {
+				$this->$key = $value;
+			}
 		}
 	}
 }
@@ -871,6 +871,11 @@ final class AccountMarketTest extends TestCase {
 		);
 		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
+		$_GET                            = array(
+			'paged'      => '2',
+			'past'       => '1',
+			'utm_source' => 'newsletter',
+		);
 
 		$original_query = $this->use_discovery_query( $GLOBALS['test_queried_term'], 'this-weekend', 2 );
 		$term_link      = static fn() => $GLOBALS['test_term_link'];
@@ -883,6 +888,7 @@ final class AccountMarketTest extends TestCase {
 			$GLOBALS['wp_query'] = $original_query;
 		}
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
+		$_GET = array();
 
 		$this->assertSame( 'https://events.example/location/usa/south-carolina/charleston/this-weekend?paged=2', $canonical );
 	}
@@ -896,6 +902,10 @@ final class AccountMarketTest extends TestCase {
 		);
 		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
+		$_GET                            = array(
+			'paged'  => '1',
+			'fbclid' => 'tracking-value',
+		);
 
 		$original_query = $this->use_discovery_query( $GLOBALS['test_queried_term'], 'tonight', 1 );
 		$term_link      = static fn() => $GLOBALS['test_term_link'];
@@ -908,6 +918,7 @@ final class AccountMarketTest extends TestCase {
 			$GLOBALS['wp_query'] = $original_query;
 		}
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
+		$_GET = array();
 
 		$this->assertSame(
 			'https://events.example/location/usa/south-carolina/charleston/tonight',

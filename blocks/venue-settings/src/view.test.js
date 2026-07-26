@@ -24,12 +24,16 @@ jest.mock( '@extrachill/components', () => {
 		InlineStatus: Wrapper,
 		Panel: Wrapper,
 		PanelHeader: ( { title } ) => React.createElement( 'h2', null, title ),
-		ResponsiveTabs: ( { tabs, active, renderPanel } ) =>
+		ResponsiveTabs: ( { tabs, active, onChange, renderPanel } ) =>
 			React.createElement(
 				'div',
 				null,
 				tabs.map( ( tab ) =>
-					React.createElement( 'button', { key: tab.id }, tab.label )
+					React.createElement(
+						'button',
+						{ key: tab.id, onClick: () => onChange( tab.id ) },
+						tab.label
+					)
 				),
 				renderPanel( active )
 			),
@@ -123,6 +127,21 @@ async function renderApp( appContext ) {
 	} );
 	return { container, root };
 }
+
+const buttonByText = ( container, text ) =>
+	[ ...container.querySelectorAll( 'button' ) ].find(
+		( button ) => button.textContent === text
+	);
+
+const setInput = async ( input, value ) => {
+	await act( async () => {
+		Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype,
+			'value'
+		).set.call( input, value );
+		input.dispatchEvent( new Event( 'input', { bubbles: true } ) );
+	} );
+};
 
 describe( 'venue settings authorization-facing states', () => {
 	beforeAll( () => {
@@ -223,6 +242,115 @@ describe( 'venue settings authorization-facing states', () => {
 		await act( async () => root.unmount() );
 	} );
 
+	it( 'retrying profile preserves dirty booking settings', async () => {
+		let profileAttempts = 0;
+		let configAttempts = 0;
+		apiFetch.mockImplementation( ( request ) => {
+			const input = requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				profileAttempts += 1;
+				return profileAttempts === 1
+					? Promise.reject( { message: 'Profile unavailable.' } )
+					: Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				configAttempts += 1;
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp( context() );
+		await act( async () => buttonByText( container, 'Booking' ).click() );
+		await setInput(
+			container.querySelector( '#venue-ticket-provider' ),
+			'dirty-ticket-account'
+		);
+		await act( async () => buttonByText( container, 'Profile' ).click() );
+		await act( async () => {
+			buttonByText( container, 'Retry profile' ).click();
+			await Promise.resolve();
+		} );
+		await act( async () => buttonByText( container, 'Booking' ).click() );
+		expect(
+			container.querySelector( '#venue-ticket-provider' ).value
+		).toBe( 'dirty-ticket-account' );
+		expect( profileAttempts ).toBe( 2 );
+		expect( configAttempts ).toBe( 1 );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'retrying booking settings preserves a dirty profile', async () => {
+		let profileAttempts = 0;
+		let configAttempts = 0;
+		apiFetch.mockImplementation( ( request ) => {
+			const input = requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				profileAttempts += 1;
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				configAttempts += 1;
+				return configAttempts === 1
+					? Promise.reject( { message: 'Booking unavailable.' } )
+					: Promise.resolve( config( input.venue_term_id ) );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp( context() );
+		await setInput(
+			container.querySelector( '#venue-profile-name' ),
+			'Locally edited venue'
+		);
+		await act( async () => buttonByText( container, 'Booking' ).click() );
+		await act( async () => {
+			buttonByText( container, 'Retry booking settings' ).click();
+			await Promise.resolve();
+		} );
+		await act( async () => buttonByText( container, 'Profile' ).click() );
+		expect( container.querySelector( '#venue-profile-name' ).value ).toBe(
+			'Locally edited venue'
+		);
+		expect( profileAttempts ).toBe( 1 );
+		expect( configAttempts ).toBe( 2 );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'clears a stale claims error after a successful retry', async () => {
+		let attempts = 0;
+		apiFetch.mockImplementation( ( request ) => {
+			if ( request.path.includes( 'list-venue-claims' ) ) {
+				attempts += 1;
+				return attempts === 1
+					? Promise.reject( { message: 'Claims unavailable.' } )
+					: Promise.resolve( [
+							{
+								id: 8,
+								venue_term_id: 44,
+								claimant_user_id: 29,
+								status: 'pending',
+								version: 1,
+							},
+					  ] );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( {
+				user: { id: 1, name: 'Admin', is_admin: true },
+				can_access: false,
+				can_manage: true,
+			} )
+		);
+		expect( container.textContent ).toContain( 'Claims unavailable.' );
+		await act( async () => {
+			buttonByText( container, 'Retry' ).click();
+			await Promise.resolve();
+		} );
+		expect( container.textContent ).not.toContain( 'Claims unavailable.' );
+		expect( container.textContent ).toContain( 'Claimant user #29' );
+		await act( async () => root.unmount() );
+	} );
+
 	it( 'preserves dirty profile data and reports a stale-write conflict', async () => {
 		apiFetch.mockImplementation( ( request ) => {
 			const input = requestInput( request.path );
@@ -250,9 +378,7 @@ describe( 'venue settings authorization-facing states', () => {
 			).set.call( name, 'Locally edited venue' );
 			name.dispatchEvent( new Event( 'input', { bubbles: true } ) );
 		} );
-		const save = [ ...container.querySelectorAll( 'button' ) ].find(
-			( button ) => button.textContent === 'Save profile'
-		);
+		const save = buttonByText( container, 'Save profile' );
 		await act( async () => {
 			save.click();
 			await Promise.resolve();

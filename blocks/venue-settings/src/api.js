@@ -6,6 +6,7 @@ const METHODS = {
 	'extrachill/list-venue-memberships': 'GET',
 	'extrachill/list-venue-invitations': 'GET',
 	'extrachill/list-venue-claims': 'GET',
+	'extrachill/review-venue-claim': 'DELETE',
 	'extrachill/cancel-venue-invitation': 'DELETE',
 	'extrachill/cancel-venue-claim': 'DELETE',
 };

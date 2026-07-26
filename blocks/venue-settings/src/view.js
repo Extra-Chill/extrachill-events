@@ -1016,7 +1016,8 @@ export function VenueSettingsApp( { context } ) {
 	const [ configStatus, setConfigStatus ] = useState( null );
 	const [ savingProfile, setSavingProfile ] = useState( false );
 	const [ savingConfig, setSavingConfig ] = useState( false );
-	const requestId = useRef( 0 );
+	const profileRequestId = useRef( 0 );
+	const configRequestId = useRef( 0 );
 	const dirty =
 		Boolean(
 			profile &&
@@ -1060,6 +1061,7 @@ export function VenueSettingsApp( { context } ) {
 		}
 		try {
 			setClaims( await runAbility( 'extrachill/list-venue-claims' ) );
+			setLoadErrors( ( current ) => ( { ...current, claims: null } ) );
 		} catch ( error ) {
 			setLoadErrors( ( current ) => ( {
 				...current,
@@ -1067,42 +1069,62 @@ export function VenueSettingsApp( { context } ) {
 			} ) );
 		}
 	};
+	const loadProfile = async () => {
+		const currentRequest = ++profileRequestId.current;
+		setLoadErrors( ( current ) => ( { ...current, profile: null } ) );
+		try {
+			const result = await runAbility( 'extrachill/get-venue-profile', {
+				venue_term_id: selected.id,
+			} );
+			if ( currentRequest !== profileRequestId.current ) {
+				return;
+			}
+			setProfile( result );
+			setProfileBaseline( result );
+		} catch ( error ) {
+			if ( currentRequest !== profileRequestId.current ) {
+				return;
+			}
+			setLoadErrors( ( current ) => ( {
+				...current,
+				profile: errorDetails( error ).message,
+			} ) );
+		}
+	};
+	const loadConfig = async () => {
+		const currentRequest = ++configRequestId.current;
+		setLoadErrors( ( current ) => ( { ...current, config: null } ) );
+		try {
+			const result = await runAbility(
+				'extrachill/get-venue-booking-config',
+				{ venue_term_id: selected.id }
+			);
+			if ( currentRequest !== configRequestId.current ) {
+				return;
+			}
+			setConfigRevision( result.revision );
+			const editable = editableConfig( result );
+			setConfig( editable );
+			setConfigBaseline( editable );
+		} catch ( error ) {
+			if ( currentRequest !== configRequestId.current ) {
+				return;
+			}
+			setLoadErrors( ( current ) => ( {
+				...current,
+				config: errorDetails( error ).message,
+			} ) );
+		}
+	};
 	const loadVenue = async () => {
 		if ( ! selected || ! context.can_access ) {
 			return;
 		}
-		const currentRequest = ++requestId.current;
 		setLoading( true );
 		setLoadErrors( {} );
 		setProfile( null );
 		setConfig( null );
-		const [ profileResult, configResult ] = await Promise.allSettled( [
-			runAbility( 'extrachill/get-venue-profile', {
-				venue_term_id: selected.id,
-			} ),
-			runAbility( 'extrachill/get-venue-booking-config', {
-				venue_term_id: selected.id,
-			} ),
-		] );
-		if ( currentRequest !== requestId.current ) {
-			return;
-		}
-		const errors = {};
-		if ( profileResult.status === 'fulfilled' ) {
-			setProfile( profileResult.value );
-			setProfileBaseline( profileResult.value );
-		} else {
-			errors.profile = errorDetails( profileResult.reason ).message;
-		}
-		if ( configResult.status === 'fulfilled' ) {
-			setConfigRevision( configResult.value.revision );
-			const editable = editableConfig( configResult.value );
-			setConfig( editable );
-			setConfigBaseline( editable );
-		} else {
-			errors.config = errorDetails( configResult.reason ).message;
-		}
-		setLoadErrors( errors );
+		await Promise.all( [ loadProfile(), loadConfig() ] );
 		setLoading( false );
 		await Promise.all( [ loadTeam(), loadClaims() ] );
 	};
@@ -1228,7 +1250,7 @@ export function VenueSettingsApp( { context } ) {
 						<button
 							type="button"
 							className="button-2"
-							onClick={ loadVenue }
+							onClick={ loadProfile }
 						>
 							Retry profile
 						</button>
@@ -1258,7 +1280,7 @@ export function VenueSettingsApp( { context } ) {
 						<button
 							type="button"
 							className="button-2"
-							onClick={ loadVenue }
+							onClick={ loadConfig }
 						>
 							Retry booking settings
 						</button>

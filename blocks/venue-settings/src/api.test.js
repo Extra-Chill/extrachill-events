@@ -32,6 +32,24 @@ describe( 'venue settings ability transport', () => {
 		);
 	} );
 
+	it.each( [ 'approved', 'rejected' ] )(
+		'uses DELETE when a claim is %s',
+		async ( decision ) => {
+			const input = {
+				claim_id: 12,
+				decision,
+				expected_version: 3,
+			};
+			await runAbility( 'extrachill/review-venue-claim', input );
+			expect( apiFetch ).toHaveBeenCalledWith( {
+				method: 'DELETE',
+				path: expect.stringContaining(
+					encodeURIComponent( JSON.stringify( input ) )
+				),
+			} );
+		}
+	);
+
 	it( 'wraps mutation input in the WordPress ability request envelope', async () => {
 		const input = { venue_term_id: 44, expected_revision: 2, config: {} };
 		await runAbility( 'extrachill/update-venue-booking-config', input );

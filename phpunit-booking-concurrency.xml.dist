@@ -8,12 +8,7 @@
 	failOnWarning="true">
 	<testsuites>
 		<testsuite name="booking-admission-concurrency">
-			<file>tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php</file>
+			<file>tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLIntegrationTest.php</file>
 		</testsuite>
 	</testsuites>
-	<groups>
-		<include>
-			<group>host-concurrency</group>
-		</include>
-	</groups>
 </phpunit>

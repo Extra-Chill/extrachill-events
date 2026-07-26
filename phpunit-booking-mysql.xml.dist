@@ -10,9 +10,4 @@
 			<file>tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php</file>
 		</testsuite>
 	</testsuites>
-	<groups>
-		<exclude>
-			<group>host-concurrency</group>
-		</exclude>
-	</groups>
 </phpunit>

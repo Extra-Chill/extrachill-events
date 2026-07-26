@@ -21,6 +21,7 @@ on:
       - inc/Abilities/VenueBookingAbilities.php
       - tests/BookingInquiryAdmissionTest.php
       - tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php
+      - tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLIntegrationTest.php
       - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
       - tests/MySQLIntegration/host-wordpress-bootstrap.php
       - tests/MySQLIntegration/wp-tests-config.php
@@ -131,7 +132,7 @@ jobs:
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ github.workspace }}/vendor/yoast/phpunit-polyfills
         run: |
           set -euo pipefail
-          vendor/bin/phpunit -c phpunit-booking-concurrency.xml.dist | tee "$RUNNER_TEMP/booking-admission-concurrency.txt"
+          vendor/bin/phpunit -c phpunit-booking-concurrency.xml.dist --filter test_concurrent_exact_inquiry_retry_reuses_one_complete_winner | tee "$RUNNER_TEMP/booking-admission-concurrency.txt"
           grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/booking-admission-concurrency.txt"
           if grep -Eiq 'skip|no tests executed|OK, but' "$RUNNER_TEMP/booking-admission-concurrency.txt"; then
             exit 1

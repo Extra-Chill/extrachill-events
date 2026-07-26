@@ -160,6 +160,24 @@ class BookingRepository {
 		return is_array( $row ) ? $this->hydrate( $row ) : null;
 	}
 
+	/** Remove one exact failed inquiry during admission compensation. */
+	public function discard_inquiry( array $booking ) {
+		global $wpdb;
+		if ( empty( $booking['id'] ) || empty( $booking['inquiry_idempotency_key'] ) || 'submitted' !== ( $booking['status'] ?? '' ) || ! empty( $booking['event_id'] ) ) {
+			return new \WP_Error( 'booking_inquiry_compensation_invalid', __( 'Only an unconverted submitted inquiry can be compensated.', 'extrachill-events' ) );
+		}
+		$deleted = $wpdb->delete(
+			BookingSchema::bookings_table(),
+			array(
+				'id'                      => (int) $booking['id'],
+				'inquiry_idempotency_key' => (string) $booking['inquiry_idempotency_key'],
+				'status'                  => 'submitted',
+				'event_id'                => null,
+			)
+		); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact failed aggregate compensation.
+		return 1 === $deleted ? true : new \WP_Error( 'booking_inquiry_compensation_failed', __( 'The failed inquiry could not be removed safely.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+	}
+
 	/** Get a booking by numeric ID or UUID public reference. */
 	public function get( $identifier ) {
 		global $wpdb;

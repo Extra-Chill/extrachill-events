@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '9';
+	public const SCHEMA_VERSION = '10';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -216,6 +216,7 @@ class BookingSchema {
 			booking_id BIGINT UNSIGNED NOT NULL,
 			attachment_id BIGINT UNSIGNED NOT NULL,
 			actor_id BIGINT UNSIGNED NOT NULL,
+			expected_bytes BIGINT UNSIGNED NOT NULL,
 			state VARCHAR(16) NOT NULL DEFAULT 'issued',
 			outcome VARCHAR(16) NULL,
 			bytes_sent BIGINT UNSIGNED NULL,
@@ -873,6 +874,7 @@ class BookingSchema {
 					'booking_id'     => $required( 'bigint unsigned', false ),
 					'attachment_id'  => $required( 'bigint unsigned', false ),
 					'actor_id'       => $required( 'bigint unsigned', false ),
+					'expected_bytes' => $required( 'bigint unsigned', false ),
 					'state'          => $required( 'varchar(16)', false, array( 'default' => 'issued' ) ),
 					'outcome'        => $required( 'varchar(16)', true ),
 					'bytes_sent'     => $required( 'bigint unsigned', true ),

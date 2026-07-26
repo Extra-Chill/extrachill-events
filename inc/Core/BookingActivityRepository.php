@@ -425,6 +425,13 @@ class BookingActivityRepository {
 			: (int) $count;
 	}
 
+	/** Remove every side effect of one failed inquiry before compensation commits. */
+	public function discard_for_booking( int $booking_id ) {
+		global $wpdb;
+		$deleted = $wpdb->delete( BookingSchema::activity_table(), array( 'booking_id' => $booking_id ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Failed inquiry compensation only.
+		return false === $deleted ? new \WP_Error( 'booking_inquiry_activity_compensation_failed', __( 'Failed inquiry activity could not be removed.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) : true;
+	}
+
 	/** Hydrate a query result set or return its database failure. */
 	private function hydrate_rows( $rows, string $error_code ) {
 		global $wpdb;

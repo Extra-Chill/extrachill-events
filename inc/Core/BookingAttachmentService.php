@@ -676,7 +676,7 @@ class BookingAttachmentService {
 				if ( is_wp_error( $current ) || 'active' !== $current['state'] ) {
 					return is_wp_error( $current ) ? $current : new \WP_Error( 'booking_attachment_inactive', __( 'The attachment is no longer downloadable.', 'extrachill-events' ), array( 'status' => 410 ) );
 				}
-				$delivery = $this->deliveries->issue( $correlation_id, $booking['id'], $current['id'], $actor_id );
+				$delivery = $this->deliveries->issue( $correlation_id, $booking['id'], $current['id'], $actor_id, $current['byte_size'] );
 				if ( is_wp_error( $delivery ) ) {
 					return $delivery;
 				}
@@ -781,6 +781,9 @@ class BookingAttachmentService {
 		}
 		if ( $bytes_sent > $attachment['byte_size'] ) {
 			return new \WP_Error( 'booking_attachment_delivery_bytes_invalid', __( 'The attachment delivery byte count is invalid.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		if ( ( 'completed' === $outcome && $bytes_sent !== $attachment['byte_size'] ) || ( 'partial' === $outcome && $bytes_sent >= $attachment['byte_size'] ) ) {
+			return new \WP_Error( 'booking_attachment_delivery_bytes_incomplete', __( 'Completed delivery requires the full expected byte length.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		$booking = $this->booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
@@ -1318,7 +1321,7 @@ class BookingAttachmentService {
 	 * @param int    $booking_id     Booking ID.
 	 * @param string $idempotency_key Request idempotency key.
 	 */
-	private function claim_key( int $booking_id, string $idempotency_key ): string {
+	public function claim_key( int $booking_id, string $idempotency_key ): string {
 		return 'site:' . get_current_blog_id() . ':table:' . BookingSchema::attachments_table() . ':booking:' . $booking_id . ':request:' . hash( 'sha256', $idempotency_key );
 	}
 

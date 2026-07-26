@@ -128,22 +128,24 @@ final class BookingNotificationTest extends TestCase {
 		$this->assertSame( (string) $ignored['id'], $ignored_rows[0]['external_id'] );
 	}
 
-	/** Production reconciliation remains pending until both dependencies land. */
-	public function test_missing_destination_and_users_receipts_do_not_terminally_dedupe(): void {
+	/** Production reconciliation calls the landed Users receipt contract. */
+	public function test_production_users_receipt_payload_is_idempotent_and_complete(): void {
 		$booking = $this->booking();
 		$source  = $this->source( $booking );
 		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
 		$request = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$captured = array();
+		$GLOBALS['ec_artist_test']['users_receipt'] = static function ( array $recipients, array $payload ) use ( &$captured ): array {
+			$captured = compact( 'recipients', 'payload' );
+			return array( 'recipients' => array( 10 => array( 'status' => 'inserted', 'notification_id' => 100 ) ) );
+		};
+		$result = ( new BookingNotificationService( null, null, null, null, static function (): int { return 99; } ) )->reconcile( $request['id'] );
 
-		$result = ( new BookingNotificationService() )->reconcile( $request['id'] );
-
-		$this->assertSame( 'booking_notification_destination_unavailable', $result->get_error_code() );
-		$this->assertNull( ( new BookingActivityRepository() )->notification_terminal( $request['id'] ) );
-		$this->assertSame( 0, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
-		$resolved = array();
-		$result   = ( new BookingNotificationService( null, null, null, $this->destination( $resolved ), static function (): int { return 99; } ) )->reconcile( $request['id'] );
-		$this->assertSame( 'booking_notification_receipts_unavailable', $result->get_error_code() );
-		$this->assertNull( ( new BookingActivityRepository() )->notification_terminal( $request['id'] ) );
+		$this->assertSame( 'notification_delivered', $result['kind'] );
+		$this->assertSame( array( 10 ), $captured['recipients'] );
+		$this->assertSame( 'extrachill-events-booking', $captured['payload']['producer'] );
+		$this->assertSame( 'notification-request:booking_inquiry_submitted:' . $source['id'], $captured['payload']['idempotency_key'] );
+		$this->assertSame( 'https://events.example/venue/55', $captured['payload']['link'] );
 	}
 
 	/** Partial and zero delivery receipts remain retryable until every user resolves. */
@@ -151,7 +153,7 @@ final class BookingNotificationTest extends TestCase {
 		$booking = $this->booking();
 		$source  = $this->source( $booking );
 		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
-		$this->member( 2, 55, 11, VenueAuthorization::STATUS_ACTIVE, false );
+		$this->member( 2, 55, 11, VenueAuthorization::STATUS_ACTIVE, true );
 		$this->member( 3, 55, 12, VenueAuthorization::STATUS_INVITED, false );
 		$this->member( 4, 77, 13, VenueAuthorization::STATUS_ACTIVE, true );
 		$request  = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
@@ -218,6 +220,57 @@ final class BookingNotificationTest extends TestCase {
 		$this->assertSame( $complete['id'], $replay['id'] );
 		$this->assertSame( 3, $calls );
 		$this->assertCount( 3, $resolved );
+	}
+
+	/** Event definitions select owners and assignees instead of every member. */
+	public function test_recipient_policy_is_role_and_event_type_aware(): void {
+		$booking = $this->booking();
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$this->member( 2, 55, 11, VenueAuthorization::STATUS_ACTIVE, false );
+		$this->member( 3, 55, 12, VenueAuthorization::STATUS_ACTIVE, false );
+		$deliveries = array();
+		$service    = new BookingNotificationService(
+			null,
+			null,
+			static function ( array $recipients ) use ( &$deliveries ): array {
+				$deliveries[] = $recipients;
+				$rows = array();
+				foreach ( $recipients as $recipient ) {
+					$rows[ $recipient ] = array( 'status' => 'inserted' );
+				}
+				return array( 'recipients' => $rows );
+			},
+			$this->destination( $deliveries ),
+			static function (): int { return 99; }
+		);
+		$inquiry   = $this->source( $booking );
+		$assignment = $this->source( $booking, 'assignment_changed', array( 'to_assignee_user_id' => 11 ) );
+		$information = $this->source( $booking, 'status_changed', array( 'from_status' => 'needs_info', 'to_status' => 'submitted' ) );
+		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ]['assignee_user_id'] = 11;
+
+		$service->reconcile( $service->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $inquiry['id'] )['id'] );
+		$service->reconcile( $service->request( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, $assignment['id'] )['id'] );
+		$service->reconcile( $service->request( BookingNotificationService::TYPE_INFORMATION_RECEIVED, $information['id'] )['id'] );
+
+		$this->assertSame( array( 10 ), $deliveries[1] );
+		$this->assertSame( array( 10, 11 ), $deliveries[3] );
+		$this->assertSame( array( 11 ), $deliveries[5] );
+	}
+
+	/** Permanent dependency failures become terminal so later requests can advance. */
+	public function test_permanent_failure_is_poisoned_after_bounded_attempts(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$request = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$service = new BookingNotificationService( null, null, null, static function () { return new WP_Error( 'permanent_route_failure' ); } );
+		for ( $attempt = 0; $attempt < BookingNotificationService::MAX_ATTEMPTS; ++$attempt ) {
+			$service->reconcile_pending();
+		}
+		$terminal = ( new BookingActivityRepository() )->notification_terminal( $request['id'] );
+		$this->assertSame( 'notification_suppressed', $terminal['kind'] );
+		$this->assertSame( 'delivery_poisoned', $terminal['payload']['data']['reason'] );
+		$this->assertSame( BookingNotificationService::MAX_ATTEMPTS, $terminal['payload']['data']['attempt'] );
 	}
 
 	/** Revocation between attempts suppresses the user before retry delivery. */

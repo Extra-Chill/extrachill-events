@@ -417,16 +417,18 @@ final class BookingAttachmentTest extends TestCase {
 		);
 		$descriptor = $service->download_descriptor( $booking['id'], $attachment['id'], 12 );
 
-		$out_of_order = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
+		$out_of_order = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'], 12 );
 		$this->assertSame( 'booking_attachment_delivery_not_consumed', $out_of_order->get_error_code() );
-		$forged = $service->record_delivery_outcome( $booking['id'], $other['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
+		$forged = $service->record_delivery_outcome( $booking['id'], $other['id'], $descriptor['correlation_id'], 'completed', $other['byte_size'], 12 );
 		$this->assertSame( 'booking_attachment_delivery_invalid', $forged->get_error_code() );
 
 		$stream = $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12, $descriptor['correlation_id'] );
 		$this->assertIsResource( $stream );
 		fclose( $stream );
-		$first = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
-		$retry = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
+		$this->assertSame( 'booking_attachment_delivery_bytes_incomplete', $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 0, 12 )->get_error_code() );
+		$this->assertSame( 'booking_attachment_delivery_bytes_incomplete', $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'] - 1, 12 )->get_error_code() );
+		$first = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'], 12 );
+		$retry = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'], 12 );
 		$this->assertSame( $first, $retry );
 		$this->assertSame( 'booking_attachment_delivery_outcome_conflict', $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'partial', 5, 12 )->get_error_code() );
 	}
@@ -441,7 +443,7 @@ final class BookingAttachmentTest extends TestCase {
 		fclose( $stream );
 
 		$authorization->allowed['12:55'] = false;
-		$result = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
+		$result = $service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'], 12 );
 		$this->assertSame( 'venue_action_forbidden', $result->get_error_code() );
 	}
 
@@ -513,7 +515,7 @@ final class BookingAttachmentTest extends TestCase {
 		$descriptor = $service->download_descriptor( $booking['id'], $attachment['id'], 12 );
 		$stream     = $service->open_download_stream( $booking['id'], $attachment['id'], $descriptor['stream_token'], 12, $descriptor['correlation_id'] );
 		fclose( $stream );
-		$service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', 10, 12 );
+		$service->record_delivery_outcome( $booking['id'], $attachment['id'], $descriptor['correlation_id'], 'completed', $attachment['byte_size'], 12 );
 
 		$activity = wp_json_encode( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 		$this->assertStringContainsString( $descriptor['correlation_id'], $activity );

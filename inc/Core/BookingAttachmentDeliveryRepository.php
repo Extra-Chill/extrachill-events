@@ -23,10 +23,11 @@ class BookingAttachmentDeliveryRepository {
 	 * @param int    $booking_id     Booking ID.
 	 * @param int    $attachment_id  Attachment ID.
 	 * @param int    $actor_id       Authorized actor ID.
+	 * @param int    $expected_bytes Authorized full response length.
 	 */
-	public function issue( string $correlation_id, int $booking_id, int $attachment_id, int $actor_id ) {
+	public function issue( string $correlation_id, int $booking_id, int $attachment_id, int $actor_id, int $expected_bytes ) {
 		global $wpdb;
-		if ( ! wp_is_uuid( $correlation_id, 4 ) || $booking_id < 1 || $attachment_id < 1 || $actor_id < 1 ) {
+		if ( ! wp_is_uuid( $correlation_id, 4 ) || $booking_id < 1 || $attachment_id < 1 || $actor_id < 1 || $expected_bytes < 1 ) {
 			return new \WP_Error( 'booking_attachment_delivery_invalid', __( 'The attachment delivery correlation is invalid.', 'extrachill-events' ) );
 		}
 		$now = gmdate( 'Y-m-d H:i:s' );
@@ -35,6 +36,7 @@ class BookingAttachmentDeliveryRepository {
 			'booking_id'     => $booking_id,
 			'attachment_id'  => $attachment_id,
 			'actor_id'       => $actor_id,
+			'expected_bytes' => $expected_bytes,
 			'state'          => 'issued',
 			'outcome'        => null,
 			'bytes_sent'     => null,
@@ -114,6 +116,9 @@ class BookingAttachmentDeliveryRepository {
 		global $wpdb;
 		if ( ! in_array( $outcome, self::OUTCOMES, true ) || $bytes_sent < 0 ) {
 			return new \WP_Error( 'booking_attachment_delivery_outcome_invalid', __( 'The attachment delivery outcome is invalid.', 'extrachill-events' ) );
+		}
+		if ( ( 'completed' === $outcome && $bytes_sent !== $delivery['expected_bytes'] ) || ( 'partial' === $outcome && ( $bytes_sent < 1 || $bytes_sent >= $delivery['expected_bytes'] ) ) ) {
+			return new \WP_Error( 'booking_attachment_delivery_bytes_incomplete', __( 'The attachment delivery byte count does not match its terminal outcome.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		if ( 'terminal' === $delivery['state'] ) {
 			return $delivery['outcome'] === $outcome && $delivery['bytes_sent'] === $bytes_sent
@@ -294,7 +299,7 @@ class BookingAttachmentDeliveryRepository {
 	 * @param array $row Database row.
 	 */
 	public function hydrate( array $row ): array {
-		foreach ( array( 'id', 'booking_id', 'attachment_id', 'actor_id', 'bytes_sent' ) as $key ) {
+		foreach ( array( 'id', 'booking_id', 'attachment_id', 'actor_id', 'expected_bytes', 'bytes_sent' ) as $key ) {
 			$row[ $key ] = isset( $row[ $key ] ) ? (int) $row[ $key ] : null;
 		}
 		return $row;

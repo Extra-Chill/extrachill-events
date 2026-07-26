@@ -49,6 +49,10 @@ final class BookingInquiryAdmissionService {
 	 * @var BookingAttachmentPolicy
 	 */
 	private $policy;
+	/** @var BookingRepository */
+	private $bookings;
+	/** @var BookingActivityRepository */
+	private $activity;
 
 	/**
 	 * Build the admission coordinator from existing domain services.
@@ -59,9 +63,11 @@ final class BookingInquiryAdmissionService {
 	 * @param mixed                            $provider            Private provider.
 	 * @param BookingAttachmentPolicy|null     $policy              File policy.
 	 */
-	public function __construct( ?BookingLifecycle $lifecycle = null, ?BookingAttachmentRepository $attachments = null, ?BookingAttachmentService $attachment_service = null, $provider = null, ?BookingAttachmentPolicy $policy = null ) {
+	public function __construct( ?BookingLifecycle $lifecycle = null, ?BookingAttachmentRepository $attachments = null, ?BookingAttachmentService $attachment_service = null, $provider = null, ?BookingAttachmentPolicy $policy = null, ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null ) {
 		$this->lifecycle          = $lifecycle ? $lifecycle : new BookingLifecycle();
 		$this->attachments        = $attachments ? $attachments : new BookingAttachmentRepository();
+		$this->bookings           = $bookings ? $bookings : new BookingRepository();
+		$this->activity           = $activity ? $activity : new BookingActivityRepository();
 		$this->policy             = $policy ? $policy : new BookingAttachmentPolicy();
 		$resolved                 = null !== $provider ? $provider : BookingPrivateFileProviders::resolve();
 		$this->provider           = $resolved instanceof BookingPrivateFileProvider || is_wp_error( $resolved )
@@ -88,6 +94,9 @@ final class BookingInquiryAdmissionService {
 		}
 		unset( $input['attachments'] );
 		unset( $input['user_id'], $input['uploader_user_id'], $input['submitter_user_id'] );
+		if ( $files && is_wp_error( $this->provider ) ) {
+			return $this->public_error( $this->provider );
+		}
 
 		$manifest = array_map(
 			static function ( array $file ): array {
@@ -121,7 +130,7 @@ final class BookingInquiryAdmissionService {
 		foreach ( $pending as $file ) {
 			$reference = $this->provider_error_or_stage( $file );
 			if ( is_wp_error( $reference ) ) {
-				$cleanup = $this->retire_staged( $staged );
+				$cleanup = $this->compensate( $booking, $staged, array() );
 				if ( is_wp_error( $cleanup ) ) {
 					return $this->public_error( $cleanup );
 				}
@@ -131,7 +140,8 @@ final class BookingInquiryAdmissionService {
 			$staged[]                  = $file;
 		}
 
-		foreach ( $staged as $index => $file ) {
+		$attached_files = array();
+		foreach ( $staged as $file ) {
 			$attached = $this->attachment_service->attach_admitted(
 				array(
 					'booking_id'         => (int) $booking['id'],
@@ -147,12 +157,13 @@ final class BookingInquiryAdmissionService {
 				if ( $this->is_uncertain( $attached ) ) {
 					return $this->public_error( $attached );
 				}
-				$cleanup = $this->retire_staged( array_slice( $staged, $index ) );
+				$cleanup = $this->compensate( $booking, $staged, $attached_files );
 				if ( is_wp_error( $cleanup ) ) {
 					return $this->public_error( $cleanup );
 				}
 				return $this->public_error( $attached );
 			}
+			$attached_files[] = $file;
 		}
 
 		return array(
@@ -270,6 +281,30 @@ final class BookingInquiryAdmissionService {
 		return true;
 	}
 
+	/** Remove a known-failed inquiry and every cross-store side effect. */
+	private function compensate( array $booking, array $staged, array $attached ) {
+		global $wpdb;
+		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensation boundary.
+			return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry requires reconciliation.', 'extrachill-events' ) );
+		}
+		foreach ( array( $this->activity->discard_for_booking( (int) $booking['id'] ), $this->attachments->discard_for_booking( (int) $booking['id'] ), $this->bookings->discard_inquiry( $booking ) ) as $discarded ) {
+			if ( is_wp_error( $discarded ) ) {
+				$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensation rollback.
+				return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry requires reconciliation.', 'extrachill-events' ) );
+			}
+		}
+		if ( false === $wpdb->query( 'COMMIT' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensation commit.
+			return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry requires reconciliation.', 'extrachill-events' ) );
+		}
+		foreach ( $attached as $file ) {
+			$released = $this->provider->release_claim( $file['storage_reference'], $this->attachment_service->claim_key( (int) $booking['id'], $file['idempotency_key'] ) );
+			if ( true !== $released ) {
+				return new \WP_Error( 'booking_inquiry_attachment_cleanup_uncertain', __( 'The failed inquiry attachment requires reconciliation.', 'extrachill-events' ) );
+			}
+		}
+		return $this->retire_staged( $staged );
+	}
+
 	/**
 	 * Build a stable booking-scoped slot key.
 	 *
@@ -306,7 +341,7 @@ final class BookingInquiryAdmissionService {
 	 */
 	private function public_error( \WP_Error $error ): \WP_Error {
 		$code = $error->get_error_code();
-		if ( $this->is_uncertain( $error ) || in_array( $code, array( 'booking_transaction_commit_uncertain', 'booking_transaction_rollback_failed', 'booking_inquiry_attachment_reconciliation_required', 'booking_inquiry_attachment_cleanup_uncertain' ), true ) ) {
+		if ( $this->is_uncertain( $error ) || in_array( $code, array( 'booking_transaction_commit_uncertain', 'booking_transaction_rollback_failed', 'booking_inquiry_attachment_reconciliation_required', 'booking_inquiry_attachment_cleanup_uncertain', 'booking_inquiry_compensation_uncertain' ), true ) ) {
 			return new \WP_Error(
 				'booking_inquiry_reconciliation_required',
 				__( 'The inquiry outcome requires reconciliation before retrying.', 'extrachill-events' ),

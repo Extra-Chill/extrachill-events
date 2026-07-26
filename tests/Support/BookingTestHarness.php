@@ -265,6 +265,19 @@ if ( ! function_exists( 'get_permalink' ) ) {
 	function get_permalink( $post_id ) {
 		return $GLOBALS['ec_artist_test']['permalinks'][ get_current_blog_id() ][ $post_id ] ?? 'https://events.example/event/' . (int) $post_id; }
 }
+if ( ! function_exists( 'get_term_link' ) ) {
+	function get_term_link( $term, $taxonomy = '' ) {
+		unset( $taxonomy );
+		return 'https://events.example/venue/' . (int) $term;
+	}
+}
+if ( ! function_exists( 'ec_users_notify_with_receipts' ) ) {
+	function ec_users_notify_with_receipts( $user_ids, array $payload ): array {
+		return is_callable( $GLOBALS['ec_artist_test']['users_receipt'] ?? null )
+			? call_user_func( $GLOBALS['ec_artist_test']['users_receipt'], (array) $user_ids, $payload )
+			: array( 'recipients' => array() );
+	}
+}
 if ( ! function_exists( 'wp_cache_delete' ) ) {
 	function wp_cache_delete( $key, $group = '' ) {
 		$GLOBALS['ec_artist_test']['cache_deletes'][] = array( $key, $group );
@@ -1229,6 +1242,7 @@ final class BookingWpdb {
 
 	public function delete( $table, $where ) {
 		$this->last_error = '';
+		$deleted = 0;
 		foreach ( $this->rows[ $table ] ?? array() as $key => $row ) {
 			foreach ( $where as $field => $value ) {
 				if ( (string) ( $row[ $field ] ?? '' ) !== (string) $value ) {
@@ -1236,9 +1250,9 @@ final class BookingWpdb {
 				}
 			}
 			unset( $this->rows[ $table ][ $key ] );
-			return 1;
+			++$deleted;
 		}
-		return 0;
+		return $deleted;
 	}
 
 	public function query( $query ) {
@@ -1617,7 +1631,11 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 	}
 	public function retire( string $storage_reference ) {
 		$this->retired[] = $storage_reference;
-		return $this->fail_retire ? new WP_Error( 'simulated_retirement_failure' ) : true;
+		if ( $this->fail_retire ) {
+			return new WP_Error( 'simulated_retirement_failure' );
+		}
+		unset( $this->objects[ $storage_reference ] );
+		return true;
 	}
 }
 

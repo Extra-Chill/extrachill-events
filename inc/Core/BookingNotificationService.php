@@ -17,6 +17,7 @@ class BookingNotificationService {
 	public const EMIT_HOOK       = 'extrachill_events_emit_booking_notification';
 	public const RECONCILE_HOOK  = 'extrachill_events_reconcile_booking_notifications';
 	public const SCHEDULER_GROUP = 'extrachill-events-booking-notifications';
+	public const MAX_ATTEMPTS    = 5;
 
 	public const TYPE_INQUIRY_SUBMITTED    = 'booking_inquiry_submitted';
 	public const TYPE_ASSIGNMENT_CHANGED   = 'booking_assignment_changed';
@@ -166,7 +167,15 @@ class BookingNotificationService {
 		foreach ( $requests as $request ) {
 			$result = $this->reconcile( (int) $request['id'] );
 			if ( is_wp_error( $result ) ) {
-				$retry = true;
+				$record = $this->record_reconcile_failure( $request, $result );
+				if ( is_wp_error( $record ) ) {
+					return $record;
+				}
+				$will_retry = 'notification_suppressed' !== $record['kind'];
+				$retry      = $retry || $will_retry;
+				if ( ! $will_retry ) {
+					++$completed;
+				}
 				continue;
 			}
 			if ( in_array( $result['kind'] ?? '', array( 'notification_delivered', 'notification_suppressed' ), true ) ) {
@@ -217,7 +226,8 @@ class BookingNotificationService {
 		if ( ! is_array( $locked ) || (int) $locked['venue_term_id'] !== (int) $booking['venue_term_id'] ) {
 			return $this->rollback( new \WP_Error( 'booking_notification_booking_changed', __( 'The booking notification target changed.', 'extrachill-events' ) ) );
 		}
-		$recipient_ids = $this->active_recipient_ids( (array) $members, (int) $locked['venue_term_id'] );
+		$definition    = $this->definition( (string) $data['notification_type'] );
+		$recipient_ids = $this->recipient_ids( (array) $members, $locked, $source, $definition );
 		if ( empty( $recipient_ids ) ) {
 			$record = $this->terminal_record( $request, 'notification_suppressed', 'no_active_recipients', array() );
 			return is_wp_error( $record ) ? $this->rollback( $record ) : $this->finish( $record );
@@ -238,7 +248,6 @@ class BookingNotificationService {
 		if ( $actor_id < 1 ) {
 			return $this->rollback( new \WP_Error( 'booking_notification_actor_unavailable', __( 'A bounded notification actor is unavailable.', 'extrachill-events' ) ) );
 		}
-		$definition    = $this->definition( (string) $data['notification_type'] );
 		$attempt_count = $this->activity->notification_attempt_count( $request_activity_id );
 		if ( is_wp_error( $attempt_count ) ) {
 			return $this->rollback( $attempt_count );
@@ -263,11 +272,12 @@ class BookingNotificationService {
 		if ( is_wp_error( $receipt ) ) {
 			return $this->rollback( $receipt );
 		}
-		$summary = $this->receipt_summary( $recipient_ids, $receipt );
-		$record  = $this->activity->append(
+		$summary  = $this->receipt_summary( $recipient_ids, $receipt );
+		$poisoned = ! $summary['complete'] && $attempt >= self::MAX_ATTEMPTS;
+		$record   = $this->activity->append(
 			array(
 				'booking_id'      => $request['booking_id'],
-				'kind'            => $summary['complete'] ? 'notification_delivered' : 'notification_delivery_attempted',
+				'kind'            => $summary['complete'] ? 'notification_delivered' : ( $poisoned ? 'notification_suppressed' : 'notification_delivery_attempted' ),
 				'actor_type'      => 'system',
 				'external_id'     => (string) $request_activity_id,
 				'idempotency_key' => $summary['complete'] ? 'notification-terminal:' . $request_activity_id : sprintf( 'notification-attempt:%d:%d', $request_activity_id, $attempt ),
@@ -280,6 +290,7 @@ class BookingNotificationService {
 					'existing_count'      => $summary['existing'],
 					'failed_count'        => $summary['failed'],
 					'recipient_count'     => count( $recipient_ids ),
+					'reason'              => $poisoned ? 'delivery_poisoned' : null,
 				),
 			)
 		);
@@ -287,7 +298,7 @@ class BookingNotificationService {
 			return $this->rollback( $record );
 		}
 		$finished = $this->finish( $record );
-		if ( ! $summary['complete'] ) {
+		if ( ! $summary['complete'] && ! $poisoned ) {
 			$this->schedule_reconciliation();
 		}
 		return $finished;
@@ -336,31 +347,36 @@ class BookingNotificationService {
 	private function definitions(): array {
 		return array(
 			self::TYPE_INQUIRY_SUBMITTED       => array(
-				'kind'   => 'inquiry_submitted',
-				'title'  => __( 'New booking inquiry', 'extrachill-events' ),
-				'landed' => true,
+				'kind'       => 'inquiry_submitted',
+				'title'      => __( 'New booking inquiry', 'extrachill-events' ),
+				'recipients' => 'owners',
+				'landed'     => true,
 			),
 			self::TYPE_ASSIGNMENT_CHANGED      => array(
-				'kind'   => 'assignment_changed',
-				'title'  => __( 'Booking assignment changed', 'extrachill-events' ),
-				'landed' => true,
+				'kind'       => 'assignment_changed',
+				'title'      => __( 'Booking assignment changed', 'extrachill-events' ),
+				'recipients' => 'owners_and_assignee',
+				'landed'     => true,
 			),
 			self::TYPE_INFORMATION_RECEIVED    => array(
-				'kind'   => 'status_changed',
-				'title'  => __( 'Booking information received', 'extrachill-events' ),
-				'from'   => 'needs_info',
-				'to'     => 'submitted',
-				'landed' => true,
+				'kind'       => 'status_changed',
+				'title'      => __( 'Booking information received', 'extrachill-events' ),
+				'from'       => 'needs_info',
+				'to'         => 'submitted',
+				'recipients' => 'assignee',
+				'landed'     => true,
 			),
 			self::TYPE_HOLD_EXPIRED            => array(
-				'kind'   => 'hold_expired',
-				'title'  => __( 'Booking hold expired', 'extrachill-events' ),
-				'landed' => true,
+				'kind'       => 'hold_expired',
+				'title'      => __( 'Booking hold expired', 'extrachill-events' ),
+				'recipients' => 'owners_and_assignee',
+				'landed'     => true,
 			),
 			self::TYPE_EVENT_HANDOFF_FAILED    => array(
-				'kind'   => 'event_conversion_failed',
-				'title'  => __( 'Booking event handoff failed', 'extrachill-events' ),
-				'landed' => true,
+				'kind'       => 'event_conversion_failed',
+				'title'      => __( 'Booking event handoff failed', 'extrachill-events' ),
+				'recipients' => 'owners_and_assignee',
+				'landed'     => true,
 			),
 			self::TYPE_ARTIST_REPLIED          => array(
 				'kind'  => 'artist_replied',
@@ -392,34 +408,85 @@ class BookingNotificationService {
 			&& ( ! isset( $definition['from'] ) || ( ( $data['from_status'] ?? null ) === $definition['from'] && ( $data['to_status'] ?? null ) === $definition['to'] ) );
 	}
 
-	/** Resolve active exact-venue users from membership rows held under lock. */
-	private function active_recipient_ids( array $rows, int $venue_id ): array {
-		$ids        = array();
+	/** Resolve the event type's exact owner/assignee policy under membership lock. */
+	private function recipient_ids( array $rows, array $booking, array $source, array $definition ): array {
+		$owners     = array();
+		$active     = array();
 		$repository = new VenueMembershipRepository();
 		foreach ( $rows as $row ) {
-			if ( (int) ( $row['venue_term_id'] ?? 0 ) !== $venue_id || VenueAuthorization::STATUS_ACTIVE !== ( $row['status'] ?? '' ) ) {
+			if ( (int) ( $row['venue_term_id'] ?? 0 ) !== (int) $booking['venue_term_id'] || VenueAuthorization::STATUS_ACTIVE !== ( $row['status'] ?? '' ) ) {
 				continue;
 			}
 			$member = $repository->hydrate( $row );
 			if ( ! is_wp_error( $member ) && get_userdata( $member['user_id'] ) ) {
-				$ids[] = (int) $member['user_id'];
+				$active[ (int) $member['user_id'] ] = true;
+				if ( $member['is_owner'] ) {
+					$owners[] = (int) $member['user_id'];
+				}
 			}
+		}
+		$policy      = $definition['recipients'] ?? 'owners';
+		$source_data = $source['payload']['data'] ?? array();
+		$assignee    = 'assignment_changed' === ( $source['kind'] ?? '' ) ? absint( $source_data['to_assignee_user_id'] ?? 0 ) : absint( $booking['assignee_user_id'] ?? 0 );
+		$ids         = 'assignee' === $policy ? array() : $owners;
+		if ( in_array( $policy, array( 'assignee', 'owners_and_assignee' ), true ) && isset( $active[ $assignee ] ) ) {
+			$ids[] = $assignee;
 		}
 		return array_values( array_unique( $ids ) );
 	}
 
-	/** Resolve an authorized management destination, which #323 does not yet provide. */
+	/** Resolve an injected destination or the public venue context. */
 	private function resolve_destination( array $booking, array $recipient_ids, array $locked_members ) {
-		return $this->destination
-			? call_user_func( $this->destination, $booking, $recipient_ids, $locked_members )
-			: new \WP_Error( 'booking_notification_destination_unavailable', __( 'The authorized booking management destination is not available yet.', 'extrachill-events' ) );
+		if ( $this->destination ) {
+			return call_user_func( $this->destination, $booking, $recipient_ids, $locked_members );
+		}
+		return get_term_link( (int) $booking['venue_term_id'], 'venue' );
 	}
 
-	/** Delegate only to an injected structured receipt primitive until Users #280 lands. */
+	/** Delegate to the landed Users receipt primitive with its exact payload contract. */
 	private function deliver_structured( array $recipient_ids, array $payload, string $idempotency_key ) {
-		return $this->delivery
-			? call_user_func( $this->delivery, $recipient_ids, $payload, 'extrachill-events-booking', $idempotency_key )
-			: new \WP_Error( 'booking_notification_receipts_unavailable', __( 'Idempotent notification receipts are not available yet.', 'extrachill-events' ) );
+		$payload['producer']        = 'extrachill-events-booking';
+		$payload['idempotency_key'] = $idempotency_key;
+		if ( $this->delivery ) {
+			return call_user_func( $this->delivery, $recipient_ids, $payload, $payload['producer'], $idempotency_key );
+		}
+		return function_exists( 'ec_users_notify_with_receipts' )
+			? ec_users_notify_with_receipts( $recipient_ids, $payload )
+			: new \WP_Error( 'booking_notification_receipts_unavailable', __( 'Idempotent notification receipts are unavailable.', 'extrachill-events' ) );
+	}
+
+	/** Persist dependency failures and poison a request after a bounded attempt count. */
+	private function record_reconcile_failure( array $request, \WP_Error $error ) {
+		$count = $this->activity->notification_attempt_count( (int) $request['id'] );
+		if ( is_wp_error( $count ) ) {
+			return $count;
+		}
+		$attempt = $count + 1;
+		if ( $attempt >= self::MAX_ATTEMPTS ) {
+			return $this->terminal_record(
+				$request,
+				'notification_suppressed',
+				'delivery_poisoned',
+				array(
+					'attempt'    => $attempt,
+					'error_code' => $error->get_error_code(),
+				)
+			);
+		}
+		return $this->activity->append(
+			array(
+				'booking_id'      => $request['booking_id'],
+				'kind'            => 'notification_delivery_attempted',
+				'actor_type'      => 'system',
+				'external_id'     => (string) $request['id'],
+				'idempotency_key' => sprintf( 'notification-attempt:%d:%d', $request['id'], $attempt ),
+				'payload'         => array(
+					'request_activity_id' => $request['id'],
+					'attempt'             => $attempt,
+					'error_code'          => $error->get_error_code(),
+				),
+			)
+		);
 	}
 
 	/** Summarize a strict per-recipient Users receipt. */

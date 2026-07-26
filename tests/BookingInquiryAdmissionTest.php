@@ -219,7 +219,7 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$error       = $service->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ), 'storage-disabled' ) );
 
 		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
-		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
+		$this->assertNoInquirySideEffects();
 	}
 
 	/**
@@ -240,7 +240,7 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		);
 	}
 
-	/** Verify partial batches resume without duplicating committed slots. */
+	/** Verify staging failure removes the complete inquiry before retry. */
 	public function test_partial_multi_file_failure_resumes_only_missing_slots(): void {
 		$files                         = array(
 			$this->upload( 'press.txt', 'press', 'press_release' ),
@@ -250,7 +250,7 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$service                       = $this->service();
 		$failed                        = $service->admit( $this->input( $files ) );
 		$this->assertSame( 'booking_inquiry_unavailable', $failed->get_error_code() );
-		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
+		$this->assertNoInquirySideEffects();
 		$this->assertCount( 1, $this->provider->retired );
 
 		$this->provider->fail_stage_at = 0;
@@ -260,7 +260,7 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertSame( 4, $this->provider->stage_count );
 	}
 
-	/** Verify a later provider-claim failure retains and reuses earlier committed slots. */
+	/** Verify a later claim failure compensates every committed side effect. */
 	public function test_partial_attachment_failure_compensates_uncommitted_slots_and_resumes(): void {
 		$files = array(
 			$this->upload( 'press.txt', 'press', 'press_release' ),
@@ -270,13 +270,13 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$service                       = $this->service();
 		$error                         = $service->admit( $this->input( $files, 'partial-claim' ) );
 		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
-		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
-		$this->assertCount( 1, $this->provider->retired );
+		$this->assertNoInquirySideEffects();
+		$this->assertCount( 2, $this->provider->retired );
 
 		$this->provider->fail_claim_at = 0;
 		$this->assertIsArray( $service->admit( $this->input( $files, 'partial-claim' ) ) );
 		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
-		$this->assertSame( 3, $this->provider->stage_count, 'The committed first slot must not be staged again.' );
+		$this->assertSame( 4, $this->provider->stage_count );
 	}
 
 	/** Verify confirmed database failures compensate both stores. */
@@ -288,7 +288,7 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
 		$this->assertCount( 1, $this->provider->released );
 		$this->assertCount( 1, $this->provider->retired );
-		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
+		$this->assertNoInquirySideEffects();
 	}
 
 	/** Verify uncertain commits never trigger destructive guesses. */
@@ -391,5 +391,13 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertStringNotContainsString( 'lock_name', $encoded );
 		$this->assertStringNotContainsString( 'sha256', $encoded );
 		$this->assertStringNotContainsString( 'handoff', $encoded );
+	}
+
+	/** Assert known admission failures leave no domain or byte-store residue. */
+	private function assertNoInquirySideEffects(): void {
+		foreach ( array( BookingSchema::bookings_table(), BookingSchema::activity_table(), BookingSchema::attachments_table() ) as $table ) {
+			$this->assertSame( array(), array_values( $GLOBALS['wpdb']->rows[ $table ] ?? array() ) );
+		}
+		$this->assertSame( array(), $this->provider->objects );
 	}
 }

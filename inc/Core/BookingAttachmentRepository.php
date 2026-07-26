@@ -119,6 +119,13 @@ class BookingAttachmentRepository {
 		return array_map( array( $this, 'hydrate' ), (array) $rows );
 	}
 
+	/** Remove every attachment row owned by one failed inquiry. */
+	public function discard_for_booking( int $booking_id ) {
+		global $wpdb;
+		$deleted = $wpdb->delete( BookingSchema::attachments_table(), array( 'booking_id' => $booking_id ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Failed inquiry compensation only.
+		return false === $deleted ? new \WP_Error( 'booking_inquiry_attachment_compensation_failed', __( 'Failed inquiry attachments could not be removed.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) : true;
+	}
+
 	/**
 	 * Find references to an object so reuse and physical deletion can be bounded.
 	 *

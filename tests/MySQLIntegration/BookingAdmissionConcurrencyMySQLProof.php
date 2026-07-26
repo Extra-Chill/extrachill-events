@@ -109,9 +109,15 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$bookings_table    = BookingSchema::bookings_table();
 		$attachments_table = BookingSchema::attachments_table();
 		$activity_table    = BookingSchema::activity_table();
-		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$bookings_table} WHERE inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
-		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$attachments_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) ) );
-		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s AND a.kind = 'inquiry_submitted'", $input['idempotency_key'] ) ) );
+		$booking_rows      = $wpdb->get_results( $wpdb->prepare( "SELECT id, status, admission_owner_token FROM {$bookings_table} WHERE inquiry_idempotency_key = %s", $input['idempotency_key'] ), ARRAY_A );
+		$this->assertCount( 1, $booking_rows );
+		$this->assertSame( 'submitted', $booking_rows[0]['status'] );
+		$this->assertTrue( null === $booking_rows[0]['admission_owner_token'] || '' === $booking_rows[0]['admission_owner_token'], 'The completed booking retained its admission reservation token.' );
+		$attachment_states = $wpdb->get_col( $wpdb->prepare( "SELECT a.state FROM {$attachments_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) );
+		$this->assertSame( array( 'active' ), $attachment_states );
+		$activity_kinds = $wpdb->get_col( $wpdb->prepare( "SELECT a.kind FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) );
+		$this->assertCount( 1, $activity_kinds, 'The canonical booking must have exactly one total activity row.' );
+		$this->assertSame( 'inquiry_submitted', $activity_kinds[0] );
 		foreach ( array( $path, $event_log, $stage_held, $release, $winner_file ) as $temporary_file ) {
 			if ( file_exists( $temporary_file ) ) {
 				unlink( $temporary_file );

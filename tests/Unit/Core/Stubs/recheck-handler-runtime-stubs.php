@@ -8,9 +8,11 @@
 namespace ExtraChillEvents\Tests\Unit\Core {
 	class QualifyRecheckWpdb {
 		public string $prefix = 'c8c_';
+		public string $options = 'c8c_options';
 		public array $updates = array();
 		private array $rows = array();
 		private ?int $last_prepared_flow_id = null;
+		private bool $errors_suppressed = false;
 
 		public function seed_row( int $flow_id, array $row ): void {
 			$this->rows[ $flow_id ] = $row;
@@ -29,6 +31,14 @@ namespace ExtraChillEvents\Tests\Unit\Core {
 				}
 			}
 			return $query;
+		}
+
+		public function suppress_errors( ?bool $suppress = null ): bool {
+			$previous = $this->errors_suppressed;
+			if ( null !== $suppress ) {
+				$this->errors_suppressed = $suppress;
+			}
+			return $previous;
 		}
 
 		public function get_row( string $query, $output = ARRAY_A ): ?array {

@@ -1368,6 +1368,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingCommunicationService.php'
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMutationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingEventConversionService.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMarketingService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingLifecycle.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProvider.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalBookingPrivateFileProvider.php';
@@ -1383,6 +1384,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingHoldAbilities.p
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMutationAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingEventAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingCommunicationAbilities.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMarketingAbilities.php';
 
 final class BookingTestAuthorization extends VenueAuthorization {
 	public $calls        = array();

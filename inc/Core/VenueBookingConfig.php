@@ -226,6 +226,10 @@ class VenueBookingConfig {
 		if ( is_wp_error( $channels ) ) {
 			return $channels;
 		}
+		$triggers = $this->normalize_marketing_triggers( $config['marketing_triggers'] ?? array(), $channels );
+		if ( is_wp_error( $triggers ) ) {
+			return $triggers;
+		}
 		$hold_ttl = isset( $config['hold_ttl_minutes'] ) ? (int) $config['hold_ttl_minutes'] : 1440;
 		if ( $hold_ttl < 5 || $hold_ttl > 10080 ) {
 			return new \WP_Error( 'invalid_booking_hold_ttl', __( 'Hold TTL must be between 5 minutes and 7 days.', 'extrachill-events' ) );
@@ -265,6 +269,7 @@ class VenueBookingConfig {
 			),
 			'ticket_provider_reference' => $this->nullable_text( $config['ticket_provider_reference'] ?? null, 191 ),
 			'marketing_channels'        => $channels,
+			'marketing_triggers'        => $triggers,
 			'hold_ttl_minutes'          => $hold_ttl,
 		);
 	}
@@ -292,6 +297,7 @@ class VenueBookingConfig {
 			),
 			'ticket_provider_reference' => null,
 			'marketing_channels'        => array(),
+			'marketing_triggers'        => array(),
 			'hold_ttl_minutes'          => 1440,
 		);
 	}
@@ -371,11 +377,73 @@ class VenueBookingConfig {
 		}
 		$normalized = array();
 		foreach ( $channels as $channel ) {
-			$key = mb_substr( sanitize_key( (string) $channel ), 0, 64 );
+			$key = mb_substr( sanitize_key( (string) $channel ), 0, 32 );
 			if ( '' === $key || in_array( $key, $normalized, true ) ) {
 				return new \WP_Error( 'invalid_booking_marketing_channel', __( 'Marketing channel keys must be unique after normalization.', 'extrachill-events' ) );
 			}
 			$normalized[] = $key;
+		}
+		return $normalized;
+	}
+
+	/**
+	 * Normalize event-driven references to owner-registered Data Machine tasks.
+	 *
+	 * @param mixed $triggers         Proposed trigger configuration.
+	 * @param array $enabled_channels Enabled venue channel keys.
+	 * @return array|\WP_Error Normalized triggers.
+	 */
+	private function normalize_marketing_triggers( $triggers, array $enabled_channels ) {
+		if ( ! is_array( $triggers ) || count( $triggers ) > 20 ) {
+			return new \WP_Error( 'invalid_booking_marketing_triggers', __( 'Marketing triggers must be an array of at most 20 items.', 'extrachill-events' ) );
+		}
+		$normalized = array();
+		$seen       = array();
+		foreach ( $triggers as $trigger ) {
+			$key = mb_substr( sanitize_key( (string) ( $trigger['key'] ?? '' ) ), 0, 32 );
+			if ( '' === $key || isset( $seen[ $key ] ) || 'event_converted' !== ( $trigger['event'] ?? '' ) || ! is_array( $trigger['channels'] ?? null ) || count( $trigger['channels'] ) > 20 ) {
+				return new \WP_Error( 'invalid_booking_marketing_trigger', __( 'Each marketing trigger needs a unique key, a supported event, and bounded channels.', 'extrachill-events' ) );
+			}
+			$trigger_channels = array();
+			$channel_seen     = array();
+			foreach ( $trigger['channels'] as $channel ) {
+				$channel_key = mb_substr( sanitize_key( (string) ( $channel['key'] ?? '' ) ), 0, 32 );
+				$task_type   = mb_substr( sanitize_key( (string) ( $channel['task_type'] ?? '' ) ), 0, 100 );
+				$approval    = sanitize_key( (string) ( $channel['approval'] ?? 'required' ) );
+				$delay       = (int) ( $channel['delay_seconds'] ?? 0 );
+				$agent_id    = (int) ( $channel['agent_id'] ?? 0 );
+				if ( '' === $channel_key || isset( $channel_seen[ $channel_key ] ) || ! in_array( $channel_key, $enabled_channels, true ) || '' === $task_type || ! in_array( $approval, array( 'direct', 'required' ), true ) || $delay < 0 || $delay > 31536000 || $agent_id < 1 || ! is_array( $channel['params'] ?? array() ) ) {
+					return new \WP_Error( 'invalid_booking_marketing_trigger_channel', __( 'Marketing trigger channels must reference an enabled channel, registered task owner, agent, approval policy, and valid delay.', 'extrachill-events' ) );
+				}
+				$image = null;
+				if ( ! empty( $channel['image'] ) ) {
+					$template_id = mb_substr( sanitize_key( (string) ( $channel['image']['template_id'] ?? '' ) ), 0, 100 );
+					if ( '' === $template_id ) {
+						return new \WP_Error( 'invalid_booking_marketing_image', __( 'Marketing images must reference a registered template.', 'extrachill-events' ) );
+					}
+					$image = array(
+						'template_id' => $template_id,
+						'preset'      => mb_substr( sanitize_key( (string) ( $channel['image']['preset'] ?? '' ) ), 0, 100 ),
+						'format'      => 'jpeg' === ( $channel['image']['format'] ?? '' ) ? 'jpeg' : 'png',
+					);
+				}
+				$channel_seen[ $channel_key ] = true;
+				$trigger_channels[]           = array(
+					'key'           => $channel_key,
+					'task_type'     => $task_type,
+					'agent_id'      => $agent_id,
+					'approval'      => $approval,
+					'delay_seconds' => $delay,
+					'params'        => $channel['params'] ?? array(),
+					'image'         => $image,
+				);
+			}
+			$seen[ $key ] = true;
+			$normalized[] = array(
+				'key'      => $key,
+				'event'    => 'event_converted',
+				'channels' => $trigger_channels,
+			);
 		}
 		return $normalized;
 	}
@@ -387,7 +455,7 @@ class VenueBookingConfig {
 
 	/** Return top-level settings changed by the replacement document. */
 	private function changed_fields( array $current, array $next ): array {
-		$fields  = array( 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes' );
+		$fields  = array( 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'marketing_triggers', 'hold_ttl_minutes' );
 		$changed = array();
 		foreach ( $fields as $field ) {
 			if ( $current[ $field ] !== $next[ $field ] ) {

@@ -243,16 +243,17 @@ class VenueBookingConfigAbilities {
 				'items'       => array(
 					'type'      => 'string',
 					'minLength' => 1,
-					'maxLength' => 64,
+					'maxLength' => 32,
 				),
 			),
+			'marketing_triggers'        => $this->marketing_triggers_schema(),
 			'hold_ttl_minutes'          => array(
 				'type'    => 'integer',
 				'minimum' => 5,
 				'maximum' => 10080,
 			),
 		);
-		$required     = array( 'version', 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes' );
+		$required     = array( 'version', 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'marketing_triggers', 'hold_ttl_minutes' );
 		if ( $include_metadata ) {
 			$properties['revision']           = array(
 				'type'    => 'integer',
@@ -273,6 +274,87 @@ class VenueBookingConfigAbilities {
 			'properties'           => $properties,
 			'required'             => $required,
 			'additionalProperties' => false,
+		);
+	}
+
+	/** Return the event-driven marketing configuration contract. */
+	private function marketing_triggers_schema(): array {
+		return array(
+			'type'     => 'array',
+			'maxItems' => 20,
+			'items'    => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'key'      => array(
+						'type'      => 'string',
+						'minLength' => 1,
+						'maxLength' => 32,
+					),
+					'event'    => array(
+						'type' => 'string',
+						'enum' => array( 'event_converted' ),
+					),
+					'channels' => array(
+						'type'     => 'array',
+						'maxItems' => 20,
+						'items'    => array(
+							'type'                 => 'object',
+							'properties'           => array(
+								'key'           => array(
+									'type'      => 'string',
+									'minLength' => 1,
+									'maxLength' => 32,
+								),
+								'task_type'     => array(
+									'type'      => 'string',
+									'minLength' => 1,
+									'maxLength' => 100,
+								),
+								'agent_id'      => array(
+									'type'    => 'integer',
+									'minimum' => 1,
+								),
+								'approval'      => array(
+									'type' => 'string',
+									'enum' => array( 'direct', 'required' ),
+								),
+								'delay_seconds' => array(
+									'type'    => 'integer',
+									'minimum' => 0,
+									'maximum' => 31536000,
+								),
+								'params'        => array(
+									'type'                 => 'object',
+									'additionalProperties' => true,
+								),
+								'image'         => array(
+									'type'       => array( 'object', 'null' ),
+									'properties' => array(
+										'template_id' => array(
+											'type'      => 'string',
+											'minLength' => 1,
+											'maxLength' => 100,
+										),
+										'preset'      => array(
+											'type'      => 'string',
+											'maxLength' => 100,
+										),
+										'format'      => array(
+											'type' => 'string',
+											'enum' => array( 'png', 'jpeg' ),
+										),
+									),
+									'required'   => array( 'template_id', 'preset', 'format' ),
+								),
+							),
+							'required'             => array( 'key', 'task_type', 'agent_id', 'approval', 'delay_seconds', 'params', 'image' ),
+							'additionalProperties' => false,
+						),
+					),
+				),
+				'required'             => array( 'key', 'event', 'channels' ),
+				'additionalProperties' => false,
+			),
 		);
 	}
 }

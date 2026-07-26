@@ -845,6 +845,12 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 final class VenueMembershipAuthorizationTest extends TestCase {
 	private $original_wpdb;
 
+	private function set_current_user( int $user_id ): void {
+		if ( function_exists( 'wp_set_current_user' ) ) {
+			wp_set_current_user( $user_id );
+		}
+	}
+
 	protected function setUp(): void {
 		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
 		if ( $this->original_wpdb ) {
@@ -918,7 +924,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 
 			( new WP_User( 1 ) )->set_role( 'administrator' );
 		}
-		wp_set_current_user( 1 );
+		$this->set_current_user( 1 );
 		$GLOBALS['venue_membership_test'] = array(
 			'terms'             => array(
 				55 => (object) array(
@@ -1008,7 +1014,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
-		wp_set_current_user( 0 );
+		$this->set_current_user( 0 );
 		parent::tearDown();
 	}
 
@@ -1213,7 +1219,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	public function test_abilities_share_authorization_and_execution_rechecks_it(): void {
 		$this->create_member( 55, 2, true );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 2;
-		wp_set_current_user( 2 );
+		$this->set_current_user( 2 );
 		$abilities = new VenueMembershipAbilities();
 		$abilities->register();
 
@@ -1246,7 +1252,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 3, $created['user_id'] );
 
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
-		wp_set_current_user( 3 );
+		$this->set_current_user( 3 );
 		$denied = call_user_func(
 			$GLOBALS['venue_membership_test']['abilities']['extrachill/create-venue-membership']['execute_callback'],
 			array(
@@ -1695,7 +1701,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->create_member( 55, 2, true );
 		$this->create_member( 55, 3, false );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
-		wp_set_current_user( 3 );
+		$this->set_current_user( 3 );
 		$abilities = new VenueBookingConfigAbilities();
 		$abilities->register();
 
@@ -1839,7 +1845,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->create_member( 55, 3, false );
 		$this->create_member( 56, 4, true, VenueAuthorization::STATUS_INVITED );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
-		wp_set_current_user( 3 );
+		$this->set_current_user( 3 );
 
 		$abilities = new VenueProfileAbilities();
 		$abilities->register();
@@ -1857,10 +1863,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'string', $update['input_schema']['properties']['expected_revision']['type'] );
 
 		$GLOBALS['venue_membership_test']['current_user_id'] = 4;
-		wp_set_current_user( 4 );
+		$this->set_current_user( 4 );
 		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 56 ) )->get_error_code() );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 1;
-		wp_set_current_user( 1 );
+		$this->set_current_user( 1 );
 		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) )->get_error_code() );
 	}
 

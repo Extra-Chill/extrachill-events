@@ -65,8 +65,17 @@ jobs:
         env:
           HOMEBOY_SETTINGS_JSON: >-
             {"database_type":"mysql","validation_dependencies":["${{ github.workspace }}/.ci/data-machine","${{ github.workspace }}/.ci/data-machine-events"],"wp_codebox_multisite":true,"wp_codebox_phpunit_bootstrap_mode":"managed"}
+          HOMEBOY_WP_CODEBOX_ARTIFACTS_DIR: ${{ github.workspace }}/wp-codebox-artifacts
           HOMEBOY_WORDPRESS_MULTISITE: '1'
         uses: Extra-Chill/homeboy-action@v2
         with:
           commands: ${{ matrix.command }}
           expected-commands: review lint,review test
+
+      - name: Upload managed PHPUnit evidence
+        if: ${{ always() && matrix.command == 'review test' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-phpunit-evidence
+          path: wp-codebox-artifacts
+          if-no-files-found: error

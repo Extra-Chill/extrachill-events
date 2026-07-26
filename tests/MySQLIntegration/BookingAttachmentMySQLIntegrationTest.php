@@ -292,6 +292,8 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$winner = $service->admit( $input );
 		$retry  = $service->admit( $input );
 
+		$this->assertIsArray( $winner, is_wp_error( $winner ) ? $winner->get_error_code() : 'winner was not a receipt' );
+		$this->assertIsArray( $retry, is_wp_error( $retry ) ? $retry->get_error_code() : 'retry was not a receipt' );
 		$this->assertSame( $winner, $retry );
 		$this->assertSame( 1, $this->provider->stage_count );
 		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ) );

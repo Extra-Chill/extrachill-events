@@ -876,14 +876,14 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( 'booking_idempotency_conflict', $conflict->get_error_code() );
 		$this->assertSame( array( 'status' => 409 ), $conflict->get_error_data() );
 		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
-		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 
 		$GLOBALS['wpdb']->race_booking_insert = true;
 		$race                                 = $lifecycle->create_inquiry( array_merge( $input, array( 'idempotency_key' => 'request-race' ) ) );
 		$this->assertIsArray( $race );
 		$this->assertSame( 0, $GLOBALS['wpdb']->natural_key_reads_in_transaction, 'The loser must resolve its winner only after rollback.' );
 		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
-		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 4, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 		$this->assertSame(
 			'booking_idempotency_conflict',
 			$lifecycle->create_inquiry(

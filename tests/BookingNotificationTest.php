@@ -334,6 +334,50 @@ final class BookingNotificationTest extends TestCase {
 		$this->assertSame( 0, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
 	}
 
+	/** Two failing workers produce one monotonic durable attempt. */
+	public function test_two_worker_failure_race_records_once_under_lock(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$request  = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$overlap  = null;
+		$service  = null;
+		$resolved = array();
+		$delivery = function () use ( &$overlap, &$service, $request ) {
+			$GLOBALS['wpdb']->get_lock_result = 0;
+			$overlap = $service->reconcile( $request['id'] );
+			$GLOBALS['wpdb']->get_lock_result = 1;
+			return new WP_Error( 'dependency_failed' );
+		};
+		$service = new BookingNotificationService( null, null, $delivery, $this->destination( $resolved ), static function (): int { return 99; } );
+		$result  = $service->reconcile( $request['id'] );
+
+		$this->assertSame( 'booking_notification_request_busy', $overlap->get_error_code() );
+		$this->assertSame( 'notification_delivery_attempted', $result['kind'] );
+		$this->assertSame( 1, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
+	}
+
+	/** A failed owner durably defers before a later worker can succeed. */
+	public function test_failure_then_success_race_rechecks_due_and_terminal_state(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$request  = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$resolved = array();
+		$failure  = new BookingNotificationService( null, null, static function () { return new WP_Error( 'dependency_failed' ); }, $this->destination( $resolved ), static function (): int { return 99; } );
+		$attempt  = $failure->reconcile( $request['id'] );
+		$too_soon = ( new BookingNotificationService( null, null, static function (): array { return array( 'recipients' => array( 10 => array( 'status' => 'inserted' ) ) ); }, $this->destination( $resolved ), static function (): int { return 99; } ) )->reconcile( $request['id'] );
+		$this->make_retry_due( $request['id'] );
+		$success = ( new BookingNotificationService( null, null, static function (): array { return array( 'recipients' => array( 10 => array( 'status' => 'inserted' ) ) ); }, $this->destination( $resolved ), static function (): int { return 99; } ) )->reconcile( $request['id'] );
+		$replay  = $failure->reconcile( $request['id'] );
+
+		$this->assertSame( 'notification_delivery_attempted', $attempt['kind'] );
+		$this->assertSame( 'booking_notification_retry_not_due', $too_soon->get_error_code() );
+		$this->assertSame( 'notification_delivered', $success['kind'] );
+		$this->assertSame( $success['id'], $replay['id'] );
+		$this->assertSame( 1, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
+	}
+
 	/** Revocation between attempts suppresses the user before retry delivery. */
 	public function test_revocation_race_reselects_exact_active_recipients(): void {
 		$booking = $this->booking();

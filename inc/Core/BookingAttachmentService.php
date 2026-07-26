@@ -107,7 +107,7 @@ class BookingAttachmentService {
 		if ( is_wp_error( $this->provider ) ) {
 			return $this->provider;
 		}
-		$booking = $this->booking( (int) ( $input['booking_id'] ?? 0 ) );
+		$booking = $this->booking( (int) ( $input['booking_id'] ?? 0 ), $trusted_admission );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
@@ -123,8 +123,8 @@ class BookingAttachmentService {
 			$booking,
 			$authorization_actor,
 			$normalized['storage_reference'],
-			function () use ( $booking, $normalized, $claim_key, &$claimed ) {
-				return $this->attach_locked( $booking, $normalized, $claim_key, $claimed );
+			function () use ( $booking, $normalized, $claim_key, &$claimed, $trusted_admission ) {
+				return $this->attach_locked( $booking, $normalized, $claim_key, $claimed, $trusted_admission );
 			}
 		);
 		return is_wp_error( $result ) && $claimed
@@ -140,7 +140,7 @@ class BookingAttachmentService {
 	 * @param string $claim_key  Site-scoped claim key.
 	 * @param bool   $claimed    Whether the provider claim was persisted.
 	 */
-	private function attach_locked( array $booking, array $normalized, string $claim_key, bool &$claimed ) {
+	private function attach_locked( array $booking, array $normalized, string $claim_key, bool &$claimed, bool $trusted_admission = false ) {
 		$metadata = $this->provider->claim( $normalized['storage_reference'], $claim_key, $normalized['purpose'] );
 		if ( is_wp_error( $metadata ) ) {
 			return $metadata;
@@ -172,6 +172,9 @@ class BookingAttachmentService {
 		}
 		if ( 'active' !== $attachment['state'] ) {
 			return new \WP_Error( 'booking_attachment_inactive', __( 'The attachment is no longer active.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		if ( $trusted_admission ) {
+			return $attachment;
 		}
 		$activity = $this->activity->append(
 			array(
@@ -952,8 +955,8 @@ class BookingAttachmentService {
 	 *
 	 * @param int $booking_id Booking ID.
 	 */
-	private function booking( int $booking_id ) {
-		$booking = $this->bookings->get( $booking_id );
+	private function booking( int $booking_id, bool $include_reservations = false ) {
+		$booking = $this->bookings->get( $booking_id, $include_reservations );
 		return is_wp_error( $booking ) || is_array( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
 	}
 

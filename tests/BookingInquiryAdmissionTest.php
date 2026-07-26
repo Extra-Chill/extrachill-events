@@ -228,7 +228,48 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertSame( 0, $observed['recovered'] );
 		$activities = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'inquiry_submitted' === $row['kind']; } ) );
-		$this->assertCount( 0, array_filter( $activities, static function ( array $row ): bool { return 'notification_requested' === $row['kind']; } ) );
+		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'notification_requested' === $row['kind']; } ) );
+	}
+
+	/** Lossy aliases and truncation never enter a second lock domain. */
+	public function test_ambiguous_idempotency_aliases_are_rejected_before_locking(): void {
+		$service = $this->service();
+		$winner  = $service->admit( $this->input( array(), 'foo' ) );
+		$locks   = $GLOBALS['wpdb']->reference_lock_queries;
+
+		$markup = $service->admit( $this->input( array(), '<b>foo</b>' ) );
+		$long   = $service->admit( $this->input( array(), str_repeat( 'x', 192 ) ) );
+
+		$this->assertIsArray( $winner );
+		$this->assertSame( 'booking_idempotency_key_invalid', $markup->get_error_code() );
+		$this->assertSame( 'booking_idempotency_key_invalid', $long->get_error_code() );
+		$this->assertSame( $locks, $GLOBALS['wpdb']->reference_lock_queries );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
+	}
+
+	/** Operators cannot observe or mutate a reservation while staging overlaps. */
+	public function test_operator_overlap_cannot_observe_or_mutate_reservation(): void {
+		$observed = array();
+		$this->provider->after_stage = static function () use ( &$observed ): void {
+			$rows                = $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ];
+			$reservation         = reset( $rows );
+			$repository          = new BookingRepository();
+			$observed['get']     = $repository->get( $reservation['id'] );
+			$observed['list']    = $repository->list( array( 'venue_term_id' => 55 ) );
+			$observed['mutate']  = ( new BookingLifecycle() )->assign( $reservation['id'], null, $reservation['version'], 10 );
+			$observed['status']  = $reservation['status'];
+		};
+
+		$result = $this->service()->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ), 'hidden-reservation' ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'admission_pending', $observed['status'] );
+		$this->assertNull( $observed['get'] );
+		$this->assertSame( array(), $observed['list'] );
+		$this->assertSame( 'booking_not_found', $observed['mutate']->get_error_code() );
+		$booking = reset( $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
+		$this->assertSame( 'submitted', $booking['status'] );
+		$this->assertNull( $booking['admission_owner_token'] );
 	}
 
 	/** Verify attachment bytes are part of exact inquiry idempotency. */

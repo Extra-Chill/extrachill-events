@@ -486,6 +486,9 @@ final class BookingWpdb {
 		$this->rows[ $table ][ $key ] = $row;
 		if ( false !== strpos( $table, 'ec_bookings' ) && $this->race_booking_insert ) {
 			$this->race_booking_insert = false;
+			$this->rows[ $table ][ $this->insert_id ]['status']                = 'submitted';
+			$this->rows[ $table ][ $this->insert_id ]['admission_owner_token'] = null;
+			++$this->rows[ $table ][ $this->insert_id ]['version'];
 			if ( null !== $this->race_booking_hash ) {
 				$this->rows[ $table ][ $this->insert_id ]['inquiry_request_hash'] = $this->race_booking_hash;
 				$this->race_booking_hash = null;
@@ -748,6 +751,9 @@ final class BookingWpdb {
 				$this->lock_sequence[] = 'booking:' . (int) $match[1];
 			}
 			$row = $this->rows[ $table ][ (int) $match[1] ] ?? null;
+			if ( is_array( $row ) && false !== strpos( $query, "status <> 'admission_pending'" ) && 'admission_pending' === ( $row['status'] ?? '' ) ) {
+				return null;
+			}
 			if ( is_array( $row ) && false !== strpos( $query, 'AS database_now' ) ) {
 				$row['database_now'] = $this->current_database_time();
 			}
@@ -862,7 +868,7 @@ final class BookingWpdb {
 		}
 		if ( preg_match( "/WHERE public_id = '([^']+)'/", $query, $match ) ) {
 			foreach ( $this->rows[ $table ] ?? array() as $row ) {
-				if ( stripslashes( $match[1] ) === $row['public_id'] ) {
+				if ( stripslashes( $match[1] ) === $row['public_id'] && ( false === strpos( $query, "status <> 'admission_pending'" ) || 'admission_pending' !== ( $row['status'] ?? '' ) ) ) {
 					return $row; }
 			}
 		}
@@ -1030,6 +1036,9 @@ final class BookingWpdb {
 		$is_hold       = false !== strpos( $query, 'ec_booking_holds' );
 		$table         = $is_delivery ? $this->prefix . 'ec_booking_attachment_deliveries' : ( $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) ) );
 		$rows          = array_values( $this->rows[ $table ] ?? array() );
+		if ( false !== strpos( $query, "status <> 'admission_pending'" ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) { return 'admission_pending' !== ( $row['status'] ?? '' ); } ) );
+		}
 		if ( $is_activity && false !== strpos( $query, 'is_communication = 1' ) ) {
 			$rows = array_values( array_filter( $rows, static function ( $row ) { return 1 === (int) ( $row['is_communication'] ?? 0 ); } ) );
 		}

@@ -171,19 +171,12 @@ class BookingNotificationService {
 					$retry = true;
 					continue;
 				}
-				$record = $this->record_reconcile_failure( $request, $result );
-				if ( is_wp_error( $record ) ) {
-					return $record;
-				}
-				$will_retry = 'notification_suppressed' !== $record['kind'];
-				$retry      = $retry || $will_retry;
-				if ( ! $will_retry ) {
-					++$completed;
-				}
-				continue;
+				return $result;
 			}
 			if ( in_array( $result['kind'] ?? '', array( 'notification_delivered', 'notification_suppressed' ), true ) ) {
 				++$completed;
+			} elseif ( 'notification_delivery_attempted' === ( $result['kind'] ?? '' ) ) {
+				$retry = true;
 			}
 		}
 		if ( $retry || count( $sources ) === $limit || count( $requests ) === $limit ) {
@@ -203,7 +196,13 @@ class BookingNotificationService {
 		if ( is_wp_error( $lock ) ) {
 			return $lock;
 		}
-		$result   = $this->reconcile_locked( $request_activity_id );
+		$result = $this->reconcile_locked( $request_activity_id );
+		if ( is_wp_error( $result ) && ! in_array( $result->get_error_code(), array( 'booking_notification_request_invalid', 'booking_notification_retry_not_due', 'booking_notification_retry_schedule_read_failed' ), true ) ) {
+			$request = $this->activity->get( $request_activity_id );
+			if ( is_array( $request ) && 'notification_requested' === ( $request['kind'] ?? '' ) ) {
+				$result = $this->record_reconcile_failure( $request, $result );
+			}
+		}
 		$released = $this->release_request_lock( $lock );
 		return is_wp_error( $released ) ? $released : $result;
 	}

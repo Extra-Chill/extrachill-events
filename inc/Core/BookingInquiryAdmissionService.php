@@ -87,6 +87,11 @@ final class BookingInquiryAdmissionService {
 		if ( is_wp_error( $scope ) ) {
 			return $this->public_error( $scope );
 		}
+		$key = self::canonical_idempotency_key( $input['idempotency_key'] ?? '' );
+		if ( is_wp_error( $key ) ) {
+			return $this->public_error( $key );
+		}
+		$input['idempotency_key'] = $key;
 
 		$files = $this->preflight_files( $input['attachments'] ?? array() );
 		if ( is_wp_error( $files ) ) {
@@ -108,13 +113,14 @@ final class BookingInquiryAdmissionService {
 
 	/** Execute reservation, attachments, and publication under one owner lock. */
 	private function admit_locked( array $input, ?int $actor_id, array $files ) {
-		$manifest = array_map(
+		$owner_token = wp_generate_uuid4();
+		$manifest    = array_map(
 			static function ( array $file ): array {
 				return $file['manifest'];
 			},
 			$files
 		);
-		$booking  = $this->lifecycle->reserve_inquiry( $input, $actor_id, $manifest ? array( 'attachments' => $manifest ) : array() );
+		$booking     = $this->lifecycle->reserve_inquiry( $input, $actor_id, $manifest ? array( 'attachments' => $manifest ) : array(), $owner_token );
 		if ( is_wp_error( $booking ) ) {
 			return $this->public_error( $booking );
 		}
@@ -205,6 +211,18 @@ final class BookingInquiryAdmissionService {
 	/** Return the stable complete-saga lock identity. */
 	public static function inquiry_lock_name( int $venue_id, string $idempotency_key ): string {
 		return 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
+	}
+
+	/** Canonicalize without allowing two lossy raw forms to alias. */
+	public static function canonical_idempotency_key( $raw ) {
+		if ( ! is_string( $raw ) && ! is_int( $raw ) ) {
+			return new \WP_Error( 'booking_idempotency_key_invalid', __( 'Inquiry idempotency keys must be plain text.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$key = trim( (string) $raw );
+		if ( '' === $key || strlen( $key ) > 191 || sanitize_text_field( $key ) !== $key ) {
+			return new \WP_Error( 'booking_idempotency_key_invalid', __( 'Inquiry idempotency keys must be unambiguous plain text no longer than 191 bytes.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		return $key;
 	}
 
 	/** Release the complete-saga lock without guessing on uncertainty. */
@@ -328,7 +346,12 @@ final class BookingInquiryAdmissionService {
 		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensation boundary.
 			return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry requires reconciliation.', 'extrachill-events' ) );
 		}
-		foreach ( array( $this->activity->discard_for_booking( (int) $booking['id'] ), $this->attachments->discard_for_booking( (int) $booking['id'] ), $this->bookings->discard_inquiry( $booking ) ) as $discarded ) {
+		$current = $this->bookings->get_for_update( (int) $booking['id'], true );
+		if ( ! is_array( $current ) || 'admission_pending' !== $current['status'] || ( $current['admission_owner_token'] ?? null ) !== ( $booking['admission_owner_token'] ?? null ) || (int) $current['version'] !== (int) $booking['version'] ) {
+			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Ownership mismatch rollback.
+			return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry reservation changed ownership.', 'extrachill-events' ) );
+		}
+		foreach ( array( $this->activity->discard_for_booking( (int) $booking['id'] ), $this->attachments->discard_for_booking( (int) $booking['id'] ), $this->bookings->discard_inquiry( $current ) ) as $discarded ) {
 			if ( is_wp_error( $discarded ) ) {
 				$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Compensation rollback.
 				return new \WP_Error( 'booking_inquiry_compensation_uncertain', __( 'The failed inquiry requires reconciliation.', 'extrachill-events' ) );

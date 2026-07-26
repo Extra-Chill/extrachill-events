@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '10';
+	public const SCHEMA_VERSION = '11';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -111,6 +111,7 @@ class BookingSchema {
 			contact_phone VARCHAR(64) NULL,
 			inquiry_idempotency_key VARCHAR(191) NULL,
 			inquiry_request_hash CHAR(64) NULL,
+			admission_owner_token CHAR(36) NULL,
 			requested_space_key VARCHAR(64) NULL,
 			space_key VARCHAR(64) NULL,
 			status VARCHAR(32) NOT NULL DEFAULT 'submitted',
@@ -669,6 +670,7 @@ class BookingSchema {
 					'contact_phone'           => $required( 'varchar(64)', true ),
 					'inquiry_idempotency_key' => $required( 'varchar(191)', true ),
 					'inquiry_request_hash'    => $required( 'char(64)', true ),
+					'admission_owner_token'   => $required( 'char(36)', true ),
 					'requested_space_key'     => $required( 'varchar(64)', true ),
 					'space_key'               => $required( 'varchar(64)', true ),
 					'status'                  => $required( 'varchar(32)', false, array( 'default' => 'submitted' ) ),

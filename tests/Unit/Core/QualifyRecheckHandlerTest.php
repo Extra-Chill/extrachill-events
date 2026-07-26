@@ -41,6 +41,9 @@ class QualifyRecheckHandlerTest extends TestCase {
 		if ( function_exists( 'wp_unregister_ability' ) && wp_has_ability( 'extrachill/qualify-venue' ) ) {
 			wp_unregister_ability( 'extrachill/qualify-venue' );
 		}
+		if ( function_exists( 'wp_unregister_ability_category' ) && wp_has_ability_category( 'extrachill-events-tests' ) ) {
+			wp_unregister_ability_category( 'extrachill-events-tests' );
+		}
 		$GLOBALS['wpdb'] = $this->original_wpdb;
 		unset(
 			$GLOBALS['ec_test_action_scheduler'],
@@ -56,11 +59,21 @@ class QualifyRecheckHandlerTest extends TestCase {
 		if ( wp_has_ability( 'extrachill/qualify-venue' ) ) {
 			wp_unregister_ability( 'extrachill/qualify-venue' );
 		}
-		\WP_Abilities_Registry::get_instance()->register(
+		if ( ! wp_has_ability_category( 'extrachill-events-tests' ) ) {
+			\WP_Ability_Categories_Registry::get_instance()->register(
+				'extrachill-events-tests',
+				array(
+					'label'       => 'Extra Chill Events tests',
+					'description' => 'Test-only abilities for managed runtime validation.',
+				)
+			);
+		}
+		$ability = \WP_Abilities_Registry::get_instance()->register(
 			'extrachill/qualify-venue',
 			array(
 				'label'               => 'Qualify venue test',
 				'description'         => 'Returns the controlled qualification result.',
+				'category'            => 'extrachill-events-tests',
 				'input_schema'        => array(
 					'type'       => 'object',
 					'properties' => array(
@@ -72,6 +85,9 @@ class QualifyRecheckHandlerTest extends TestCase {
 				'permission_callback' => '__return_true',
 			)
 		);
+		if ( null === $ability ) {
+			throw new \RuntimeException( 'Failed to register the controlled qualification ability.' );
+		}
 	}
 
 	private function seed_paused_flow( int $flow_id ): void {

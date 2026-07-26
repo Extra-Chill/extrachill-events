@@ -225,7 +225,7 @@ if ( ! function_exists( 'delete_option' ) ) {
 }
 if ( ! function_exists( 'get_current_user_id' ) ) {
 	function get_current_user_id() {
-		return 12; }
+		return $GLOBALS['ec_artist_test']['current_user_id'] ?? 12; }
 }
 if ( ! function_exists( 'get_userdata' ) ) {
 	function get_userdata( $user_id ) {
@@ -233,6 +233,9 @@ if ( ! function_exists( 'get_userdata' ) ) {
 }
 if ( ! function_exists( 'user_can' ) ) {
 	function user_can( $user_id, $capability ) {
+		if ( isset( $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ] ) && array_key_exists( $capability, $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ] ) ) {
+			return (bool) $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ][ $capability ];
+		}
 		return (int) $user_id > 0 && 'manage_options' !== $capability; }
 }
 if ( ! function_exists( 'ec_feature_available' ) ) {
@@ -668,6 +671,7 @@ final class BookingWpdb {
 		$is_hold       = false !== strpos( $query, 'ec_booking_holds' );
 		$is_sales      = false !== strpos( $query, 'ec_booking_sales_reports' );
 		$is_settlement = false !== strpos( $query, 'ec_booking_settlements' );
+		$is_membership = false !== strpos( $query, 'ec_venue_members' );
 		$database_now  = $this->current_database_time();
 		if ( null !== $this->reads_before_failure ) {
 			if ( 0 === $this->reads_before_failure ) {
@@ -680,7 +684,15 @@ final class BookingWpdb {
 			$this->last_error = 'simulated row read failure';
 			return null;
 		}
-		$table = $is_sales ? $this->prefix . 'ec_booking_sales_reports' : ( $is_settlement ? $this->prefix . 'ec_booking_settlements' : ( $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) ) ) );
+		$table = $is_membership ? $this->prefix . 'ec_venue_members' : ( $is_sales ? $this->prefix . 'ec_booking_sales_reports' : ( $is_settlement ? $this->prefix . 'ec_booking_settlements' : ( $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) ) ) ) );
+		if ( $is_membership && preg_match( '/WHERE venue_term_id = (\d+) AND user_id = (\d+)/', $query, $membership ) ) {
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( (int) $row['venue_term_id'] === (int) $membership[1] && (int) $row['user_id'] === (int) $membership[2] ) {
+					return $row;
+				}
+			}
+			return null;
+		}
 		if ( $is_sales && preg_match( "/WHERE provider = '([^']+)' AND external_report_id = '([^']+)'/", $query, $external ) ) {
 			foreach ( $this->rows[ $table ] ?? array() as $row ) {
 				if ( $row['provider'] === stripslashes( $external[1] ) && $row['external_report_id'] === stripslashes( $external[2] ) ) {
@@ -707,7 +719,7 @@ final class BookingWpdb {
 			usort( $rows, static function ( $left, $right ) { return $right['id'] <=> $left['id']; } );
 			return $rows[0] ?? null;
 		}
-		if ( ! $is_attachment && ! $is_activity && ! $is_state && ! $is_hold && ! $is_sales && ! $is_settlement && false !== strpos( $query, 'FOR UPDATE' ) ) {
+		if ( ! $is_attachment && ! $is_activity && ! $is_state && ! $is_hold && ! $is_sales && ! $is_settlement && ! $is_membership && false !== strpos( $query, 'FOR UPDATE' ) ) {
 			++$this->booking_lock_queries;
 			if ( is_callable( $this->after_booking_lock ) ) {
 				$callback                 = $this->after_booking_lock;
@@ -716,7 +728,7 @@ final class BookingWpdb {
 			}
 		}
 		if ( preg_match( '/WHERE id = (\d+)/', $query, $match ) ) {
-			if ( ! $is_attachment && ! $is_activity && ! $is_state && ! $is_hold && ! $is_sales && ! $is_settlement && false !== strpos( $query, 'FOR UPDATE' ) ) {
+			if ( ! $is_attachment && ! $is_activity && ! $is_state && ! $is_hold && ! $is_sales && ! $is_settlement && ! $is_membership && false !== strpos( $query, 'FOR UPDATE' ) ) {
 				$this->lock_sequence[] = 'booking:' . (int) $match[1];
 			}
 			$row = $this->rows[ $table ][ (int) $match[1] ] ?? null;

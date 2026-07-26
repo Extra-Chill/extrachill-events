@@ -40,6 +40,11 @@ final class TicketSettlementTest extends TestCase {
 						'taxonomy' => 'venue',
 						'name'     => 'Settlement Room',
 					),
+					56 => (object) array(
+						'term_id'  => 56,
+						'taxonomy' => 'venue',
+						'name'     => 'Other Room',
+					),
 				),
 			),
 			'meta'          => array(),
@@ -69,6 +74,7 @@ final class TicketSettlementTest extends TestCase {
 		$this->assertSame( 'bigint', $sales['columns']['tickets_sold']['Type'] );
 		$this->assertTrue( $sales['indexes']['provider_external_report']['unique'] );
 		$this->assertTrue( $settlements['indexes']['booking_id']['unique'] );
+		$this->assertArrayHasKey( 'booking_version', $settlements['columns'] );
 		$this->assertArrayHasKey( 'evidence_hash', $settlements['columns'] );
 		$this->assertArrayHasKey( 'payment_reference', $settlements['columns'] );
 	}
@@ -146,6 +152,55 @@ final class TicketSettlementTest extends TestCase {
 		$this->assertSame( 'settlement_amount_out_of_range', TicketSettlementService::basis_points_amount( PHP_INT_MIN, 1 )->get_error_code() );
 	}
 
+	public function test_evidence_hash_uses_content_fingerprints_and_detects_tampering(): void {
+		$booking  = $this->create_event_booking();
+		$report   = $this->service->record_sales( $this->report_input( $booking['id'], 'integrity-1' ), 12 );
+		$report_2 = $this->service->record_sales( $this->report_input( $booking['id'], 'integrity-2' ), 12 );
+		$preview  = $this->preview( $booking['id'] );
+		$this->assertSame(
+			hash(
+				'sha256',
+				wp_json_encode(
+					array(
+						array( 'id' => $report['id'], 'request_hash' => $report['request_hash'] ),
+						array( 'id' => $report_2['id'], 'request_hash' => $report_2['request_hash'] ),
+					)
+				)
+			),
+			$preview['evidence_hash']
+		);
+
+		$sales = BookingSchema::sales_reports_table();
+		$GLOBALS['wpdb']->rows[ $sales ][ $report['id'] ]['gross_minor'] = 999999;
+		$tampered = $this->service->calculate(
+			array(
+				'booking_id'   => $booking['id'],
+				'basis'        => 'gross_ticket_sales',
+				'basis_points' => 2000,
+				'currency'     => 'USD',
+			),
+			12
+		);
+		$this->assertSame( 'sales_report_integrity_failed', $tampered->get_error_code() );
+		$GLOBALS['wpdb']->rows[ $sales ][ $report['id'] ]['gross_minor'] = $report['gross_minor'];
+
+		$settlement = $this->service->finalize( $this->finalize_input( $preview ), 12 );
+		$GLOBALS['wpdb']->rows[ BookingSchema::settlements_table() ][ $settlement['id'] ]['evidence_hash'] = str_repeat( '0', 64 );
+		$this->assertSame( 'settlement_evidence_integrity_failed', $this->service->finalize( $this->finalize_input( $preview ), 12 )->get_error_code() );
+		$this->assertSame(
+			'settlement_evidence_integrity_failed',
+			$this->service->void(
+				array(
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $preview['booking_version'],
+					'expected_version'         => 1,
+					'reason'                   => 'Must not transition corrupt evidence.',
+				),
+				12
+			)->get_error_code()
+		);
+	}
+
 	public function test_finalization_rejects_stale_evidence_and_freezes_formula_and_rate(): void {
 		$booking = $this->create_event_booking();
 		$this->service->record_sales( $this->report_input( $booking['id'], 'first' ), 12 );
@@ -169,6 +224,10 @@ final class TicketSettlementTest extends TestCase {
 		$this->assertSame( 'settlement_already_finalized', $this->service->finalize( $changed_rate, 12 )->get_error_code() );
 
 		$this->service->record_sales( $this->report_input( $booking['id'], 'after-finalization' ), 12 );
+		$this->assertSame( $settlement['id'], $this->service->finalize( $this->finalize_input( $preview ), 12 )['id'], 'A lost-response retry must ignore later evidence.' );
+		$this->bookings->update( $booking['id'], array( 'artist_name' => 'Revised After Finalization' ), $preview['booking_version'] );
+		$this->assertSame( $settlement['id'], $this->service->finalize( $this->finalize_input( $preview ), 12 )['id'], 'A lost-response retry must ignore later booking revisions.' );
+		$this->assertSame( 'settlement_already_finalized', $this->service->finalize( $changed_rate, 12 )->get_error_code(), 'Changed terms must still conflict after later evidence and booking revisions.' );
 		$frozen = $this->service->get( $booking['id'], 12 );
 		$this->assertSame( $settlement['included_report_ids'], $frozen['included_report_ids'] );
 		$this->assertSame( $settlement['amount_due_minor'], $frozen['amount_due_minor'] );
@@ -181,13 +240,17 @@ final class TicketSettlementTest extends TestCase {
 		$this->bookings->update( $booking['id'], array( 'artist_name' => 'Changed Artist' ), $preview['booking_version'] );
 		$this->assertSame( 'settlement_booking_version_conflict', $this->service->finalize( $this->finalize_input( $preview ), 12 )->get_error_code() );
 
-		$preview    = $this->preview( $booking['id'] );
-		$settlement = $this->service->finalize( $this->finalize_input( $preview ), 12 );
-		$paid       = $this->service->mark_paid(
+		$preview                = $this->preview( $booking['id'] );
+		$settlement             = $this->service->finalize( $this->finalize_input( $preview ), 12 );
+		$booking_row            =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ];
+		$booking_row['status']  = 'completed';
+		$booking_row['version'] = $preview['booking_version'] + 1;
+		$paid                   = $this->service->mark_paid(
 			array(
-				'booking_id'        => $booking['id'],
-				'expected_version'  => 1,
-				'payment_reference' => 'ach-2026-001',
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $booking_row['version'],
+				'expected_version'         => 1,
+				'payment_reference'        => 'ach-2026-001',
 			),
 			12
 		);
@@ -200,9 +263,10 @@ final class TicketSettlementTest extends TestCase {
 			'settlement_version_conflict',
 			$this->service->mark_paid(
 				array(
-					'booking_id'        => $booking['id'],
-					'expected_version'  => 1,
-					'payment_reference' => 'duplicate',
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $booking_row['version'],
+					'expected_version'         => 1,
+					'payment_reference'        => 'duplicate',
 				),
 				12
 			)->get_error_code()
@@ -211,9 +275,10 @@ final class TicketSettlementTest extends TestCase {
 			'settlement_status_conflict',
 			$this->service->void(
 				array(
-					'booking_id'       => $booking['id'],
-					'expected_version' => 2,
-					'reason'           => 'Cannot void paid settlement',
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $booking_row['version'],
+					'expected_version'         => 2,
+					'reason'                   => 'Cannot void paid settlement',
 				),
 				12
 			)->get_error_code()
@@ -229,11 +294,26 @@ final class TicketSettlementTest extends TestCase {
 		$this->service->record_sales( $this->report_input( $void_booking['id'], 'void-evidence' ), 12 );
 		$void_preview = $this->preview( $void_booking['id'] );
 		$this->service->finalize( $this->finalize_input( $void_preview ), 12 );
+		$void_row            =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $void_booking['id'] ];
+		$void_row['version'] = $void_row['version'] + 1;
+		$this->assertSame(
+			'settlement_booking_version_conflict',
+			$this->service->void(
+				array(
+					'booking_id'               => $void_booking['id'],
+					'expected_booking_version' => $void_preview['booking_version'],
+					'expected_version'         => 1,
+					'reason'                   => 'Stale void attempt.',
+				),
+				12
+			)->get_error_code()
+		);
 		$voided = $this->service->void(
 			array(
-				'booking_id'       => $void_booking['id'],
-				'expected_version' => 1,
-				'reason'           => 'Certified report withdrawn.',
+				'booking_id'               => $void_booking['id'],
+				'expected_booking_version' => $void_row['version'],
+				'expected_version'         => 1,
+				'reason'                   => 'Certified report withdrawn.',
 			),
 			12
 		);
@@ -241,6 +321,53 @@ final class TicketSettlementTest extends TestCase {
 		$this->assertSame( 12, $voided['voided_by_user_id'] );
 		$this->assertSame( 'Certified report withdrawn.', $voided['void_reason'] );
 		$this->assertNotNull( $voided['voided_at'] );
+	}
+
+	public function test_payment_revalidates_booking_lifecycle_under_lock(): void {
+		$booking = $this->create_event_booking();
+		$this->service->record_sales( $this->report_input( $booking['id'], 'race-payment' ), 12 );
+		$preview = $this->preview( $booking['id'] );
+		$this->service->finalize( $this->finalize_input( $preview ), 12 );
+		$row =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ];
+		$this->assertSame(
+			'settlement_payment_booking_status_conflict',
+			$this->service->mark_paid(
+				array(
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $row['version'],
+					'expected_version'         => 1,
+					'payment_reference'        => 'too-early',
+				),
+				12
+			)->get_error_code()
+		);
+
+		$row['status']                       = 'confirmed';
+		$row['version']                      = $row['version'] + 1;
+		$expected                            = $row['version'];
+		$db                                  = $GLOBALS['wpdb'];
+		$GLOBALS['wpdb']->after_booking_lock = static function () use ( $db, &$row ): void {
+			$db->simulate_external_commit(
+				static function () use ( &$row ): void {
+					$row['status']  = 'cancelled';
+					$row['version'] = $row['version'] + 1;
+				}
+			);
+		};
+		$this->assertSame(
+			'settlement_booking_version_conflict',
+			$this->service->mark_paid(
+				array(
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $expected,
+					'expected_version'         => 1,
+					'payment_reference'        => 'lost-race',
+				),
+				12
+			)->get_error_code()
+		);
+		$this->assertSame( 'cancelled', $this->bookings->get( $booking['id'] )['status'] );
+		$this->assertSame( 'finalized', $this->service->get( $booking['id'], 12 )['status'] );
 	}
 
 	public function test_finance_authority_and_ability_contracts_are_explicit(): void {
@@ -261,6 +388,46 @@ final class TicketSettlementTest extends TestCase {
 		}
 		$this->assertFalse( $GLOBALS['ec_artist_test']['abilities']['extrachill/finalize-booking-settlement']['meta']['annotations']['idempotent'] );
 		$this->assertSame( array( 'manual', 'csv_certified' ), $GLOBALS['ec_artist_test']['abilities']['extrachill/record-booking-ticket-sales']['input_schema']['properties']['source_type']['enum'] );
+		$this->assertContains( 'expected_booking_version', $GLOBALS['ec_artist_test']['abilities']['extrachill/mark-booking-settlement-paid']['input_schema']['required'] );
+
+		$booking = $this->create_event_booking();
+		$record  = call_user_func( $GLOBALS['ec_artist_test']['abilities']['extrachill/record-booking-ticket-sales']['execute_callback'], $this->report_input( $booking['id'], 'ability-execution' ) );
+		$this->assertIsArray( $record );
+		$preview = call_user_func(
+			$GLOBALS['ec_artist_test']['abilities']['extrachill/calculate-booking-settlement']['execute_callback'],
+			array(
+				'booking_id'   => $booking['id'],
+				'basis'        => 'gross_ticket_sales',
+				'basis_points' => 2000,
+				'currency'     => 'USD',
+			)
+		);
+		$this->assertIsArray( $preview );
+		$settlement = call_user_func( $GLOBALS['ec_artist_test']['abilities']['extrachill/finalize-booking-settlement']['execute_callback'], $this->finalize_input( $preview ) );
+		$this->assertSame( $preview['booking_version'], $settlement['booking_version'] );
+
+		$now = gmdate( 'Y-m-d H:i:s' );
+		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ] = array(
+			1 => $this->membership_row( 1, 55, 12, true, $now ),
+			2 => $this->membership_row( 2, 55, 13, false, $now ),
+			3 => $this->membership_row( 3, 56, 14, true, $now ),
+		);
+		$GLOBALS['ec_artist_test']['user_caps'][15]                  = array(
+			'manage_options'      => true,
+			'access_events_admin' => true,
+		);
+		$canonical_abilities = new TicketSettlementAbilities( $this->service, $this->bookings, new VenueAuthorization() );
+		foreach ( array(
+			12 => true,
+			13 => false,
+			14 => false,
+			15 => false,
+		) as $user_id => $expected ) {
+			$GLOBALS['ec_artist_test']['current_user_id'] = $user_id;
+			$result                                       = $canonical_abilities->can_manage_booking_finances( array( 'booking_id' => $booking['id'] ) );
+			$this->assertSame( $expected, true === $result, 'Canonical finance policy mismatch for user ' . $user_id );
+		}
+		$GLOBALS['ec_artist_test']['current_user_id'] = 12;
 	}
 
 	private function create_event_booking(): array {
@@ -317,6 +484,21 @@ final class TicketSettlementTest extends TestCase {
 			'currency'                 => $preview['currency'],
 			'formula_version'          => $preview['formula_version'],
 			'adjustment_minor'         => $preview['adjustment_minor'],
+		);
+	}
+
+	private function membership_row( int $id, int $venue_id, int $user_id, bool $is_owner, string $now ): array {
+		return array(
+			'id'                 => $id,
+			'venue_term_id'      => $venue_id,
+			'user_id'            => $user_id,
+			'is_owner'           => $is_owner ? 1 : 0,
+			'status'             => VenueAuthorization::STATUS_ACTIVE,
+			'version'            => 1,
+			'created_by_user_id' => 12,
+			'created_at'         => $now,
+			'updated_at'         => $now,
+			'revoked_at'         => null,
 		);
 	}
 }

@@ -250,15 +250,16 @@ class TicketSettlementAbilities {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'booking_id'       => $this->positive_id_schema(),
-				'expected_version' => $this->positive_id_schema(),
-				$field             => array(
+				'booking_id'               => $this->positive_id_schema(),
+				'expected_booking_version' => $this->positive_id_schema(),
+				'expected_version'         => $this->positive_id_schema(),
+				$field                     => array(
 					'type'      => 'string',
 					'minLength' => 1,
 					'maxLength' => 'reason' === $field ? 1000 : 191,
 				),
 			),
-			'required'             => array( 'booking_id', 'expected_version', $field ),
+			'required'             => array( 'booking_id', 'expected_booking_version', 'expected_version', $field ),
 			'additionalProperties' => false,
 		);
 	}
@@ -367,6 +368,7 @@ class TicketSettlementAbilities {
 					'enum' => TicketSettlementService::STATUSES,
 				),
 				'version'              => $this->positive_id_schema(),
+				'booking_version'      => $this->positive_id_schema(),
 				'basis'                => array(
 					'type' => 'string',
 					'enum' => TicketSettlementService::BASES,
@@ -404,7 +406,7 @@ class TicketSettlementAbilities {
 				'created_at'           => $this->datetime_schema(),
 				'updated_at'           => $this->datetime_schema(),
 			),
-			'required'             => array( 'id', 'booking_id', 'event_id', 'venue_term_id', 'status', 'version', 'basis', 'basis_points', 'currency', 'formula_version', 'included_report_ids', 'evidence_hash', 'basis_amount_minor', 'adjustment_minor', 'amount_due_minor', 'finalized_by_user_id', 'finalized_at', 'paid_by_user_id', 'paid_at', 'payment_reference', 'voided_by_user_id', 'voided_at', 'void_reason', 'created_at', 'updated_at' ),
+			'required'             => array( 'id', 'booking_id', 'event_id', 'venue_term_id', 'status', 'version', 'booking_version', 'basis', 'basis_points', 'currency', 'formula_version', 'included_report_ids', 'evidence_hash', 'basis_amount_minor', 'adjustment_minor', 'amount_due_minor', 'finalized_by_user_id', 'finalized_at', 'paid_by_user_id', 'paid_at', 'payment_reference', 'voided_by_user_id', 'voided_at', 'void_reason', 'created_at', 'updated_at' ),
 			'additionalProperties' => false,
 		);
 	}

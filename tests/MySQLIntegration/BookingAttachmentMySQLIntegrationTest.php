@@ -94,6 +94,20 @@ final class BookingAttachmentMySQLProbeProvider implements BookingPrivateFilePro
 	}
 }
 
+/** Settlement service probe that races only after production locks evidence. */
+final class TicketSettlementMySQLProbeService extends TicketSettlementService {
+	/** @var callable|null */
+	public $evidence_probe;
+
+	/** Invoke the configured contender while finalize owns the evidence range. */
+	protected function after_evidence_locked( array $booking ): void {
+		unset( $booking );
+		if ( is_callable( $this->evidence_probe ) ) {
+			( $this->evidence_probe )();
+		}
+	}
+}
+
 /** Exercises production repositories, authorization, transactions, and cleanup. */
 final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	/** Independent contender connection.
@@ -276,7 +290,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$booking = $bookings->claim_event( $booking['id'], $event_id, $booking['version'] );
 		$this->assertIsArray( $booking, is_wp_error( $booking ) ? $booking->get_error_code() : '' );
 
-		$service = new TicketSettlementService();
+		$service = new TicketSettlementMySQLProbeService();
 		$report  = $service->record_sales(
 			array(
 				'booking_id'         => $booking['id'],
@@ -299,9 +313,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		);
 		$this->assertIsArray( $report, is_wp_error( $report ) ? $report->get_error_code() : '' );
 
-		$sales = BookingSchema::sales_reports_table();
-		$this->assertNotFalse( $wpdb->query( 'START TRANSACTION' ) );
-		$wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$sales} WHERE booking_id = %d AND currency = %s ORDER BY id ASC FOR UPDATE", $booking['id'], 'USD' ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Mirrors production finalization evidence lock.
+		$sales        = BookingSchema::sales_reports_table();
 		$external     = wp_json_encode(
 			array(
 				'version' => 1,
@@ -313,16 +325,6 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$external_id  = 'mysql-settlement-contender';
 		$request_hash = hash( 'sha256', 'contender' );
 		$sql->bind_param( 'iiissssi', $booking['id'], $event_id, $this->venue_id, $provider, $external_id, $external, $request_hash, $this->actor_id );
-		try {
-			$inserted                     = $sql->execute();
-			$this->evidence_insert_waited = false === $inserted && 1205 === $sql->errno;
-		} catch ( mysqli_sql_exception $exception ) {
-			$this->evidence_insert_waited = 1205 === $exception->getCode();
-		}
-		$this->contender->rollback();
-		$this->assertTrue( $this->evidence_insert_waited, 'Concurrent ticket evidence bypassed the locked settlement snapshot.' );
-		$wpdb->query( 'ROLLBACK' );
-
 		$preview = $service->calculate(
 			array(
 				'booking_id'   => $booking['id'],
@@ -333,7 +335,16 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			$this->actor_id
 		);
 		$this->assertSame( 20000, $preview['amount_due_minor'] ?? null, is_wp_error( $preview ) ? $preview->get_error_code() : '' );
-		$settlement = $service->finalize(
+		$service->evidence_probe = function () use ( $sql ): void {
+			try {
+				$inserted                     = $sql->execute();
+				$this->evidence_insert_waited = false === $inserted && 1205 === $sql->errno;
+			} catch ( mysqli_sql_exception $exception ) {
+				$this->evidence_insert_waited = 1205 === $exception->getCode();
+			}
+			$this->contender->rollback();
+		};
+		$settlement              = $service->finalize(
 			array(
 				'booking_id'               => $booking['id'],
 				'expected_booking_version' => $booking['version'],
@@ -347,11 +358,28 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			$this->actor_id
 		);
 		$this->assertSame( 'finalized', $settlement['status'] ?? null, is_wp_error( $settlement ) ? $settlement->get_error_code() : '' );
+		$this->assertTrue( $this->evidence_insert_waited, 'Concurrent ticket evidence bypassed production finalize() evidence locking.' );
+		$next_booking_version = $booking['version'] + 1;
+		$this->assertSame(
+			1,
+			$wpdb->update(
+				BookingSchema::bookings_table(),
+				array(
+					'status'  => 'completed',
+					'version' => $next_booking_version,
+				),
+				array(
+					'id'      => $booking['id'],
+					'version' => $booking['version'],
+				)
+			)
+		);
 		$paid = $service->mark_paid(
 			array(
-				'booking_id'        => $booking['id'],
-				'expected_version'  => 1,
-				'payment_reference' => 'mysql-ach-proof',
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $next_booking_version,
+				'expected_version'         => 1,
+				'payment_reference'        => 'mysql-ach-proof',
 			),
 			$this->actor_id
 		);

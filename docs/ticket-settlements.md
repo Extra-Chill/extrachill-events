@@ -11,7 +11,8 @@ they correct. Money and counts are signed integers in minor units.
 
 `ec_booking_settlements` stores at most one frozen settlement per booking. It
 captures basis, basis-point rate, currency, formula version, ordered evidence
-IDs and hash, basis amount, signed adjustment, amount due, finalizer, and
+IDs and canonical `(id, request_hash)` content hash, frozen booking version,
+basis amount, signed adjustment, amount due, finalizer, and
 terminal paid or void audit. Finalized evidence and terms are never rewritten.
 
 Schema version 9 creates or repairs both InnoDB tables through the existing
@@ -33,6 +34,16 @@ venue access. Finalize, paid, and void require active venue ownership through
 Transactions lock venue membership before booking, evidence, and settlement
 rows. Finalization requires both the calculated booking version and ordered
 evidence IDs, so stale and concurrent writes fail with a conflict.
+An exact lost-response retry is resolved against the already-frozen booking
+version, terms, formula, and evidence before current mutable booking/evidence
+is considered, so later reports or booking revisions do not break idempotency.
+Every evidence read recomputes its immutable request hash; frozen retries also
+recompute the ordered settlement evidence hash.
+
+Paid and void transitions require both the settlement version and current
+booking version while holding the booking row lock. Payment additionally
+requires a `completed` booking, making cancellation and payment mutually
+exclusive lifecycle outcomes rather than independent stale writes.
 
 ## Formula
 

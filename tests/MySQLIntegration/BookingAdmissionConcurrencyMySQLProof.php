@@ -4,7 +4,7 @@
 require_once __DIR__ . '/BookingAttachmentMySQLIntegrationTest.php';
 
 /** Prove overlapping application processes converge on one complete winner. */
-final class BookingAdmissionConcurrencyMySQLIntegrationTest extends BookingAttachmentMySQLIntegrationTest {
+final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
 	/** Prove the loser replays the completed exact winner without duplicate effects. */
 	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
 		global $wpdb;

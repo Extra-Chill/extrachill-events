@@ -114,7 +114,7 @@ final class BookingAttachmentMySQLProbeProvider implements BookingPrivateFilePro
 }
 
 /** Exercises production repositories, authorization, transactions, and cleanup. */
-final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
+class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	/** Independent contender connection.
 	 *
 	 * @var mysqli

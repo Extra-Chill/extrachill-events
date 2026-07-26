@@ -21,7 +21,7 @@ on:
       - inc/Abilities/VenueBookingAbilities.php
       - tests/BookingInquiryAdmissionTest.php
       - tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php
-      - tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLIntegrationTest.php
+      - tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLProof.php
       - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
       - tests/MySQLIntegration/host-wordpress-bootstrap.php
       - tests/MySQLIntegration/wp-tests-config.php

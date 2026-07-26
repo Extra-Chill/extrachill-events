@@ -11,6 +11,30 @@ final class ConcertStatsPublicProfileRenderTest extends WP_UnitTestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
+		if ( ! wp_has_ability_category( 'extrachill-events-tests' ) ) {
+			wp_register_ability_category(
+				'extrachill-events-tests',
+				array(
+					'label'       => 'Extra Chill Events tests',
+					'description' => 'Managed test abilities.',
+				)
+			);
+		}
+		if ( wp_has_ability( 'extrachill/get-user-settings' ) ) {
+			wp_unregister_ability( 'extrachill/get-user-settings' );
+		}
+		wp_register_ability(
+			'extrachill/get-user-settings',
+			array(
+				'label'               => 'User settings test',
+				'description'         => 'Returns an empty managed settings fixture.',
+				'category'            => 'extrachill-events-tests',
+				'input_schema'        => array( 'type' => 'object' ),
+				'output_schema'       => array( 'type' => 'object' ),
+				'execute_callback'    => static fn() => array(),
+				'permission_callback' => '__return_true',
+			)
+		);
 
 		$this->owner_id  = self::factory()->user->create( array( 'role' => 'subscriber' ) );
 		$this->viewer_id = self::factory()->user->create( array( 'role' => 'administrator' ) );

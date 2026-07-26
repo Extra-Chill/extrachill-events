@@ -401,6 +401,10 @@ final class VenueMembershipWpdb {
 		return $this->wordpress_wpdb ? $this->wordpress_wpdb->suppress_errors( $suppress ) : false;
 	}
 
+	public function _escape( $data ) {
+		return $this->wordpress_wpdb ? $this->wordpress_wpdb->_escape( $data ) : addslashes( (string) $data );
+	}
+
 	public function get_blog_prefix( $blog_id = null ) {
 		return $this->wordpress_wpdb ? $this->wordpress_wpdb->get_blog_prefix( $blog_id ) : $this->prefix;
 	}

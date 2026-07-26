@@ -170,6 +170,15 @@ final class EventsByArtistAbilityTest extends TestCase {
 		};
 		if ( class_exists( 'WP_UnitTestCase' ) ) {
 			$this->resetManagedFixture();
+			if ( ! wp_has_ability_category( 'extrachill-events' ) ) {
+				wp_register_ability_category(
+					'extrachill-events',
+					array(
+						'label'       => 'Extra Chill Events',
+						'description' => 'Extra Chill Events abilities.',
+					)
+				);
+			}
 			if ( wp_has_ability( 'data-machine-events/events-by-term' ) ) {
 				wp_unregister_ability( 'data-machine-events/events-by-term' );
 			}
@@ -188,6 +197,14 @@ final class EventsByArtistAbilityTest extends TestCase {
 					'label'               => 'Events by term test',
 					'description'         => 'Captures delegated artist input.',
 					'category'            => 'extrachill-events-tests',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'properties' => array(
+							'taxonomy' => array( 'type' => 'string' ),
+							'term_id'  => array( 'type' => 'integer' ),
+						),
+					),
+					'output_schema'       => array( 'type' => 'object' ),
 					'execute_callback'    => static function ( array $input ): array {
 						$GLOBALS['ec_artist_test']['delegated'] = $input;
 						$term = get_term( $input['term_id'], 'artist' );
@@ -265,6 +282,16 @@ final class EventsByArtistAbilityTest extends TestCase {
 			update_term_meta( $canonical_id, $key, $value );
 			restore_current_blog();
 		}
+	}
+
+	private function getMeta( int $canonical_id, string $key ) {
+		if ( class_exists( 'WP_UnitTestCase' ) ) {
+			switch_to_blog( 1 );
+			$value = get_term_meta( $canonical_id, $key, true );
+			restore_current_blog();
+			return $value;
+		}
+		return $GLOBALS['ec_artist_test']['meta'][1][ $canonical_id ][ $key ] ?? null;
 	}
 
 	public function test_canonical_mapping_survives_renamed_slugs(): void {
@@ -375,7 +402,7 @@ final class EventsByArtistAbilityTest extends TestCase {
 
 		$report = extrachill_events_backfill_artist_identity();
 
-		$this->assertSame( 501, $GLOBALS['ec_artist_test']['meta'][1][101][ EXTRACHILL_EVENTS_ARTIST_TERM_META ] );
+		$this->assertSame( 501, (int) $this->getMeta( 101, EXTRACHILL_EVENTS_ARTIST_TERM_META ) );
 		$this->assertCount( 1, $report['mapped'] );
 		$this->assertCount( 1, $report['missing'] );
 		$this->assertCount( 1, $report['stale'] );

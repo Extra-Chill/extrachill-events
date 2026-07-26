@@ -115,9 +115,16 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$this->assertTrue( null === $booking_rows[0]['admission_owner_token'] || '' === $booking_rows[0]['admission_owner_token'], 'The completed booking retained its admission reservation token.' );
 		$attachment_states = $wpdb->get_col( $wpdb->prepare( "SELECT a.state FROM {$attachments_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) );
 		$this->assertSame( array( 'active' ), $attachment_states );
-		$activity_kinds = $wpdb->get_col( $wpdb->prepare( "SELECT a.kind FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s", $input['idempotency_key'] ) );
-		$this->assertCount( 1, $activity_kinds, 'The canonical booking must have exactly one total activity row.' );
-		$this->assertSame( 'inquiry_submitted', $activity_kinds[0] );
+		$activity_kinds = $wpdb->get_col( $wpdb->prepare( "SELECT a.kind FROM {$activity_table} a INNER JOIN {$bookings_table} b ON b.id = a.booking_id WHERE b.inquiry_idempotency_key = %s ORDER BY a.kind ASC", $input['idempotency_key'] ) );
+		$this->assertCount( 2, $activity_kinds, 'The canonical booking must have exactly one source activity and one outbox activity.' );
+		$this->assertSame(
+			array(
+				'inquiry_submitted'     => 1,
+				'notification_requested' => 1,
+			),
+			array_count_values( $activity_kinds ),
+			'The canonical booking contained a duplicate or unexpected activity kind.'
+		);
 		foreach ( array( $path, $event_log, $stage_held, $release, $winner_file ) as $temporary_file ) {
 			if ( file_exists( $temporary_file ) ) {
 				unlink( $temporary_file );

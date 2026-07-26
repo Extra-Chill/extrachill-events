@@ -284,6 +284,13 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 				),
 			),
 		);
+		$blocked   = false;
+		$lock_name = BookingInquiryAdmissionService::inquiry_lock_name( $this->venue_id, $input['idempotency_key'] );
+		$this->provider->stage_probe = function () use ( &$blocked, $lock_name ): void {
+			$escaped = $this->contender->real_escape_string( $lock_name );
+			$result  = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
+			$blocked = $result instanceof mysqli_result && 0 === (int) $result->fetch_row()[0];
+		};
 		$bookings    = new BookingRepository();
 		$attachments = new BookingAttachmentRepository();
 		$lifecycle   = new BookingLifecycle( $bookings );
@@ -291,20 +298,10 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 
 		$winner = $service->admit( $input );
 		$retry  = $service->admit( $input );
-		$state  = wp_json_encode(
-			array(
-				'booking'     => $wpdb->get_row( 'SELECT status, admission_owner_token, version FROM ' . BookingSchema::bookings_table(), ARRAY_A ),
-				'bookings'    => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ),
-				'attachments' => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::attachments_table() ),
-				'activity'    => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::activity_table() ),
-				'staged'      => $this->provider->stage_count,
-				'retired'     => count( $this->provider->retired ),
-				'db_error'    => $wpdb->last_error,
-			)
-		);
 
-		$this->assertIsArray( $winner, ( is_wp_error( $winner ) ? $winner->get_error_code() : 'winner was not a receipt' ) . ': ' . $state );
-		$this->assertIsArray( $retry, ( is_wp_error( $retry ) ? $retry->get_error_code() : 'retry was not a receipt' ) . ': ' . $state );
+		$this->assertIsArray( $winner, is_wp_error( $winner ) ? $winner->get_error_code() : 'winner was not a receipt' );
+		$this->assertIsArray( $retry, is_wp_error( $retry ) ? $retry->get_error_code() : 'retry was not a receipt' );
+		$this->assertTrue( $blocked, 'A second MySQL session acquired the deterministic inquiry lock during staging.' );
 		$this->assertSame( $winner, $retry );
 		$this->assertSame( 1, $this->provider->stage_count );
 		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ) );

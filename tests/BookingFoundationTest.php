@@ -557,9 +557,13 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertIsArray( $config );
 		$this->assertSame( $config, $service->normalize( $config ) );
 		$this->assertSame( 'invalid_booking_config_venue', $service->get( 56 )->get_error_code() );
-		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 2 ) )->get_error_code() );
+		$migrated = $service->normalize( array( 'version' => 1, 'enabled' => true ) );
+		$this->assertSame( 2, $migrated['version'] );
+		$this->assertArrayHasKey( 'correspondence', $migrated );
+		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 3 ) )->get_error_code() );
 		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => '1junk' ) )->get_error_code() );
 		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'intake' => array( 'version' => 2 ) ) )->get_error_code() );
+		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'correspondence' => array( 'version' => 2 ) ) )->get_error_code() );
 		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array( 'version' => 99 );
 		$this->assertSame( 'booking_config_version_unsupported', $service->get( 55 )->get_error_code() );
 	}
@@ -602,6 +606,48 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( 'invalid_booking_marketing_channels', $service->normalize( array( 'marketing_channels' => array_fill( 0, 21, 'email' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_marketing_channel', $service->normalize( array( 'marketing_channels' => array( $prefix . 'x', $prefix . 'y' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_currency', $service->normalize( array( 'default_deal' => array( 'currency' => 'US1' ) ) )->get_error_code() );
+	}
+
+	public function test_correspondence_config_validates_templates_policies_and_safe_preview(): void {
+		$service = new VenueBookingConfig();
+		$config  = $service->defaults();
+		$config['correspondence']['booking_address'] = 'booking@example.com';
+		$config['correspondence']['templates']['follow_up']['version'] = 3;
+		$config['correspondence']['templates']['follow_up']['subject'] = 'Re: {{artist_name}} at {{venue_name}}';
+		$config['correspondence']['templates']['follow_up']['body']    = "Hello {{contact_name}},\n\n{{message}}";
+		$config['correspondence']['reminder_policies']['follow_up']['enabled'] = true;
+		$normalized = $service->normalize( $config );
+
+		$this->assertSame( 'booking@example.com', $normalized['correspondence']['booking_address'] );
+		$this->assertSame( 3, $normalized['correspondence']['templates']['follow_up']['version'] );
+		$this->assertTrue( $normalized['correspondence']['reminder_policies']['follow_up']['enabled'] );
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = $normalized;
+
+		$preview = $service->preview(
+			55,
+			'follow_up',
+			3,
+			array(
+				'artist_name' => '<b>Test Band</b>',
+				'venue_name'  => 'The Room',
+				'contact_name' => "Agent\r\nBcc: attacker@example.com",
+				'message'     => '{{venue_name}} stays literal after one pass.',
+			)
+		);
+		$this->assertSame( 'Re: Test Band at The Room', $preview['subject'] );
+		$this->assertStringNotContainsString( "\nBcc:", $preview['body'] );
+		$this->assertStringContainsString( '{{venue_name}} stays literal', $preview['body'] );
+		$this->assertSame( 'booking_correspondence_template_version_conflict', $service->preview( 55, 'follow_up', 2, array() )->get_error_code() );
+
+		$config['correspondence']['templates']['follow_up']['subject'] = "Unsafe\nBcc: attacker@example.com";
+		$this->assertSame( 'invalid_booking_correspondence_template', $service->normalize( $config )->get_error_code() );
+		$config['correspondence']['templates']['follow_up']['subject'] = '{{unsupported}}';
+		$this->assertSame( 'invalid_booking_correspondence_variable', $service->normalize( $config )->get_error_code() );
+		$config['correspondence']['templates']['follow_up']['subject'] = '{{bad-variable}}';
+		$this->assertSame( 'invalid_booking_correspondence_variable', $service->normalize( $config )->get_error_code() );
+		$config = $service->defaults();
+		$config['correspondence']['reminder_policies']['follow_up']['expected_statuses'] = array( 'not_a_status' );
+		$this->assertSame( 'invalid_booking_reminder_policy', $service->normalize( $config )->get_error_code() );
 	}
 
 	public function test_repository_rejects_invalid_ids_dates_filters_and_normalizes_updates(): void {

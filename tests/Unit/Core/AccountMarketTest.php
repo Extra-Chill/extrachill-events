@@ -321,7 +321,6 @@ final class AccountMarketTest extends TestCase {
 	private $original_blog_id;
 	private $ancestor_filter;
 	private $term_link_filter;
-	private $nocache_filter;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -362,13 +361,8 @@ final class AccountMarketTest extends TestCase {
 			$this->term_link_filter = static function ( $url ) {
 				return $GLOBALS['test_term_link'] ?? $url;
 			};
-			$this->nocache_filter = static function ( $headers ) {
-				$GLOBALS['test_nocache_headers'] = true;
-				return $headers;
-			};
 			add_filter( 'get_ancestors', $this->ancestor_filter, 10, 3 );
 			add_filter( 'term_link', $this->term_link_filter );
-			add_filter( 'nocache_headers', $this->nocache_filter );
 		}
 	}
 
@@ -376,7 +370,6 @@ final class AccountMarketTest extends TestCase {
 		if ( class_exists( 'WP_Abilities_Registry' ) ) {
 			remove_filter( 'get_ancestors', $this->ancestor_filter, 10 );
 			remove_filter( 'term_link', $this->term_link_filter );
-			remove_filter( 'nocache_headers', $this->nocache_filter );
 			foreach ( array( 'extrachill/get-user-settings', 'extrachill/update-user-settings' ) as $ability ) {
 				if ( wp_has_ability( $ability ) ) {
 					wp_unregister_ability( $ability );
@@ -1143,7 +1136,7 @@ final class AccountMarketTest extends TestCase {
 		$output = (string) ob_get_clean();
 		$this->assertStringContainsString( 'Make this my Local Scene', $output );
 		$this->assertStringContainsString( 'extrachill_events_scene_nonce', $output );
-		$this->assertTrue( $GLOBALS['test_nocache_headers'] );
+		$this->assertTrue( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE );
 	}
 
 	/**

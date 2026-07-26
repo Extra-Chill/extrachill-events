@@ -84,6 +84,20 @@ class BookingLifecycle {
 	 * @param array    $fingerprint_context Admission-only fingerprint context.
 	 */
 	public function create_inquiry( array $data, ?int $actor_id = null, array $fingerprint_context = array() ) {
+		$booking = $this->reserve_inquiry( $data, $actor_id, $fingerprint_context );
+		if ( is_wp_error( $booking ) ) {
+			return $booking;
+		}
+		$published = $this->publish_inquiry( $booking );
+		if ( ! is_wp_error( $published ) || in_array( $published->get_error_code(), array( 'booking_transaction_commit_uncertain', 'booking_transaction_rollback_failed' ), true ) ) {
+			return $published;
+		}
+		$discarded = $this->discard_reserved_inquiry( $booking );
+		return is_wp_error( $discarded ) ? $discarded : $published;
+	}
+
+	/** Persist or recover an inquiry without publishing its lifecycle event. */
+	public function reserve_inquiry( array $data, ?int $actor_id = null, array $fingerprint_context = array() ) {
 		unset( $data['attachments'] );
 		unset( $data['space_key'], $data['performance_start_at'], $data['performance_end_at'], $data['production'], $data['deal'], $data['confirmed_deal'] );
 		$key = mb_substr( sanitize_text_field( (string) ( $data['idempotency_key'] ?? '' ) ), 0, 191 );
@@ -154,13 +168,40 @@ class BookingLifecycle {
 		if ( is_wp_error( $booking ) ) {
 			return $this->rollback( $booking );
 		}
-		$event = $this->activity->append(
+		$committed = $this->commit();
+		return is_wp_error( $committed ) ? $committed : $this->bookings->get( $booking['id'] );
+	}
+
+	/** Publish an admitted inquiry exactly once after every attachment succeeds. */
+	public function publish_inquiry( array $booking ) {
+		$started = $this->begin();
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+		$locked = $this->bookings->get_for_update( (int) ( $booking['id'] ?? 0 ) );
+		if ( ! is_array( $locked ) || empty( $locked['inquiry_idempotency_key'] ) ) {
+			return $this->rollback( is_wp_error( $locked ) ? $locked : new \WP_Error( 'booking_inquiry_publication_invalid', __( 'The admitted inquiry could not be published.', 'extrachill-events' ) ) );
+		}
+		$key      = 'inquiry:' . $locked['inquiry_idempotency_key'];
+		$existing = $this->activity->find_by_idempotency( $locked['id'], $key );
+		if ( is_wp_error( $existing ) ) {
+			return $this->rollback( $existing );
+		}
+		if ( is_array( $existing ) ) {
+			$committed = $this->commit();
+			return is_wp_error( $committed ) ? $committed : $locked;
+		}
+		if ( 'submitted' !== $locked['status'] ) {
+			return $this->rollback( new \WP_Error( 'booking_inquiry_publication_invalid', __( 'Only a submitted inquiry can be published.', 'extrachill-events' ) ) );
+		}
+		$actor_id = $locked['submitter_user_id'];
+		$event    = $this->activity->append(
 			array(
-				'booking_id'      => $booking['id'],
+				'booking_id'      => $locked['id'],
 				'kind'            => 'inquiry_submitted',
 				'actor_type'      => $actor_id ? 'user' : 'anonymous',
 				'actor_id'        => $actor_id,
-				'idempotency_key' => 'inquiry:' . $key,
+				'idempotency_key' => $key,
 				'payload'         => array( 'status' => 'submitted' ),
 			)
 		);
@@ -172,7 +213,21 @@ class BookingLifecycle {
 			return $committed;
 		}
 		BookingNotificationService::emit( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, (int) $event['id'] );
-		return $this->bookings->get( $booking['id'] );
+		return $this->bookings->get( $locked['id'] );
+	}
+
+	/** Remove a reservation when direct publication fails conclusively. */
+	private function discard_reserved_inquiry( array $booking ) {
+		$started = $this->begin();
+		if ( is_wp_error( $started ) ) {
+			return $started;
+		}
+		$activity = $this->activity->discard_for_booking( (int) $booking['id'] );
+		$discard  = is_wp_error( $activity ) ? $activity : $this->bookings->discard_inquiry( $booking );
+		if ( is_wp_error( $discard ) ) {
+			return $this->rollback( $discard );
+		}
+		return $this->commit();
 	}
 
 	/**

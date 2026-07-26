@@ -502,7 +502,7 @@ final class BookingWpdb {
 				'channel'         => null,
 				'payload'         => '{"version":1,"data":{"status":"submitted"}}',
 				'external_id'     => null,
-				'idempotency_key' => 'race-winner',
+				'idempotency_key' => 'inquiry:' . $row['inquiry_idempotency_key'],
 				'occurred_at'     => gmdate( 'Y-m-d H:i:s' ),
 				'created_at'      => gmdate( 'Y-m-d H:i:s' ),
 			);
@@ -655,6 +655,15 @@ final class BookingWpdb {
 				}
 			}
 			return $count;
+		}
+		if ( preg_match( "/SELECT MAX\(occurred_at\) FROM .*ec_booking_activity WHERE external_id = '(\d+)' AND kind = 'notification_delivery_attempted'/", $query, $match ) ) {
+			$due = null;
+			foreach ( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array() as $row ) {
+				if ( (string) ( $row['external_id'] ?? '' ) === $match[1] && 'notification_delivery_attempted' === $row['kind'] && ( null === $due || $row['occurred_at'] > $due ) ) {
+					$due = $row['occurred_at'];
+				}
+			}
+			return $due;
 		}
 		++$this->schema_queries;
 		if ( $this->fail_reads ) {
@@ -905,12 +914,16 @@ final class BookingWpdb {
 		if ( false !== strpos( $query, 'SELECT request.* FROM' ) && false !== strpos( $query, "request.kind = 'notification_requested'" ) ) {
 			preg_match( '/LIMIT (\d+)/', $query, $limit );
 			$terminals = array();
+			$deferred  = array();
 			foreach ( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array() as $row ) {
 				if ( in_array( $row['kind'], array( 'notification_delivered', 'notification_suppressed' ), true ) ) {
 					$terminals[] = (string) $row['external_id'];
 				}
+				if ( 'notification_delivery_attempted' === $row['kind'] && $row['occurred_at'] > $this->current_database_time() ) {
+					$deferred[] = (string) $row['external_id'];
+				}
 			}
-			$rows = array_values( array_filter( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array(), static function ( $row ) use ( $terminals ) { return 'notification_requested' === $row['kind'] && ! in_array( (string) $row['id'], $terminals, true ); } ) );
+			$rows = array_values( array_filter( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array(), static function ( $row ) use ( $terminals, $deferred ) { return 'notification_requested' === $row['kind'] && ! in_array( (string) $row['id'], $terminals, true ) && ! in_array( (string) $row['id'], $deferred, true ); } ) );
 			usort( $rows, static function ( $left, $right ) { return $left['id'] <=> $right['id']; } );
 			return array_slice( $rows, 0, (int) ( $limit[1] ?? 50 ) );
 		}

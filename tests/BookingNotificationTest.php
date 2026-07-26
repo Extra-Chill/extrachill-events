@@ -102,6 +102,16 @@ final class BookingNotificationTest extends TestCase {
 		};
 	}
 
+	/** Move one request's persisted retry due time into the past. */
+	private function make_retry_due( int $request_id ): void {
+		foreach ( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] as &$row ) {
+			if ( 'notification_delivery_attempted' === $row['kind'] && (string) $request_id === (string) $row['external_id'] ) {
+				$row['occurred_at'] = '2020-01-01 00:00:00';
+			}
+		}
+		unset( $row );
+	}
+
 	/** Source recovery creates an idempotent outbox request after emit failure. */
 	public function test_recovery_creates_missing_request_once(): void {
 		$booking = $this->booking();
@@ -209,7 +219,9 @@ final class BookingNotificationTest extends TestCase {
 		);
 
 		$zero     = $service->reconcile( $request['id'] );
+		$this->make_retry_due( $request['id'] );
 		$partial  = $service->reconcile( $request['id'] );
+		$this->make_retry_due( $request['id'] );
 		$complete = $service->reconcile( $request['id'] );
 		$replay   = $service->reconcile( $request['id'] );
 
@@ -266,11 +278,60 @@ final class BookingNotificationTest extends TestCase {
 		$service = new BookingNotificationService( null, null, null, static function () { return new WP_Error( 'permanent_route_failure' ); } );
 		for ( $attempt = 0; $attempt < BookingNotificationService::MAX_ATTEMPTS; ++$attempt ) {
 			$service->reconcile_pending();
+			$this->make_retry_due( $request['id'] );
 		}
 		$terminal = ( new BookingActivityRepository() )->notification_terminal( $request['id'] );
 		$this->assertSame( 'notification_suppressed', $terminal['kind'] );
 		$this->assertSame( 'delivery_poisoned', $terminal['payload']['data']['reason'] );
 		$this->assertSame( BookingNotificationService::MAX_ATTEMPTS, $terminal['payload']['data']['attempt'] );
+	}
+
+	/** A deferred poison request does not block a newer valid notification. */
+	public function test_deferred_poison_request_does_not_starve_newer_work(): void {
+		$booking = $this->booking();
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$old_source  = $this->source( $booking );
+		$old_request = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $old_source['id'] );
+		$failed      = new BookingNotificationService( null, null, null, static function () { return new WP_Error( 'permanent_route_failure' ); } );
+		$failed->reconcile_pending();
+
+		$new_source  = $this->source( $booking, 'assignment_changed', array( 'to_assignee_user_id' => 10 ) );
+		$new_request = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, $new_source['id'] );
+		$resolved    = array();
+		$delivered   = new BookingNotificationService(
+			null,
+			null,
+			static function (): array { return array( 'recipients' => array( 10 => array( 'status' => 'inserted' ) ) ); },
+			$this->destination( $resolved ),
+			static function (): int { return 99; }
+		);
+		$delivered->reconcile_pending();
+
+		$this->assertNull( ( new BookingActivityRepository() )->notification_terminal( $old_request['id'] ) );
+		$this->assertSame( 'notification_delivered', ( new BookingActivityRepository() )->notification_terminal( $new_request['id'] )['kind'] );
+	}
+
+	/** Overlapping workers cannot create duplicate delivery attempts. */
+	public function test_request_lock_rejects_overlapping_reconciliation(): void {
+		$booking = $this->booking();
+		$source  = $this->source( $booking );
+		$this->member( 1, 55, 10, VenueAuthorization::STATUS_ACTIVE, true );
+		$request  = ( new BookingNotificationService() )->request( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, $source['id'] );
+		$overlap  = null;
+		$service  = null;
+		$resolved = array();
+		$delivery = function () use ( &$overlap, &$service, $request ): array {
+			$GLOBALS['wpdb']->get_lock_result = 0;
+			$overlap = $service->reconcile( $request['id'] );
+			$GLOBALS['wpdb']->get_lock_result = 1;
+			return array( 'recipients' => array( 10 => array( 'status' => 'inserted' ) ) );
+		};
+		$service = new BookingNotificationService( null, null, $delivery, $this->destination( $resolved ), static function (): int { return 99; } );
+		$result  = $service->reconcile( $request['id'] );
+
+		$this->assertSame( 'booking_notification_request_busy', $overlap->get_error_code() );
+		$this->assertSame( 'notification_delivered', $result['kind'] );
+		$this->assertSame( 0, ( new BookingActivityRepository() )->notification_attempt_count( $request['id'] ) );
 	}
 
 	/** Revocation between attempts suppresses the user before retry delivery. */
@@ -299,6 +360,7 @@ final class BookingNotificationTest extends TestCase {
 		);
 
 		$service->reconcile( $request['id'] );
+		$this->make_retry_due( $request['id'] );
 		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][2]['status'] = VenueAuthorization::STATUS_REVOKED;
 		$service->reconcile( $request['id'] );
 

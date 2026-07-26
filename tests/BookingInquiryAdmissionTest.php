@@ -195,6 +195,42 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'notification_requested' === $row['kind']; } ) );
 	}
 
+	/** Verify overlapping exact attempts reuse the lock owner's complete result. */
+	public function test_concurrent_exact_attempt_stages_only_one_winner(): void {
+		$file    = $this->upload( 'press.txt', 'press', 'press_release' );
+		$input   = $this->input( array( $file ), 'concurrent-exact' );
+		$service = $this->service();
+		$winner  = null;
+		$GLOBALS['wpdb']->after_reference_lock = function () use ( $service, $input, &$winner ): void {
+			$winner = $service->admit( $input );
+		};
+
+		$loser = $service->admit( $input );
+
+		$this->assertSame( $winner, $loser );
+		$this->assertSame( 1, $this->provider->stage_count );
+		$this->assertCount( 1, $this->provider->objects );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+		$activities = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'inquiry_submitted' === $row['kind']; } ) );
+	}
+
+	/** Verify reconciliation cannot observe an inquiry while its bytes are staging. */
+	public function test_reconciliation_during_staging_sees_no_notification_source(): void {
+		$observed = null;
+		$this->provider->after_stage = static function () use ( &$observed ): void {
+			$observed = ( new BookingNotificationService() )->reconcile_pending();
+		};
+		$result = $this->service()->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ), 'staging-overlap' ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 0, $observed['recovered'] );
+		$activities = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'inquiry_submitted' === $row['kind']; } ) );
+		$this->assertCount( 0, array_filter( $activities, static function ( array $row ): bool { return 'notification_requested' === $row['kind']; } ) );
+	}
+
 	/** Verify attachment bytes are part of exact inquiry idempotency. */
 	public function test_changed_attachment_manifest_conflicts_without_restaging(): void {
 		$service = $this->service();
@@ -324,6 +360,8 @@ final class BookingInquiryAdmissionTest extends TestCase {
 
 		$GLOBALS['wpdb']->fail_reference_unlock                          = false;
 		$GLOBALS['wpdb']->last_error                                     = '';
+		$GLOBALS['wpdb']->ready                                          = true;
+		$GLOBALS['wpdb']->reference_locks                                = array();
 		$GLOBALS['extrachill_events_booking_reference_lock_uncertainty'] = array();
 		$GLOBALS['extrachill_events_booking_database_connection_quarantined'] = false;
 		$this->provider->after_stage = null;

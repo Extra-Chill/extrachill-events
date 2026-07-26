@@ -167,6 +167,10 @@ class BookingNotificationService {
 		foreach ( $requests as $request ) {
 			$result = $this->reconcile( (int) $request['id'] );
 			if ( is_wp_error( $result ) ) {
+				if ( in_array( $result->get_error_code(), array( 'booking_notification_request_busy', 'booking_notification_retry_not_due' ), true ) ) {
+					$retry = true;
+					continue;
+				}
 				$record = $this->record_reconcile_failure( $request, $result );
 				if ( is_wp_error( $record ) ) {
 					return $record;
@@ -195,6 +199,17 @@ class BookingNotificationService {
 	 * @return array|\WP_Error Terminal/attempt activity or dependency error.
 	 */
 	public function reconcile( int $request_activity_id ) {
+		$lock = $this->acquire_request_lock( $request_activity_id );
+		if ( is_wp_error( $lock ) ) {
+			return $lock;
+		}
+		$result   = $this->reconcile_locked( $request_activity_id );
+		$released = $this->release_request_lock( $lock );
+		return is_wp_error( $released ) ? $released : $result;
+	}
+
+	/** Re-read terminal and due state while the exact request lock is owned. */
+	private function reconcile_locked( int $request_activity_id ) {
 		$request = $this->activity->get( $request_activity_id );
 		$data    = is_array( $request ) ? ( $request['payload']['data'] ?? array() ) : array();
 		if ( ! is_array( $request ) || 'notification_requested' !== $request['kind'] || empty( $data['notification_type'] ) || empty( $data['source_activity_id'] ) ) {
@@ -203,6 +218,10 @@ class BookingNotificationService {
 		$terminal = $this->activity->notification_terminal( $request_activity_id );
 		if ( is_wp_error( $terminal ) || is_array( $terminal ) ) {
 			return $terminal;
+		}
+		$due = $this->activity->notification_retry_is_due( $request_activity_id );
+		if ( is_wp_error( $due ) || ! $due ) {
+			return is_wp_error( $due ) ? $due : new \WP_Error( 'booking_notification_retry_not_due', __( 'The booking notification retry is not due yet.', 'extrachill-events' ), array( 'status' => 425 ) );
 		}
 		$source = $this->validated_source( (string) $data['notification_type'], (int) $data['source_activity_id'] );
 		if ( is_wp_error( $source ) || (int) $source['booking_id'] !== (int) $request['booking_id'] ) {
@@ -274,6 +293,7 @@ class BookingNotificationService {
 		}
 		$summary  = $this->receipt_summary( $recipient_ids, $receipt );
 		$poisoned = ! $summary['complete'] && $attempt >= self::MAX_ATTEMPTS;
+		$due_at   = $poisoned || $summary['complete'] ? null : $this->retry_due_at( $attempt );
 		$record   = $this->activity->append(
 			array(
 				'booking_id'      => $request['booking_id'],
@@ -291,7 +311,9 @@ class BookingNotificationService {
 					'failed_count'        => $summary['failed'],
 					'recipient_count'     => count( $recipient_ids ),
 					'reason'              => $poisoned ? 'delivery_poisoned' : null,
+					'due_at'              => $due_at,
 				),
+				'occurred_at'     => $due_at ? $due_at : gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
 		if ( is_wp_error( $record ) ) {
@@ -299,7 +321,7 @@ class BookingNotificationService {
 		}
 		$finished = $this->finish( $record );
 		if ( ! $summary['complete'] && ! $poisoned ) {
-			$this->schedule_reconciliation();
+			$this->schedule_reconciliation( strtotime( $due_at . ' UTC' ) );
 		}
 		return $finished;
 	}
@@ -473,6 +495,8 @@ class BookingNotificationService {
 				)
 			);
 		}
+		$due_at = $this->retry_due_at( $attempt );
+		$this->schedule_reconciliation( strtotime( $due_at . ' UTC' ) );
 		return $this->activity->append(
 			array(
 				'booking_id'      => $request['booking_id'],
@@ -484,9 +508,17 @@ class BookingNotificationService {
 					'request_activity_id' => $request['id'],
 					'attempt'             => $attempt,
 					'error_code'          => $error->get_error_code(),
+					'due_at'              => $due_at,
 				),
+				'occurred_at'     => $due_at,
 			)
 		);
+	}
+
+	/** Return the bounded exponential retry due time. */
+	private function retry_due_at( int $attempt ): string {
+		$delay = min( HOUR_IN_SECONDS, MINUTE_IN_SECONDS * ( 2 ** max( 0, $attempt - 1 ) ) );
+		return gmdate( 'Y-m-d H:i:s', time() + $delay );
 	}
 
 	/** Summarize a strict per-recipient Users receipt. */
@@ -551,15 +583,30 @@ class BookingNotificationService {
 	}
 
 	/** Best-effort single-action reconciliation scheduling. */
-	private function schedule_reconciliation(): void {
+	private function schedule_reconciliation( ?int $timestamp = null ): void {
 		if ( ! function_exists( 'as_schedule_single_action' ) ) {
 			return;
 		}
 		try {
-			as_schedule_single_action( time() + MINUTE_IN_SECONDS, self::RECONCILE_HOOK, array(), self::SCHEDULER_GROUP, true );
+			as_schedule_single_action( $timestamp ? max( time() + 1, $timestamp ) : time() + MINUTE_IN_SECONDS, self::RECONCILE_HOOK, array(), self::SCHEDULER_GROUP, true );
 		} catch ( \Throwable $throwable ) {
 			unset( $throwable );
 		}
+	}
+
+	/** Acquire exclusive ownership of one notification request attempt. */
+	private function acquire_request_lock( int $request_activity_id ) {
+		global $wpdb;
+		$name     = 'ec_booking_notice_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $request_activity_id ), 0, 40 );
+		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, 0 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Serializes one outbox request attempt.
+		return 1 === (int) $acquired ? $name : new \WP_Error( 'booking_notification_request_busy', __( 'The booking notification request is already being reconciled.', 'extrachill-events' ) );
+	}
+
+	/** Release one notification request lock without hiding uncertainty. */
+	private function release_request_lock( string $name ) {
+		global $wpdb;
+		$released = $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Releases one outbox request attempt.
+		return 1 === (int) $released ? true : new \WP_Error( 'booking_notification_request_unlock_uncertain', __( 'The booking notification request lock release is uncertain.', 'extrachill-events' ) );
 	}
 
 	/** Start a recipient authorization transaction. */

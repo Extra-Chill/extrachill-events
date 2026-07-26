@@ -9,9 +9,13 @@
 
 use ExtraChillEvents\Core\BookingAttachmentRepository;
 use ExtraChillEvents\Core\BookingAttachmentService;
+use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingInquiryAdmissionService;
+use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingPrivateFileProvider;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\BookingSchema;
+use ExtraChillEvents\Core\VenueBookingConfig;
 use ExtraChillEvents\Core\VenueAuthorization;
 use ExtraChillEvents\Core\VenueMembershipRepository;
 
@@ -32,11 +36,19 @@ final class BookingAttachmentMySQLProbeProvider implements BookingPrivateFilePro
 	 * @var string[]
 	 */
 	public $retired = array();
+	/** @var callable|null Probe invoked while the complete inquiry lock is held. */
+	public $stage_probe;
+	/** @var int Number of staged objects. */
+	public $stage_count = 0;
 
-	/** The integration probe does not stage files. */
+	/** Stage one deterministic probe object. */
 	public function stage( string $source_path, string $filename, string $purpose ) {
 		unset( $source_path, $filename, $purpose );
-		return new WP_Error( 'not_implemented' );
+		++$this->stage_count;
+		if ( is_callable( $this->stage_probe ) ) {
+			( $this->stage_probe )();
+		}
+		return 'private_inquiry_probe_object_' . $this->stage_count;
 	}
 
 	/** Return fixed trusted metadata after running the concurrency probe. */
@@ -249,6 +261,53 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertSame( 'purged', ( new BookingAttachmentRepository() )->get( $attachment['id'] )['state'] );
 	}
 
+	/** Prove exact inquiry retries serialize the complete cross-store saga. */
+	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
+		global $wpdb;
+		update_term_meta( $this->venue_id, VenueBookingConfig::META_KEY, array( 'enabled' => true ) );
+		add_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
+		$path = wp_tempnam( 'booking-inquiry.txt' );
+		file_put_contents( $path, 'concurrent inquiry' );
+		$input = array(
+			'idempotency_key' => 'mysql-concurrent-inquiry',
+			'venue_term_id'   => $this->venue_id,
+			'artist_name'     => 'Concurrent Artist',
+			'intake'          => array(),
+			'attachments'     => array(
+				array(
+					'name'     => 'booking-inquiry.txt',
+					'tmp_name' => $path,
+					'error'    => UPLOAD_ERR_OK,
+					'size'     => filesize( $path ),
+					'purpose'  => 'press_release',
+				),
+			),
+		);
+		$blocked = false;
+		$lock    = $this->inquiry_lock_name( $this->venue_id, $input['idempotency_key'] );
+		$this->provider->stage_probe = function () use ( $lock, &$blocked ): void {
+			$escaped = $this->contender->real_escape_string( $lock );
+			$result  = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
+			$blocked = $result instanceof mysqli_result && 0 === (int) $result->fetch_row()[0];
+		};
+		$bookings    = new BookingRepository();
+		$attachments = new BookingAttachmentRepository();
+		$lifecycle   = new BookingLifecycle( $bookings );
+		$service     = new BookingInquiryAdmissionService( $lifecycle, $attachments, null, $this->provider, null, $bookings, new BookingActivityRepository() );
+
+		$winner = $service->admit( $input );
+		$retry  = $service->admit( $input );
+
+		$this->assertTrue( $blocked, 'A second MySQL session acquired the deterministic inquiry lock during staging.' );
+		$this->assertSame( $winner, $retry );
+		$this->assertSame( 1, $this->provider->stage_count );
+		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ) );
+		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::attachments_table() ) );
+		$this->assertSame( 1, (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . BookingSchema::activity_table() . " WHERE kind = 'inquiry_submitted'" ) );
+		unlink( $path );
+		remove_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
+	}
+
 	/** Connect to the same disposable database independently of WordPress. */
 	private function connect_second_session(): mysqli {
 		$host = (string) getenv( 'DB_HOST' );
@@ -275,5 +334,10 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	private function reference_lock_name( string $reference ): string {
 		$scope = get_current_blog_id() . ':' . BookingSchema::attachments_table() . ':' . $reference;
 		return 'ec_booking_file_' . substr( hash( 'sha256', $scope ), 0, 40 );
+	}
+
+	/** Derive the exact production inquiry ownership lock. */
+	private function inquiry_lock_name( int $venue_id, string $idempotency_key ): string {
+		return 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
 	}
 }

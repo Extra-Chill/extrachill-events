@@ -97,14 +97,24 @@ final class BookingInquiryAdmissionService {
 		if ( $files && is_wp_error( $this->provider ) ) {
 			return $this->public_error( $this->provider );
 		}
+		$lock = $this->acquire_inquiry_lock( absint( $input['venue_term_id'] ?? 0 ), (string) ( $input['idempotency_key'] ?? '' ) );
+		if ( is_wp_error( $lock ) ) {
+			return $this->public_error( $lock );
+		}
+		$result   = $this->admit_locked( $input, $actor_id, $files );
+		$released = $this->release_inquiry_lock( $lock );
+		return is_wp_error( $released ) ? $this->public_error( $released ) : $result;
+	}
 
+	/** Execute reservation, attachments, and publication under one owner lock. */
+	private function admit_locked( array $input, ?int $actor_id, array $files ) {
 		$manifest = array_map(
 			static function ( array $file ): array {
 				return $file['manifest'];
 			},
 			$files
 		);
-		$booking  = $this->lifecycle->create_inquiry( $input, $actor_id, $manifest ? array( 'attachments' => $manifest ) : array() );
+		$booking  = $this->lifecycle->reserve_inquiry( $input, $actor_id, $manifest ? array( 'attachments' => $manifest ) : array() );
 		if ( is_wp_error( $booking ) ) {
 			return $this->public_error( $booking );
 		}
@@ -165,12 +175,38 @@ final class BookingInquiryAdmissionService {
 			}
 			$attached_files[] = $file;
 		}
+		$published = $this->lifecycle->publish_inquiry( $booking );
+		if ( is_wp_error( $published ) ) {
+			if ( $this->is_uncertain( $published ) ) {
+				return $this->public_error( $published );
+			}
+			$cleanup = $this->compensate( $booking, $staged, $attached_files );
+			return is_wp_error( $cleanup ) ? $this->public_error( $cleanup ) : $this->public_error( $published );
+		}
 
 		return array(
-			'public_id'     => $booking['public_id'],
-			'venue_term_id' => $booking['venue_term_id'],
-			'submitted_at'  => $booking['created_at'],
+			'public_id'     => $published['public_id'],
+			'venue_term_id' => $published['venue_term_id'],
+			'submitted_at'  => $published['created_at'],
 		);
+	}
+
+	/** Acquire the deterministic complete-saga ownership lock. */
+	private function acquire_inquiry_lock( int $venue_id, string $idempotency_key ) {
+		global $wpdb;
+		if ( $venue_id < 1 || '' === trim( $idempotency_key ) ) {
+			return new \WP_Error( 'booking_inquiry_lock_invalid', __( 'The inquiry ownership lock is invalid.', 'extrachill-events' ) );
+		}
+		$name     = 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
+		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, 10 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Serializes the cross-store inquiry saga.
+		return 1 === (int) $acquired ? $name : new \WP_Error( 'booking_inquiry_lock_unavailable', __( 'The inquiry is already being processed.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+
+	/** Release the complete-saga lock without guessing on uncertainty. */
+	private function release_inquiry_lock( string $name ) {
+		global $wpdb;
+		$released = $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Releases the inquiry saga lock.
+		return 1 === (int) $released ? true : new \WP_Error( 'booking_inquiry_lock_release_uncertain', __( 'The inquiry lock release could not be confirmed.', 'extrachill-events' ) );
 	}
 
 	/** Fail closed before a current-prefix repository can touch the wrong site. */
@@ -329,6 +365,9 @@ final class BookingInquiryAdmissionService {
 				'booking_attachment_transaction_commit_uncertain',
 				'booking_attachment_reference_unlock_uncertain',
 				'booking_attachment_claim_compensation_failed',
+				'booking_transaction_commit_uncertain',
+				'booking_transaction_rollback_failed',
+				'booking_inquiry_lock_release_uncertain',
 			),
 			true
 		) || true === ( $data['lock_uncertain'] ?? false ) || true === ( $data['connection_quarantined'] ?? false );

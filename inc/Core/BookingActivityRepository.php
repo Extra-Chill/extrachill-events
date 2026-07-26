@@ -400,7 +400,7 @@ class BookingActivityRepository {
 		global $wpdb;
 		$table = BookingSchema::activity_table();
 		$limit = max( 1, min( 100, $limit ) );
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT request.* FROM {$table} request WHERE request.kind = 'notification_requested' AND NOT EXISTS (SELECT 1 FROM {$table} terminal WHERE terminal.kind IN ('notification_delivered', 'notification_suppressed') AND terminal.external_id = CAST(request.id AS CHAR)) ORDER BY request.id ASC LIMIT %d", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded pending outbox scan.
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT request.* FROM {$table} request WHERE request.kind = 'notification_requested' AND NOT EXISTS (SELECT 1 FROM {$table} terminal WHERE terminal.kind IN ('notification_delivered', 'notification_suppressed') AND terminal.external_id = CAST(request.id AS CHAR)) AND NOT EXISTS (SELECT 1 FROM {$table} deferred WHERE deferred.kind = 'notification_delivery_attempted' AND deferred.external_id = CAST(request.id AS CHAR) AND deferred.occurred_at > UTC_TIMESTAMP()) ORDER BY request.id ASC LIMIT %d", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded due-only outbox scan.
 		return $this->hydrate_rows( $rows, 'booking_notification_request_scan_failed' );
 	}
 
@@ -423,6 +423,17 @@ class BookingActivityRepository {
 		return '' !== (string) $wpdb->last_error || ! is_numeric( $count )
 			? new \WP_Error( 'booking_notification_attempt_read_failed', __( 'Booking notification attempts could not be read.', 'extrachill-events' ) )
 			: (int) $count;
+	}
+
+	/** Confirm the latest persisted retry due time has elapsed. */
+	public function notification_retry_is_due( int $request_activity_id ) {
+		global $wpdb;
+		$table = BookingSchema::activity_table();
+		$due   = $wpdb->get_var( $wpdb->prepare( "SELECT MAX(occurred_at) FROM {$table} WHERE external_id = %s AND kind = 'notification_delivery_attempted'", (string) $request_activity_id ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact persisted retry schedule.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_notification_retry_schedule_read_failed', __( 'The notification retry schedule could not be read.', 'extrachill-events' ) );
+		}
+		return null === $due || '' === $due || (string) $due <= gmdate( 'Y-m-d H:i:s' );
 	}
 
 	/** Remove every side effect of one failed inquiry before compensation commits. */

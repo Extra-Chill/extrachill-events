@@ -19,7 +19,7 @@ formula, evidence IDs/hash, and every calculated minor-unit amount. The row also
 retains the terminal paid or void audit. Finalized evidence and terms are never
 rewritten.
 
-Schema version 9 creates or repairs both InnoDB tables through the existing
+Schema version 11 creates or repairs both InnoDB tables through the existing
 `dbDelta` installer, verifies exact columns/indexes/engines, and stamps the
 version only after health checks pass.
 

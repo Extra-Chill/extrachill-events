@@ -344,6 +344,27 @@ final class AccountMarketTest extends TestCase {
 		return array();
 	}
 
+	private function use_discovery_query( WP_Term $term, string $scope, int $paged ): ?WP_Query {
+		$this->use_events_blog();
+		if ( ! isset( $GLOBALS['wp_query'] ) || ! $GLOBALS['wp_query'] instanceof WP_Query ) {
+			return null;
+		}
+		if ( ! taxonomy_exists( 'location' ) ) {
+			register_taxonomy( 'location', 'post' );
+		}
+
+		$original                         = $GLOBALS['wp_query'];
+		$GLOBALS['wp_query']              = clone $original;
+		$GLOBALS['wp_query']->is_tax      = true;
+		$GLOBALS['wp_query']->query_vars  = array(
+			'event_scope' => $scope,
+			'paged'       => $paged,
+		);
+		$GLOBALS['wp_query']->queried_object    = $term;
+		$GLOBALS['wp_query']->queried_object_id = $term->term_id;
+		return $original;
+	}
+
 	private function term( int $term_id, string $name, string $slug ): WP_Term {
 		$constructor = new ReflectionMethod( WP_Term::class, '__construct' );
 		if ( 1 === $constructor->getNumberOfParameters() ) {
@@ -630,7 +651,16 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
 
+		$original_query = $this->use_discovery_query( $GLOBALS['test_queried_term'], 'this-weekend', 2 );
+		$term_link      = static fn() => $GLOBALS['test_term_link'];
+		if ( null !== $original_query ) {
+			add_filter( 'term_link', $term_link );
+		}
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=2' );
+		if ( null !== $original_query ) {
+			remove_filter( 'term_link', $term_link );
+			$GLOBALS['wp_query'] = $original_query;
+		}
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
 
 		$this->assertSame( 'https://events.example/location/usa/south-carolina/charleston/this-weekend?paged=2', $canonical );
@@ -646,7 +676,16 @@ final class AccountMarketTest extends TestCase {
 		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
 		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
 
+		$original_query = $this->use_discovery_query( $GLOBALS['test_queried_term'], 'tonight', 1 );
+		$term_link      = static fn() => $GLOBALS['test_term_link'];
+		if ( null !== $original_query ) {
+			add_filter( 'term_link', $term_link );
+		}
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=1' );
+		if ( null !== $original_query ) {
+			remove_filter( 'term_link', $term_link );
+			$GLOBALS['wp_query'] = $original_query;
+		}
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
 
 		$this->assertSame(

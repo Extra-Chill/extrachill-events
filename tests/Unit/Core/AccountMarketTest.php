@@ -313,9 +313,6 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
 
 /**
  * Verifies the account preference integration and its precedence gates.
- *
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
  */
 final class AccountMarketTest extends TestCase {
 	private function term( int $term_id, string $name, string $slug ): WP_Term {

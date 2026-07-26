@@ -646,13 +646,7 @@ class BookingAttachmentService {
 		);
 	}
 
-	/**
-	 * Resolve an authorized stream token without returning storage references or paths.
-	 *
-	 * @param int $booking_id    Booking ID.
-	 * @param int $attachment_id Attachment ID.
-	 * @param int $actor_id      Authorized user ID.
-	 */
+	/** Resolve an authorized stream token without exposing storage internals. */
 	public function download_descriptor( int $booking_id, int $attachment_id, ?int $actor_id = null ) {
 		if ( $this->connection_is_quarantined() ) {
 			return $this->connection_quarantined_error();
@@ -719,15 +713,7 @@ class BookingAttachmentService {
 		);
 	}
 
-	/**
-	 * Reauthorize and consume an opaque one-time download handoff.
-	 *
-	 * @param int    $booking_id    Booking ID.
-	 * @param int    $attachment_id Attachment ID.
-	 * @param string $stream_token  Opaque handoff.
-	 * @param int    $actor_id      Current user ID.
-	 * @param string $correlation_id Events-owned delivery correlation.
-	 */
+	/** Reauthorize and consume an opaque one-time download handoff. */
 	public function open_download_stream( int $booking_id, int $attachment_id, string $stream_token, int $actor_id, string $correlation_id ) {
 		if ( $this->connection_is_quarantined() ) {
 			return $this->connection_quarantined_error();
@@ -784,16 +770,7 @@ class BookingAttachmentService {
 		return $result;
 	}
 
-	/**
-	 * Record one immutable transport outcome after consumption.
-	 *
-	 * @param int    $booking_id    Booking ID.
-	 * @param int    $attachment_id Attachment ID.
-	 * @param string $correlation_id Events-owned correlation.
-	 * @param string $outcome       Terminal transport outcome.
-	 * @param int    $bytes_sent    Bytes emitted to the next transport hop.
-	 * @param int    $actor_id      Current user ID.
-	 */
+	/** Record one immutable transport outcome after consumption. */
 	public function record_delivery_outcome( int $booking_id, int $attachment_id, string $correlation_id, string $outcome, int $bytes_sent, int $actor_id ) {
 		if ( ! wp_is_uuid( $correlation_id, 4 ) || ! in_array( $outcome, BookingAttachmentDeliveryRepository::OUTCOMES, true ) || $bytes_sent < 0 || ( 'partial' === $outcome && $bytes_sent < 1 ) || ( in_array( $outcome, array( 'failed', 'interrupted' ), true ) && 0 !== $bytes_sent ) ) {
 			return new \WP_Error( 'booking_attachment_delivery_outcome_invalid', __( 'The attachment delivery outcome is invalid.', 'extrachill-events' ), array( 'status' => 400 ) );
@@ -842,13 +819,7 @@ class BookingAttachmentService {
 		);
 	}
 
-	/**
-	 * Return bounded operator-safe delivery diagnostics for one authorized booking.
-	 *
-	 * @param int $booking_id Booking ID.
-	 * @param int $actor_id   Current operator ID.
-	 * @param int $limit      Maximum rows.
-	 */
+	/** Return bounded operator-safe diagnostics for one authorized booking. */
 	public function delivery_diagnostics( int $booking_id, int $actor_id, int $limit = 100 ) {
 		$booking = $this->booking( $booking_id );
 		if ( is_wp_error( $booking ) ) {
@@ -862,11 +833,7 @@ class BookingAttachmentService {
 		return is_wp_error( $rows ) ? $rows : array_map( array( $this->deliveries, 'present' ), $rows );
 	}
 
-	/**
-	 * Reconcile stale nonterminal correlations without guessing successful delivery.
-	 *
-	 * @param array $policy Explicit actor, age, and repair flag.
-	 */
+	/** Reconcile stale correlations without guessing successful delivery. */
 	public function reconcile_delivery_outcomes( array $policy = array() ) {
 		$actor_id    = absint( $policy['actor_id'] ?? 0 );
 		$minimum_age = absint( $policy['minimum_age'] ?? 0 );
@@ -934,11 +901,7 @@ class BookingAttachmentService {
 		);
 	}
 
-	/**
-	 * Delete old terminal correlations only under explicit authorized retention.
-	 *
-	 * @param array $policy Explicit actor and retention days.
-	 */
+	/** Delete old terminal correlations only under explicit authorized retention. */
 	public function cleanup_delivery_outcomes( array $policy = array() ) {
 		$actor_id       = absint( $policy['actor_id'] ?? 0 );
 		$retention_days = absint( $policy['retention_days'] ?? 0 );

@@ -284,16 +284,12 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 				),
 			),
 		);
-		$blocked = false;
-		$this->provider->stage_probe = function () use ( &$blocked ): void {
-			$locks = $this->contender->query( "SELECT OBJECT_NAME FROM performance_schema.metadata_locks WHERE OBJECT_TYPE = 'USER LEVEL LOCK' AND LOCK_STATUS = 'GRANTED' AND OBJECT_NAME LIKE 'ec_booking_inquiry_%' LIMIT 1" );
-			$name  = $locks instanceof mysqli_result ? (string) ( $locks->fetch_row()[0] ?? '' ) : '';
-			if ( '' === $name ) {
-				return;
-			}
-			$escaped = $this->contender->real_escape_string( $name );
-			$result  = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
-			$blocked = $result instanceof mysqli_result && 0 === (int) $result->fetch_row()[0];
+		$reservation_seen = false;
+		$bookings_table   = BookingSchema::bookings_table();
+		$this->provider->stage_probe = function () use ( &$reservation_seen, $bookings_table ): void {
+			$result = $this->contender->query( "SELECT status, admission_owner_token FROM {$bookings_table} WHERE venue_term_id = {$this->venue_id} LIMIT 1" );
+			$row    = $result instanceof mysqli_result ? $result->fetch_assoc() : null;
+			$reservation_seen = is_array( $row ) && 'admission_pending' === $row['status'] && '' !== (string) $row['admission_owner_token'];
 		};
 		$bookings    = new BookingRepository();
 		$attachments = new BookingAttachmentRepository();
@@ -303,7 +299,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$winner = $service->admit( $input );
 		$retry  = $service->admit( $input );
 
-		$this->assertTrue( $blocked, 'A second MySQL session acquired the deterministic inquiry lock during staging.' );
+		$this->assertTrue( $reservation_seen, 'The independent MySQL session did not observe the hidden owned reservation during staging.' );
 		$this->assertSame( $winner, $retry );
 		$this->assertSame( 1, $this->provider->stage_count );
 		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . BookingSchema::bookings_table() ) );

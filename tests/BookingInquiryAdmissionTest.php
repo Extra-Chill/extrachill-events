@@ -7,8 +7,10 @@
 
 use ExtraChillEvents\Core\BookingAttachmentRepository;
 use ExtraChillEvents\Core\BookingAttachmentService;
+use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingInquiryAdmissionService;
 use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingNotificationService;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\BookingSchema;
 use PHPUnit\Framework\TestCase;
@@ -172,6 +174,52 @@ final class BookingInquiryAdmissionTest extends TestCase {
 		$this->assertSame( 'user', $rows[1]['uploader_type'] );
 		$this->assertSame( 42, $rows[1]['uploader_user_id'] );
 		$this->assertSame( array(), $authorization->calls, 'Inquiry submitters are attributed but are not venue operators.' );
+	}
+
+	/** Verify admission replay produces one lifecycle source and one outbox request. */
+	public function test_exact_replay_has_one_inquiry_and_notification_side_effect(): void {
+		$file    = $this->upload( 'press.txt', 'press', 'press_release' );
+		$service = $this->service();
+		$first   = $service->admit( $this->input( array( $file ), 'combined-side-effects' ) );
+		$replay  = $service->admit( $this->input( array( $file ), 'combined-side-effects' ) );
+
+		$this->assertSame( $first, $replay );
+		$this->assertSame( 1, $this->provider->stage_count );
+		$activities = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'inquiry_submitted' === $row['kind']; } ) );
+
+		$notifications = new BookingNotificationService( null, new BookingActivityRepository() );
+		$notifications->reconcile_pending();
+		$notifications->reconcile_pending();
+		$activities = array_values( $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 1, array_filter( $activities, static function ( array $row ): bool { return 'notification_requested' === $row['kind']; } ) );
+	}
+
+	/** Verify attachment bytes are part of exact inquiry idempotency. */
+	public function test_changed_attachment_manifest_conflicts_without_restaging(): void {
+		$service = $this->service();
+		$this->assertIsArray( $service->admit( $this->input( array( $this->upload( 'press.txt', 'first', 'press_release' ) ), 'manifest-conflict' ) ) );
+		$changed = $service->admit( $this->input( array( $this->upload( 'press.txt', 'changed', 'press_release' ) ), 'manifest-conflict' ) );
+
+		$this->assertSame( 'booking_idempotency_conflict', $changed->get_error_code() );
+		$this->assertSame( 1, $this->provider->stage_count );
+		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::attachments_table() ] );
+	}
+
+	/** Verify unavailable private storage never falls back to another store. */
+	public function test_disabled_private_storage_fails_closed_without_attachment_rows(): void {
+		$bookings    = new BookingRepository();
+		$attachments = new BookingAttachmentRepository();
+		$service     = new BookingInquiryAdmissionService(
+			new BookingLifecycle( $bookings ),
+			$attachments,
+			null,
+			new WP_Error( 'booking_private_storage_unavailable' )
+		);
+		$error       = $service->admit( $this->input( array( $this->upload( 'press.txt', 'press', 'press_release' ) ), 'storage-disabled' ) );
+
+		$this->assertSame( 'booking_inquiry_unavailable', $error->get_error_code() );
+		$this->assertArrayNotHasKey( BookingSchema::attachments_table(), $GLOBALS['wpdb']->rows );
 	}
 
 	/**

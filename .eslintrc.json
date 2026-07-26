@@ -21,7 +21,7 @@
 				"PopStateEvent": "readonly"
 			},
 			"rules": {
-				"no-redeclare": [ "error", { "builtinGlobals": false } ]
+				"no-redeclare": "off"
 			}
 		}
 	],

@@ -72,14 +72,14 @@ final class BookingAttachmentMySQLProbeProvider implements BookingPrivateFilePro
 	}
 
 	/** Downloads are outside this integration scope. */
-	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
-		unset( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key );
+	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key, string $correlation_id ) {
+		unset( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key, $correlation_id );
 		return new WP_Error( 'not_implemented' );
 	}
 
 	/** Downloads are outside this integration scope. */
-	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose ) {
-		unset( $stream_token, $attachment_public_id, $actor_id, $purpose );
+	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose, string $correlation_id ) {
+		unset( $stream_token, $attachment_public_id, $actor_id, $purpose, $correlation_id );
 		return new WP_Error( 'not_implemented' );
 	}
 
@@ -173,7 +173,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		if ( $this->contender instanceof mysqli ) {
 			$this->contender->close();
 		}
-		foreach ( array( BookingSchema::holds_table(), BookingSchema::attachments_table(), BookingSchema::activity_table(), BookingSchema::bookings_table(), BookingSchema::memberships_table() ) as $table ) {
+		foreach ( array( BookingSchema::holds_table(), BookingSchema::attachment_deliveries_table(), BookingSchema::attachments_table(), BookingSchema::activity_table(), BookingSchema::bookings_table(), BookingSchema::memberships_table() ) as $table ) {
 			$wpdb->query( "DROP TABLE IF EXISTS {$table}" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.SchemaChange -- Disposable test database cleanup.
 		}
 		delete_option( BookingSchema::VERSION_OPTION );

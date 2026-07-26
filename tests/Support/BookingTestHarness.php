@@ -255,6 +255,12 @@ if ( ! function_exists( 'wp_get_ability' ) ) {
 	function wp_get_ability( $name ) {
 		return $GLOBALS['ec_artist_test']['ability_objects'][ $name ] ?? null; }
 }
+if ( ! function_exists( 'wp_is_uuid' ) ) {
+	function wp_is_uuid( $uuid, $version = null ) {
+		$pattern = null === $version ? '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i' : '/^[0-9a-f]{8}-[0-9a-f]{4}-' . (int) $version . '[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
+		return 1 === preg_match( $pattern, (string) $uuid );
+	}
+}
 if ( ! function_exists( 'get_permalink' ) ) {
 	function get_permalink( $post_id ) {
 		return $GLOBALS['ec_artist_test']['permalinks'][ get_current_blog_id() ][ $post_id ] ?? 'https://events.example/event/' . (int) $post_id; }
@@ -447,6 +453,14 @@ final class BookingWpdb {
 			foreach ( $this->rows[ $table ] ?? array() as $existing ) {
 				if ( (int) $existing['booking_id'] === (int) $row['booking_id'] && $existing['idempotency_key'] === $row['idempotency_key'] ) {
 					$this->last_error = 'duplicate booking attachment idempotency key';
+					return false;
+				}
+			}
+		}
+		if ( false !== strpos( $table, 'ec_booking_attachment_deliveries' ) ) {
+			foreach ( $this->rows[ $table ] ?? array() as $existing ) {
+				if ( $existing['correlation_id'] === $row['correlation_id'] ) {
+					$this->last_error = 'duplicate attachment delivery correlation';
 					return false;
 				}
 			}
@@ -660,6 +674,7 @@ final class BookingWpdb {
 		}
 		$is_activity   = false !== strpos( $query, 'ec_booking_activity' );
 		$is_attachment = false !== strpos( $query, 'ec_booking_attachments' );
+		$is_delivery   = false !== strpos( $query, 'ec_booking_attachment_deliveries' );
 		$is_state      = false !== strpos( $query, 'ec_booking_communication_state' );
 		$is_hold       = false !== strpos( $query, 'ec_booking_holds' );
 		$database_now  = $this->current_database_time();
@@ -674,7 +689,15 @@ final class BookingWpdb {
 			$this->last_error = 'simulated row read failure';
 			return null;
 		}
-		$table = $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) );
+		$table = $is_delivery ? $this->prefix . 'ec_booking_attachment_deliveries' : ( $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) ) );
+		if ( $is_delivery && preg_match( "/WHERE correlation_id = '([^']+)'/", $query, $match ) ) {
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( stripslashes( $match[1] ) === $row['correlation_id'] ) {
+					return $row;
+				}
+			}
+			return null;
+		}
 		if ( $is_state && preg_match( '/WHERE intent_id = (\d+)/', $query, $match ) ) {
 			++$this->communication_state_queries;
 			return $this->rows[ $table ][ (int) $match[1] ] ?? null;
@@ -976,9 +999,10 @@ final class BookingWpdb {
 		}
 		$is_activity   = false !== strpos( $query, 'ec_booking_activity' );
 		$is_attachment = false !== strpos( $query, 'ec_booking_attachments' );
+		$is_delivery   = false !== strpos( $query, 'ec_booking_attachment_deliveries' );
 		$is_state      = false !== strpos( $query, 'ec_booking_communication_state' );
 		$is_hold       = false !== strpos( $query, 'ec_booking_holds' );
-		$table         = $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) );
+		$table         = $is_delivery ? $this->prefix . 'ec_booking_attachment_deliveries' : ( $is_attachment ? $this->prefix . 'ec_booking_attachments' : ( $is_activity ? $this->prefix . 'ec_booking_activity' : ( $is_state ? $this->prefix . 'ec_booking_communication_state' : ( $is_hold ? $this->prefix . 'ec_booking_holds' : $this->prefix . 'ec_bookings' ) ) ) );
 		$rows          = array_values( $this->rows[ $table ] ?? array() );
 		if ( $is_activity && false !== strpos( $query, 'is_communication = 1' ) ) {
 			$rows = array_values( array_filter( $rows, static function ( $row ) { return 1 === (int) ( $row['is_communication'] ?? 0 ); } ) );
@@ -1111,6 +1135,18 @@ final class BookingWpdb {
 				)
 			);
 		}
+		if ( $is_delivery && false !== strpos( $query, "state IN ('issued', 'consumed')" ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) { return in_array( $row['state'], array( 'issued', 'consumed' ), true ); } ) );
+		}
+		if ( $is_delivery && false !== strpos( $query, "state = 'terminal'" ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) { return 'terminal' === $row['state']; } ) );
+		}
+		if ( $is_delivery && preg_match( "/updated_at < '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) use ( $filter ) { return $row['updated_at'] < $filter[1]; } ) );
+		}
+		if ( $is_delivery && preg_match( "/terminal_at < '([^']+)'/", $query, $filter ) ) {
+			$rows = array_values( array_filter( $rows, static function ( $row ) use ( $filter ) { return null !== $row['terminal_at'] && $row['terminal_at'] < $filter[1]; } ) );
+		}
 		if ( preg_match( "/requested_start_at >= '([^']+)'/", $query, $filter ) ) {
 			$rows = array_values(
 				array_filter(
@@ -1153,7 +1189,7 @@ final class BookingWpdb {
 		}
 		if ( false !== strpos( $query, 'ORDER BY id ASC' ) ) {
 			usort( $rows, static function ( $a, $b ) { return $a['id'] <=> $b['id']; } );
-		} else {
+		} elseif ( ! $is_delivery ) {
 			usort(
 				$rows,
 				static function ( $a, $b ) {
@@ -1186,6 +1222,20 @@ final class BookingWpdb {
 				}
 			}
 			$this->rows[ $table ][ $key ] = array_merge( $row, $data );
+			return 1;
+		}
+		return 0;
+	}
+
+	public function delete( $table, $where ) {
+		$this->last_error = '';
+		foreach ( $this->rows[ $table ] ?? array() as $key => $row ) {
+			foreach ( $where as $field => $value ) {
+				if ( (string) ( $row[ $field ] ?? '' ) !== (string) $value ) {
+					continue 2;
+				}
+			}
+			unset( $this->rows[ $table ][ $key ] );
 			return 1;
 		}
 		return 0;
@@ -1416,6 +1466,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalBookingPrivateFileProvider.
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProviders.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentPolicy.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentDeliveryRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingAttachmentService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingInquiryAdmissionService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueBookingConfig.php';
@@ -1549,18 +1600,18 @@ final class BookingTestPrivateFileProvider implements BookingPrivateFileProvider
 			'continuation' => $continuation,
 		);
 	}
-	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key ) {
+	public function download_descriptor( string $storage_reference, string $attachment_public_id, int $actor_id, string $purpose, string $claim_key, string $correlation_id ) {
 		$token = bin2hex( random_bytes( 32 ) );
-		$this->handoffs[ $token ] = array( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key );
+		$this->handoffs[ $token ] = array( $storage_reference, $attachment_public_id, $actor_id, $purpose, $claim_key, $correlation_id );
 		return isset( $this->objects[ $storage_reference ] ) ? array(
 			'stream_token' => $token,
 			'expires_at'   => '2026-08-01T00:05:00Z',
 		) : new WP_Error( 'private_object_missing' );
 	}
-	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose ) {
+	public function open_stream( string $stream_token, string $attachment_public_id, int $actor_id, string $purpose, string $correlation_id ) {
 		$handoff = $this->handoffs[ $stream_token ] ?? null;
 		unset( $this->handoffs[ $stream_token ] );
-		return is_array( $handoff ) && $handoff[1] === $attachment_public_id && $handoff[2] === $actor_id && $handoff[3] === $purpose
+		return is_array( $handoff ) && $handoff[1] === $attachment_public_id && $handoff[2] === $actor_id && $handoff[3] === $purpose && $handoff[5] === $correlation_id
 			? fopen( 'php://temp', 'rb+' )
 			: new WP_Error( 'booking_private_stream_invalid' );
 	}

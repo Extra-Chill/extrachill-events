@@ -414,6 +414,12 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertSame( $this->actor_id, $paid['paid_by_user_id'] );
 
 		$service->evidence_probe = null;
+		$void_event_id           = self::factory()->post->create(
+			array(
+				'post_type'   => defined( 'DATA_MACHINE_EVENTS_POST_TYPE' ) ? DATA_MACHINE_EVENTS_POST_TYPE : 'data_machine_events',
+				'post_status' => 'publish',
+			)
+		);
 		$void_booking            = $bookings->create(
 			array(
 				'venue_term_id' => $this->venue_id,
@@ -421,7 +427,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 				'intake'        => array(),
 			)
 		);
-		$void_booking            = $bookings->claim_event( $void_booking['id'], $event_id, $void_booking['version'] );
+		$void_booking            = $bookings->claim_event( $void_booking['id'], $void_event_id, $void_booking['version'] );
 		$this->assertIsArray( $void_booking, is_wp_error( $void_booking ) ? $void_booking->get_error_code() : '' );
 		$this->assertIsArray( $abilities['extrachill/record-booking-ticket-sales']->execute( $this->settlement_report_input( $void_booking['id'], 'mysql-settlement-void-report' ) ) );
 		$void_preview = $abilities['extrachill/calculate-booking-settlement']->execute(

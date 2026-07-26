@@ -1,0 +1,76 @@
+@import "@extrachill/components/styles/components.scss";
+
+.ec-venue-booking-inquiry__venue {
+  padding: var(--spacing-lg, 1.5rem);
+  margin-bottom: var(--spacing-lg, 1.5rem);
+  background: var(--card-background, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: var(--border-radius-lg, 16px);
+}
+
+.ec-venue-booking-inquiry__venue h3,
+.ec-venue-booking-inquiry__venue p {
+  margin-top: 0;
+}
+
+.ec-venue-booking-inquiry__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-md, 1rem);
+}
+
+.ec-venue-booking-inquiry__form > * + * {
+  margin-top: var(--spacing-md, 1rem);
+}
+
+.ec-venue-booking-inquiry__form input:not([type="checkbox"]),
+.ec-venue-booking-inquiry__form select,
+.ec-venue-booking-inquiry__form textarea {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.ec-venue-booking-inquiry__errors,
+.ec-venue-booking-inquiry__receipt {
+  outline: none;
+}
+
+.ec-venue-booking-inquiry__errors {
+  padding: var(--spacing-md, 1rem);
+  margin-bottom: var(--spacing-lg, 1.5rem);
+  color: var(--error-color, #b91c1c);
+  border: 2px solid currentcolor;
+  border-radius: var(--border-radius, 8px);
+}
+
+.ec-venue-booking-inquiry__file-purpose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(10rem, 0.5fr);
+  gap: var(--spacing-sm, 0.5rem);
+  align-items: center;
+  margin-top: var(--spacing-sm, 0.5rem);
+}
+
+.ec-venue-booking-inquiry__turnstile {
+  max-width: 720px;
+  padding: 0 var(--spacing-lg, 1.5rem) var(--spacing-lg, 1.5rem);
+  margin: 0 auto;
+}
+
+.ec-venue-booking-inquiry__live:empty {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .ec-venue-booking-inquiry__grid,
+  .ec-venue-booking-inquiry__file-purpose {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ec-venue-booking-inquiry * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -41,6 +41,71 @@ class VenueBookingConfig {
 		return $this->normalize( $stored );
 	}
 
+	/**
+	 * Return the deliberately bounded public intake projection.
+	 *
+	 * @param int $venue_term_id Canonical Events venue term ID.
+	 * @return array|\WP_Error
+	 */
+	public function public_intake( int $venue_term_id ) {
+		$config = $this->get( $venue_term_id );
+		if ( is_wp_error( $config ) ) {
+			return $config;
+		}
+
+		$venue = $this->venue( $venue_term_id );
+		if ( is_wp_error( $venue ) ) {
+			return $venue;
+		}
+
+		$profile = function_exists( 'data_machine_events_get_venue_profile' )
+			? data_machine_events_get_venue_profile( $venue_term_id )
+			: array();
+		if ( is_wp_error( $profile ) ) {
+			$profile = array();
+		}
+
+		$attachments_enabled = (bool) apply_filters( 'extrachill_events_booking_attachment_intake_enabled', false, $venue_term_id );
+
+		return array(
+			'version'          => 1,
+			'revision'         => $config['revision'],
+			'enabled'          => $config['enabled'],
+			'venue'            => array(
+				'term_id'     => (int) $venue->term_id,
+				'name'        => (string) $venue->name,
+				'description' => wp_strip_all_tags( (string) ( $venue->description ?? '' ) ),
+				'city'        => sanitize_text_field( (string) ( $profile['city'] ?? '' ) ),
+				'state'       => sanitize_text_field( (string) ( $profile['state'] ?? '' ) ),
+				'website'     => esc_url_raw( (string) ( $profile['website'] ?? '' ) ),
+			),
+			'intake_fields'    => $config['intake']['fields'],
+			'spaces'           => $config['spaces'],
+			'date_constraints' => array(
+				'minimum_start' => current_datetime()->format( 'Y-m-d' ),
+			),
+			'consents'         => array(
+				'booking_privacy'   => array(
+					'id'       => 'venue-booking-privacy',
+					'version'  => 1,
+					'label'    => __( 'I agree that this venue may use these details to review and respond to my booking inquiry.', 'extrachill-events' ),
+					'required' => true,
+				),
+				'artist_onboarding' => array(
+					'id'       => 'artist-platform-onboarding',
+					'version'  => 1,
+					'label'    => __( 'Tell me about optional Extra Chill artist tools.', 'extrachill-events' ),
+					'required' => false,
+				),
+			),
+			'attachments'      => array(
+				'enabled'   => $attachments_enabled,
+				'max_files' => $attachments_enabled ? 5 : 0,
+				'purposes'  => $attachments_enabled ? array( 'contract', 'stage_plot', 'technical_rider', 'hospitality_rider', 'insurance', 'press_release' ) : array(),
+			),
+		);
+	}
+
 	/** Atomically replace a venue config at one expected revision. */
 	public function update( int $venue_term_id, array $config, int $expected_revision, int $actor_user_id ) {
 		global $wpdb;

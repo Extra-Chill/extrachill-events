@@ -18,6 +18,8 @@ require_once __DIR__ . '/Support/BookingTestHarness.php';
 
 final class BookingFoundationTest extends TestCase {
 	protected function setUp(): void {
+		$GLOBALS['venue_membership_test']['dme_profile'] = array();
+		unset( $GLOBALS['ec_test_filters']['extrachill_events_booking_attachment_intake_enabled'] );
 		$GLOBALS['ec_artist_test'] = array(
 			'blog_id'       => 7,
 			'stack'         => array(),
@@ -602,6 +604,86 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( 'invalid_booking_marketing_channels', $service->normalize( array( 'marketing_channels' => array_fill( 0, 21, 'email' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_marketing_channel', $service->normalize( array( 'marketing_channels' => array( $prefix . 'x', $prefix . 'y' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_currency', $service->normalize( array( 'default_deal' => array( 'currency' => 'US1' ) ) )->get_error_code() );
+	}
+
+	/** Verify public configuration includes only intake-safe venue data. */
+	public function test_public_intake_projection_is_canonical_and_redacts_operator_config(): void {
+		$GLOBALS['ec_artist_test']['terms'][7][55]->description                         = '<p>Independent room.</p>';
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array(
+			'enabled'                   => true,
+			'revision'                  => 4,
+			'updated_by_user_id'        => 99,
+			'updated_at'                => '2026-07-25 12:00:00',
+			'intake'                    => array(
+				'fields' => array(
+					array(
+						'key'      => 'draw_history',
+						'label'    => 'Recent draw history',
+						'type'     => 'textarea',
+						'required' => true,
+					),
+				),
+			),
+			'spaces'                    => array( array( 'key' => 'main', 'name' => 'Main Room', 'is_default' => true ) ),
+			'default_deal'              => array(
+				'guarantee_cents'            => 250000,
+				'revenue_share_basis_points' => 7500,
+			),
+			'ticket_provider_reference' => 'private-ticket-account',
+			'marketing_channels'        => array( 'private-email' ),
+		);
+
+		$public = ( new VenueBookingConfig() )->public_intake( 55 );
+
+		$this->assertSame( 55, $public['venue']['term_id'] );
+		$this->assertSame( 'The Room', $public['venue']['name'] );
+		$this->assertSame( 'Independent room.', $public['venue']['description'] );
+		$this->assertSame( 4, $public['revision'] );
+		$this->assertSame( 'draw_history', $public['intake_fields'][0]['key'] );
+		$this->assertFalse( $public['attachments']['enabled'] );
+		$encoded = wp_json_encode( $public );
+		$this->assertStringNotContainsString( '250000', $encoded );
+		$this->assertStringNotContainsString( 'private-ticket-account', $encoded );
+		$this->assertStringNotContainsString( 'private-email', $encoded );
+		$this->assertStringNotContainsString( 'updated_by_user_id', $encoded );
+		$this->assertStringNotContainsString( 'updated_at', $encoded );
+	}
+
+	/** Verify invalid placement and unsupported controls never degrade publicly. */
+	public function test_public_intake_fails_closed_for_disabled_invalid_and_unsupported_config(): void {
+		$service = new VenueBookingConfig();
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array(
+			'enabled' => false,
+		);
+		$this->assertFalse( $service->public_intake( 55 )['enabled'] );
+		$this->assertSame( 'invalid_booking_config_venue', $service->public_intake( 56 )->get_error_code() );
+
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array(
+			'enabled' => true,
+			'intake'  => array(
+				'fields' => array( array( 'key' => 'upload', 'label' => 'Upload', 'type' => 'file' ) ),
+			),
+		);
+		$this->assertSame( 'invalid_booking_intake_field', $service->public_intake( 55 )->get_error_code() );
+	}
+
+	/** Verify production attachment controls require an explicit policy capability. */
+	public function test_public_attachment_capability_is_explicit_and_default_off(): void {
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array(
+			'enabled' => true,
+		);
+		add_filter(
+			'extrachill_events_booking_attachment_intake_enabled',
+			static function (): bool {
+				return true;
+			}
+		);
+
+		$public = ( new VenueBookingConfig() )->public_intake( 55 );
+
+		$this->assertTrue( $public['attachments']['enabled'] );
+		$this->assertSame( 5, $public['attachments']['max_files'] );
+		$this->assertContains( 'technical_rider', $public['attachments']['purposes'] );
 	}
 
 	public function test_repository_rejects_invalid_ids_dates_filters_and_normalizes_updates(): void {

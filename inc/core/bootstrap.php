@@ -47,6 +47,11 @@ function extrachill_events_register_blocks() {
 	if ( file_exists( $concert_stats_dir . '/block.json' ) ) {
 		register_block_type( $concert_stats_dir );
 	}
+
+	$booking_inquiry_dir = EXTRACHILL_EVENTS_PLUGIN_DIR . 'build/venue-booking-inquiry';
+	if ( file_exists( $booking_inquiry_dir . '/block.json' ) ) {
+		register_block_type( $booking_inquiry_dir );
+	}
 }
 add_action( 'init', 'extrachill_events_register_blocks' );
 

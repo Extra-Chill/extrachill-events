@@ -1,8 +1,6 @@
 /**
  * ShowList load-more behavior.
  */
-/* global MouseEvent, afterAll, beforeAll, beforeEach, describe, expect, it, jest */
-
 /**
  * WordPress dependencies
  */

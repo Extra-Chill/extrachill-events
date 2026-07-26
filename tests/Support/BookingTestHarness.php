@@ -71,6 +71,14 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	function sanitize_text_field( $value ) {
 		return trim( strip_tags( (string) $value ) ); }
 }
+if ( ! function_exists( 'wp_strip_all_tags' ) ) {
+	function wp_strip_all_tags( $value ) {
+		return strip_tags( (string) $value ); }
+}
+if ( ! function_exists( 'current_datetime' ) ) {
+	function current_datetime() {
+		return new DateTimeImmutable( '2026-07-26 12:00:00', new DateTimeZone( 'UTC' ) ); }
+}
 if ( ! function_exists( 'wp_unslash' ) ) {
 	function wp_unslash( $value ) {
 		return is_string( $value ) ? stripslashes( $value ) : $value;

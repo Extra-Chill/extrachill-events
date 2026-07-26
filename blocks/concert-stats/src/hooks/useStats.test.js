@@ -1,8 +1,6 @@
 /**
  * useStats request isolation and authorization behavior.
  */
-/* global afterAll, beforeAll, beforeEach, describe, expect, it, jest */
-
 /**
  * WordPress dependencies
  */

@@ -1,8 +1,6 @@
 /**
  * Discovery scope navigation request-state coverage.
  */
-/* global MouseEvent, PopStateEvent, beforeAll, beforeEach, describe, expect, it, jest */
-
 function deferred() {
 	let resolve;
 	let reject;

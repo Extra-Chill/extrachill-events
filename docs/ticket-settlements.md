@@ -12,8 +12,12 @@ they correct. Money and counts are signed integers in minor units.
 `ec_booking_settlements` stores at most one frozen settlement per booking. It
 captures basis, basis-point rate, currency, formula version, ordered evidence
 IDs and canonical `(id, request_hash)` content hash, frozen booking version,
-basis amount, signed adjustment, amount due, finalizer, and
-terminal paid or void audit. Finalized evidence and terms are never rewritten.
+basis amount, signed adjustment, amount due, finalizer, and a second integrity
+hash over the complete immutable financial snapshot. The snapshot hash binds
+booking/event/venue identity, frozen booking revision, basis, rate, currency,
+formula, evidence IDs/hash, and every calculated minor-unit amount. The row also
+retains the terminal paid or void audit. Finalized evidence and terms are never
+rewritten.
 
 Schema version 9 creates or repairs both InnoDB tables through the existing
 `dbDelta` installer, verifies exact columns/indexes/engines, and stamps the
@@ -38,7 +42,10 @@ An exact lost-response retry is resolved against the already-frozen booking
 version, terms, formula, and evidence before current mutable booking/evidence
 is considered, so later reports or booking revisions do not break idempotency.
 Every evidence read recomputes its immutable request hash; frozen retries also
-recompute the ordered settlement evidence hash.
+recompute the ordered settlement evidence hash. All settlement reads, retries,
+paid writes, and void writes authenticate the complete frozen financial terms.
+Finalize is declared idempotent because an exact retry returns that authenticated
+frozen settlement while any changed terms conflict.
 
 Paid and void transitions require both the settlement version and current
 booking version while holding the booking row lock. Payment additionally

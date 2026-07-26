@@ -76,6 +76,7 @@ final class TicketSettlementTest extends TestCase {
 		$this->assertTrue( $settlements['indexes']['booking_id']['unique'] );
 		$this->assertArrayHasKey( 'booking_version', $settlements['columns'] );
 		$this->assertArrayHasKey( 'evidence_hash', $settlements['columns'] );
+		$this->assertArrayHasKey( 'integrity_hash', $settlements['columns'] );
 		$this->assertArrayHasKey( 'payment_reference', $settlements['columns'] );
 	}
 
@@ -162,8 +163,14 @@ final class TicketSettlementTest extends TestCase {
 				'sha256',
 				wp_json_encode(
 					array(
-						array( 'id' => $report['id'], 'request_hash' => $report['request_hash'] ),
-						array( 'id' => $report_2['id'], 'request_hash' => $report_2['request_hash'] ),
+						array(
+							'id'           => $report['id'],
+							'request_hash' => $report['request_hash'],
+						),
+						array(
+							'id'           => $report_2['id'],
+							'request_hash' => $report_2['request_hash'],
+						),
 					)
 				)
 			),
@@ -185,20 +192,90 @@ final class TicketSettlementTest extends TestCase {
 		$GLOBALS['wpdb']->rows[ $sales ][ $report['id'] ]['gross_minor'] = $report['gross_minor'];
 
 		$settlement = $this->service->finalize( $this->finalize_input( $preview ), 12 );
-		$GLOBALS['wpdb']->rows[ BookingSchema::settlements_table() ][ $settlement['id'] ]['evidence_hash'] = str_repeat( '0', 64 );
-		$this->assertSame( 'settlement_evidence_integrity_failed', $this->service->finalize( $this->finalize_input( $preview ), 12 )->get_error_code() );
+		$GLOBALS['wpdb']->rows[ $sales ][ $report['id'] ]['gross_minor'] = 999999;
+		$this->assertSame( 'sales_report_integrity_failed', $this->service->finalize( $this->finalize_input( $preview ), 12 )->get_error_code() );
 		$this->assertSame(
-			'settlement_evidence_integrity_failed',
+			'sales_report_integrity_failed',
 			$this->service->void(
 				array(
 					'booking_id'               => $booking['id'],
 					'expected_booking_version' => $preview['booking_version'],
+					'expected_version'         => 1,
+					'reason'                   => 'Must not void tampered evidence.',
+				),
+				12
+			)->get_error_code()
+		);
+		$booking_row            =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ];
+		$booking_row['status']  = 'completed';
+		$booking_row['version'] = $booking_row['version'] + 1;
+		$this->assertSame(
+			'sales_report_integrity_failed',
+			$this->service->mark_paid(
+				array(
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $booking_row['version'],
+					'expected_version'         => 1,
+					'payment_reference'        => 'must-not-pay-tampered-evidence',
+				),
+				12
+			)->get_error_code()
+		);
+		$GLOBALS['wpdb']->rows[ $sales ][ $report['id'] ]['gross_minor']                                   = $report['gross_minor'];
+		$GLOBALS['wpdb']->rows[ BookingSchema::settlements_table() ][ $settlement['id'] ]['evidence_hash'] = str_repeat( '0', 64 );
+		$this->assertSame( 'settlement_integrity_failed', $this->service->finalize( $this->finalize_input( $preview ), 12 )->get_error_code() );
+		$this->assertSame(
+			'settlement_integrity_failed',
+			$this->service->void(
+				array(
+					'booking_id'               => $booking['id'],
+					'expected_booking_version' => $booking_row['version'],
 					'expected_version'         => 1,
 					'reason'                   => 'Must not transition corrupt evidence.',
 				),
 				12
 			)->get_error_code()
 		);
+	}
+
+	public function test_frozen_financial_snapshot_tampering_fails_before_return_or_payment(): void {
+		$booking = $this->create_event_booking();
+		$this->service->record_sales( $this->report_input( $booking['id'], 'financial-integrity' ), 12 );
+		$preview    = $this->preview( $booking['id'] );
+		$settlement = $this->service->finalize( $this->finalize_input( $preview ), 12 );
+		$row        =& $GLOBALS['wpdb']->rows[ BookingSchema::settlements_table() ][ $settlement['id'] ];
+		$mutations  = array(
+			'amount_due_minor'   => $settlement['amount_due_minor'] + 1,
+			'basis_amount_minor' => $settlement['basis_amount_minor'] + 1,
+			'basis_points'       => $settlement['basis_points'] + 1,
+			'basis'              => 'net_ticket_sales',
+			'adjustment_minor'   => $settlement['adjustment_minor'] + 1,
+			'formula_version'    => $settlement['formula_version'] + 1,
+			'currency'           => 'EUR',
+			'booking_version'    => $settlement['booking_version'] + 1,
+		);
+		foreach ( $mutations as $field => $tampered ) {
+			$original      = $row[ $field ];
+			$row[ $field ] = $tampered;
+			$result        = $this->service->get( $booking['id'], 12 );
+			$this->assertSame( 'settlement_integrity_failed', $result->get_error_code(), 'Tampered ' . $field . ' was returned.' );
+			$row[ $field ] = $original;
+		}
+
+		$booking_row             =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ];
+		$booking_row['status']   = 'completed';
+		$booking_row['version']  = $booking_row['version'] + 1;
+		$row['amount_due_minor'] = $row['amount_due_minor'] + 1;
+		$payment                 = $this->service->mark_paid(
+			array(
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $booking_row['version'],
+				'expected_version'         => 1,
+				'payment_reference'        => 'must-not-pay-tampered-snapshot',
+			),
+			12
+		);
+		$this->assertSame( 'settlement_integrity_failed', $payment->get_error_code() );
 	}
 
 	public function test_finalization_rejects_stale_evidence_and_freezes_formula_and_rate(): void {
@@ -386,15 +463,23 @@ final class TicketSettlementTest extends TestCase {
 			$this->assertArrayHasKey( $name, $GLOBALS['ec_artist_test']['abilities'] );
 			$this->assertTrue( $GLOBALS['ec_artist_test']['abilities'][ $name ]['meta']['show_in_rest'] );
 		}
-		$this->assertFalse( $GLOBALS['ec_artist_test']['abilities']['extrachill/finalize-booking-settlement']['meta']['annotations']['idempotent'] );
+		$this->assertTrue( $GLOBALS['ec_artist_test']['abilities']['extrachill/finalize-booking-settlement']['meta']['annotations']['idempotent'] );
 		$this->assertSame( array( 'manual', 'csv_certified' ), $GLOBALS['ec_artist_test']['abilities']['extrachill/record-booking-ticket-sales']['input_schema']['properties']['source_type']['enum'] );
 		$this->assertContains( 'expected_booking_version', $GLOBALS['ec_artist_test']['abilities']['extrachill/mark-booking-settlement-paid']['input_schema']['required'] );
 
 		$booking = $this->create_event_booking();
-		$record  = call_user_func( $GLOBALS['ec_artist_test']['abilities']['extrachill/record-booking-ticket-sales']['execute_callback'], $this->report_input( $booking['id'], 'ability-execution' ) );
-		$this->assertIsArray( $record );
-		$preview = call_user_func(
-			$GLOBALS['ec_artist_test']['abilities']['extrachill/calculate-booking-settlement']['execute_callback'],
+		$record  = $this->execute_ability( 'extrachill/record-booking-ticket-sales', $this->report_input( $booking['id'], 'ability-execution' ) );
+		$list    = $this->execute_ability(
+			'extrachill/list-booking-ticket-sales',
+			array(
+				'booking_id' => $booking['id'],
+				'limit'      => 10,
+				'offset'     => 0,
+			)
+		);
+		$this->assertSame( $record['id'], $list[0]['id'] );
+		$preview    = $this->execute_ability(
+			'extrachill/calculate-booking-settlement',
 			array(
 				'booking_id'   => $booking['id'],
 				'basis'        => 'gross_ticket_sales',
@@ -402,9 +487,44 @@ final class TicketSettlementTest extends TestCase {
 				'currency'     => 'USD',
 			)
 		);
-		$this->assertIsArray( $preview );
-		$settlement = call_user_func( $GLOBALS['ec_artist_test']['abilities']['extrachill/finalize-booking-settlement']['execute_callback'], $this->finalize_input( $preview ) );
+		$settlement = $this->execute_ability( 'extrachill/finalize-booking-settlement', $this->finalize_input( $preview ) );
 		$this->assertSame( $preview['booking_version'], $settlement['booking_version'] );
+		$booking_row            =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ];
+		$booking_row['status']  = 'completed';
+		$booking_row['version'] = $booking_row['version'] + 1;
+		$paid                   = $this->execute_ability(
+			'extrachill/mark-booking-settlement-paid',
+			array(
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $booking_row['version'],
+				'expected_version'         => 1,
+				'payment_reference'        => 'ability-payment',
+			)
+		);
+		$this->assertSame( 'paid', $paid['status'] );
+
+		$void_booking = $this->create_event_booking();
+		$this->execute_ability( 'extrachill/record-booking-ticket-sales', $this->report_input( $void_booking['id'], 'ability-void-evidence' ) );
+		$void_preview = $this->execute_ability(
+			'extrachill/calculate-booking-settlement',
+			array(
+				'booking_id'   => $void_booking['id'],
+				'basis'        => 'gross_ticket_sales',
+				'basis_points' => 2000,
+				'currency'     => 'USD',
+			)
+		);
+		$this->execute_ability( 'extrachill/finalize-booking-settlement', $this->finalize_input( $void_preview ) );
+		$voided = $this->execute_ability(
+			'extrachill/void-booking-settlement',
+			array(
+				'booking_id'               => $void_booking['id'],
+				'expected_booking_version' => $void_preview['booking_version'],
+				'expected_version'         => 1,
+				'reason'                   => 'Ability void proof.',
+			)
+		);
+		$this->assertSame( 'void', $voided['status'] );
 
 		$now = gmdate( 'Y-m-d H:i:s' );
 		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ] = array(
@@ -500,5 +620,67 @@ final class TicketSettlementTest extends TestCase {
 			'updated_at'         => $now,
 			'revoked_at'         => null,
 		);
+	}
+
+	private function execute_ability( string $name, array $input ) {
+		$definition = $GLOBALS['ec_artist_test']['abilities'][ $name ];
+		$this->assertTrue( true === call_user_func( $definition['permission_callback'], $input ), $name . ' permission failed.' );
+		$this->assertSchemaValue( $input, $definition['input_schema'], $name . ' input' );
+		$output = call_user_func( $definition['execute_callback'], $input );
+		$this->assertFalse( is_wp_error( $output ), is_wp_error( $output ) ? $output->get_error_code() : '' );
+		$this->assertSchemaValue( $output, $definition['output_schema'], $name . ' output' );
+		return $output;
+	}
+
+	private function assertSchemaValue( $value, array $schema, string $path ): void {
+		$types   = (array) ( $schema['type'] ?? array() );
+		$matches = false;
+		foreach ( $types as $type ) {
+			$matches = $matches || ( 'null' === $type && null === $value )
+				|| ( 'integer' === $type && is_int( $value ) )
+				|| ( 'string' === $type && is_string( $value ) )
+				|| ( in_array( $type, array( 'object', 'array' ), true ) && is_array( $value ) );
+		}
+		$this->assertTrue( $matches, $path . ' has an invalid type.' );
+		if ( null === $value ) {
+			return;
+		}
+		if ( isset( $schema['enum'] ) ) {
+			$this->assertContains( $value, $schema['enum'], $path . ' is outside its enum.' );
+		}
+		if ( is_int( $value ) ) {
+			$this->assertGreaterThanOrEqual( $schema['minimum'] ?? PHP_INT_MIN, $value, $path . ' is below minimum.' );
+			$this->assertLessThanOrEqual( $schema['maximum'] ?? PHP_INT_MAX, $value, $path . ' exceeds maximum.' );
+		}
+		if ( is_string( $value ) ) {
+			$this->assertGreaterThanOrEqual( $schema['minLength'] ?? 0, mb_strlen( $value ), $path . ' is too short.' );
+			$this->assertLessThanOrEqual( $schema['maxLength'] ?? PHP_INT_MAX, mb_strlen( $value ), $path . ' is too long.' );
+			if ( isset( $schema['pattern'] ) ) {
+				$this->assertSame( 1, preg_match( '~' . $schema['pattern'] . '~', $value ), $path . ' does not match its pattern.' );
+			}
+		}
+		if ( is_array( $value ) && 'object' === ( $types[0] ?? '' ) ) {
+			foreach ( $schema['required'] ?? array() as $required ) {
+				$this->assertArrayHasKey( $required, $value, $path . ' is missing ' . $required . '.' );
+			}
+			if ( false === ( $schema['additionalProperties'] ?? true ) ) {
+				$this->assertSame( array(), array_diff( array_keys( $value ), array_keys( $schema['properties'] ?? array() ) ), $path . ' has additional properties.' );
+			}
+			foreach ( $schema['properties'] ?? array() as $key => $property ) {
+				if ( array_key_exists( $key, $value ) ) {
+					$this->assertSchemaValue( $value[ $key ], $property, $path . '.' . $key );
+				}
+			}
+		}
+		if ( is_array( $value ) && 'array' === ( $types[0] ?? '' ) ) {
+			$this->assertGreaterThanOrEqual( $schema['minItems'] ?? 0, count( $value ), $path . ' has too few items.' );
+			$this->assertLessThanOrEqual( $schema['maxItems'] ?? PHP_INT_MAX, count( $value ), $path . ' has too many items.' );
+			if ( ! empty( $schema['uniqueItems'] ) ) {
+				$this->assertSame( count( $value ), count( array_unique( array_map( 'serialize', $value ) ) ), $path . ' has duplicate items.' );
+			}
+			foreach ( $value as $index => $item ) {
+				$this->assertSchemaValue( $item, $schema['items'], $path . '[' . $index . ']' );
+			}
+		}
 	}
 }

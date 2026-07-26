@@ -56,7 +56,7 @@ class TicketSettlementAbilities {
 			true
 		);
 		$this->register_ability( 'extrachill/calculate-booking-settlement', __( 'Calculate Booking Settlement', 'extrachill-events' ), $this->calculation_input_schema(), $this->calculation_schema(), 'calculate', 'can_access_booking', true, true );
-		$this->register_ability( 'extrachill/finalize-booking-settlement', __( 'Finalize Booking Settlement', 'extrachill-events' ), $this->finalize_input_schema(), $this->settlement_schema(), 'finalize', 'can_manage_booking_finances', false, false );
+		$this->register_ability( 'extrachill/finalize-booking-settlement', __( 'Finalize Booking Settlement', 'extrachill-events' ), $this->finalize_input_schema(), $this->settlement_schema(), 'finalize', 'can_manage_booking_finances', false, true );
 		$this->register_ability( 'extrachill/mark-booking-settlement-paid', __( 'Mark Booking Settlement Paid', 'extrachill-events' ), $this->terminal_input_schema( 'payment_reference' ), $this->settlement_schema(), 'mark_paid', 'can_manage_booking_finances', false, false );
 		$this->register_ability( 'extrachill/void-booking-settlement', __( 'Void Booking Settlement', 'extrachill-events' ), $this->terminal_input_schema( 'reason' ), $this->settlement_schema(), 'void_settlement', 'can_manage_booking_finances', false, false );
 	}
@@ -392,6 +392,10 @@ class TicketSettlementAbilities {
 					'type'    => 'string',
 					'pattern' => '^[a-f0-9]{64}$',
 				),
+				'integrity_hash'       => array(
+					'type'    => 'string',
+					'pattern' => '^[a-f0-9]{64}$',
+				),
 				'basis_amount_minor'   => array( 'type' => 'integer' ),
 				'adjustment_minor'     => array( 'type' => 'integer' ),
 				'amount_due_minor'     => array( 'type' => 'integer' ),
@@ -406,7 +410,7 @@ class TicketSettlementAbilities {
 				'created_at'           => $this->datetime_schema(),
 				'updated_at'           => $this->datetime_schema(),
 			),
-			'required'             => array( 'id', 'booking_id', 'event_id', 'venue_term_id', 'status', 'version', 'booking_version', 'basis', 'basis_points', 'currency', 'formula_version', 'included_report_ids', 'evidence_hash', 'basis_amount_minor', 'adjustment_minor', 'amount_due_minor', 'finalized_by_user_id', 'finalized_at', 'paid_by_user_id', 'paid_at', 'payment_reference', 'voided_by_user_id', 'voided_at', 'void_reason', 'created_at', 'updated_at' ),
+			'required'             => array( 'id', 'booking_id', 'event_id', 'venue_term_id', 'status', 'version', 'booking_version', 'basis', 'basis_points', 'currency', 'formula_version', 'included_report_ids', 'evidence_hash', 'integrity_hash', 'basis_amount_minor', 'adjustment_minor', 'amount_due_minor', 'finalized_by_user_id', 'finalized_at', 'paid_by_user_id', 'paid_at', 'payment_reference', 'voided_by_user_id', 'voided_at', 'void_reason', 'created_at', 'updated_at' ),
 			'additionalProperties' => false,
 		);
 	}

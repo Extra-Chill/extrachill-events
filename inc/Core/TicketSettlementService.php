@@ -249,8 +249,8 @@ class TicketSettlementService {
 			);
 		}
 		global $wpdb;
-		$now = gmdate( 'Y-m-d H:i:s' );
-		$row = array(
+		$now                   = gmdate( 'Y-m-d H:i:s' );
+		$row                   = array(
 			'booking_id'           => $booking['id'],
 			'event_id'             => $booking['event_id'],
 			'venue_term_id'        => $booking['venue_term_id'],
@@ -277,6 +277,7 @@ class TicketSettlementService {
 			'created_at'           => $now,
 			'updated_at'           => $now,
 		);
+		$row['integrity_hash'] = $this->settlement_integrity_hash( $row );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- One frozen private settlement per booking.
 		if ( false === $wpdb->insert( BookingSchema::settlements_table(), $row ) ) {
 			return $this->rollback( new \WP_Error( 'settlement_finalize_failed', __( 'The booking settlement could not be finalized.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) );
@@ -758,6 +759,18 @@ class TicketSettlementService {
 			$row[ $field ] = null === $row[ $field ] ? null : (int) $row[ $field ];
 		}
 		$row['included_report_ids'] = $ids;
+		$stored_hash                = strtolower( (string) ( $row['integrity_hash'] ?? '' ) );
+		if ( ! preg_match( '/^[a-f0-9]{64}$/', $stored_hash ) || ! hash_equals( $stored_hash, $this->settlement_integrity_hash( $row ) ) ) {
+			return new \WP_Error(
+				'settlement_integrity_failed',
+				__( 'Stored settlement terms failed their immutable financial snapshot check.', 'extrachill-events' ),
+				array(
+					'status'        => 409,
+					'settlement_id' => $row['id'],
+				)
+			);
+		}
+		$row['integrity_hash'] = $stored_hash;
 		return $row;
 	}
 
@@ -812,6 +825,29 @@ class TicketSettlementService {
 
 	private function evidence_hash( array $evidence ): string {
 		return hash( 'sha256', wp_json_encode( $this->canonicalize( $evidence ) ) );
+	}
+
+	private function settlement_integrity_hash( array $settlement ): string {
+		$ids = $settlement['included_report_ids'] ?? array();
+		if ( is_string( $ids ) ) {
+			$ids = json_decode( $ids, true );
+		}
+		$payload = array(
+			'booking_id'          => (int) ( $settlement['booking_id'] ?? 0 ),
+			'event_id'            => (int) ( $settlement['event_id'] ?? 0 ),
+			'venue_term_id'       => (int) ( $settlement['venue_term_id'] ?? 0 ),
+			'booking_version'     => (int) ( $settlement['booking_version'] ?? 0 ),
+			'basis'               => (string) ( $settlement['basis'] ?? '' ),
+			'basis_points'        => (int) ( $settlement['basis_points'] ?? 0 ),
+			'currency'            => (string) ( $settlement['currency'] ?? '' ),
+			'formula_version'     => (int) ( $settlement['formula_version'] ?? 0 ),
+			'included_report_ids' => is_array( $ids ) ? $ids : array(),
+			'evidence_hash'       => (string) ( $settlement['evidence_hash'] ?? '' ),
+			'basis_amount_minor'  => (int) ( $settlement['basis_amount_minor'] ?? 0 ),
+			'adjustment_minor'    => (int) ( $settlement['adjustment_minor'] ?? 0 ),
+			'amount_due_minor'    => (int) ( $settlement['amount_due_minor'] ?? 0 ),
+		);
+		return hash( 'sha256', wp_json_encode( $this->canonicalize( $payload ) ) );
 	}
 
 	private function report_request_hash( array $report ): string {

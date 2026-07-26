@@ -315,6 +315,157 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
  * Verifies the account preference integration and its precedence gates.
  */
 final class AccountMarketTest extends TestCase {
+	private static int $managed_user_id = 1000;
+	private $original_current_user;
+	private $original_wp_query;
+	private $original_blog_id;
+
+	protected function setUp(): void {
+		parent::setUp();
+		foreach (
+			array(
+				'test_is_user_logged_in',
+				'test_account_market_ability',
+				'test_update_scene_ability',
+				'test_is_front_page',
+				'test_is_all_events_page',
+				'test_is_near_me_page',
+				'test_page_slug',
+				'test_current_user_id',
+				'test_is_tax',
+				'test_queried_term',
+				'test_term_ancestors',
+				'test_term_link',
+				'test_query_vars',
+				'test_nocache_headers',
+				'test_status_header',
+			) as $key
+		) {
+			unset( $GLOBALS[ $key ] );
+		}
+		$_GET                       = array();
+		$this->original_current_user = $GLOBALS['current_user'] ?? null;
+		$this->original_wp_query     = $GLOBALS['wp_query'] ?? null;
+		$this->original_blog_id      = $GLOBALS['blog_id'] ?? null;
+		if ( class_exists( 'WP_Abilities_Registry' ) ) {
+			$this->register_account_abilities();
+		}
+	}
+
+	protected function tearDown(): void {
+		if ( class_exists( 'WP_Abilities_Registry' ) ) {
+			foreach ( array( 'extrachill/get-user-settings', 'extrachill/update-user-settings' ) as $ability ) {
+				if ( wp_has_ability( $ability ) ) {
+					wp_unregister_ability( $ability );
+				}
+			}
+			if ( wp_has_ability_category( 'extrachill-events-account-tests' ) ) {
+				wp_unregister_ability_category( 'extrachill-events-account-tests' );
+			}
+		}
+		$GLOBALS['current_user'] = $this->original_current_user;
+		$GLOBALS['wp_query']     = $this->original_wp_query;
+		$GLOBALS['blog_id']      = $this->original_blog_id;
+		parent::tearDown();
+	}
+
+	private function register_account_abilities(): void {
+		foreach ( array( 'extrachill/get-user-settings', 'extrachill/update-user-settings' ) as $ability ) {
+			if ( wp_has_ability( $ability ) ) {
+				wp_unregister_ability( $ability );
+			}
+		}
+		if ( ! wp_has_ability_category( 'extrachill-events-account-tests' ) ) {
+			WP_Ability_Categories_Registry::get_instance()->register(
+				'extrachill-events-account-tests',
+				array(
+					'label'       => 'Account market tests',
+					'description' => 'Managed account market contract tests.',
+				)
+			);
+		}
+		$common = array(
+			'category'            => 'extrachill-events-account-tests',
+			'permission_callback' => '__return_true',
+			'input_schema'        => array( 'type' => 'object' ),
+		);
+		WP_Abilities_Registry::get_instance()->register(
+			'extrachill/get-user-settings',
+			array_merge(
+				$common,
+				array(
+					'label'            => 'Get user settings test',
+					'description'      => 'Returns the controlled account settings.',
+					'execute_callback' => static function () {
+						$ability = $GLOBALS['test_account_market_ability'] ?? null;
+						return $ability ? $ability->execute() : array();
+					},
+				)
+			)
+		);
+		WP_Abilities_Registry::get_instance()->register(
+			'extrachill/update-user-settings',
+			array_merge(
+				$common,
+				array(
+					'label'            => 'Update user settings test',
+					'description'      => 'Records the controlled account settings update.',
+					'execute_callback' => static function ( array $input ) {
+						$ability = $GLOBALS['test_update_scene_ability'] ?? null;
+						return $ability ? $ability->execute( $input ) : array();
+					},
+				)
+			)
+		);
+	}
+
+	private function use_logged_in_user(): void {
+		$GLOBALS['test_current_user_id'] = ++self::$managed_user_id;
+		if ( class_exists( 'WP_User' ) ) {
+			$user     = new WP_User();
+			$user->ID = $GLOBALS['test_current_user_id'];
+			$GLOBALS['current_user'] = $user;
+		}
+	}
+
+	private function use_anonymous_user(): void {
+		$GLOBALS['test_current_user_id'] = 0;
+		if ( class_exists( 'WP_User' ) ) {
+			$GLOBALS['current_user'] = new WP_User();
+		}
+	}
+
+	private function use_page_query( string $slug ): void {
+		if ( ! isset( $GLOBALS['wp_query'] ) || ! $GLOBALS['wp_query'] instanceof WP_Query ) {
+			return;
+		}
+		$GLOBALS['wp_query']                 = clone $GLOBALS['wp_query'];
+		$GLOBALS['wp_query']->is_home        = false;
+		$GLOBALS['wp_query']->is_page        = true;
+		$GLOBALS['wp_query']->queried_object = new WP_Post(
+			(object) array(
+				'ID'        => 78,
+				'post_name' => $slug,
+				'post_type' => 'page',
+			)
+		);
+	}
+
+	private function use_front_page_query(): void {
+		if ( isset( $GLOBALS['wp_query'] ) && $GLOBALS['wp_query'] instanceof WP_Query ) {
+			$GLOBALS['wp_query']          = clone $GLOBALS['wp_query'];
+			$GLOBALS['wp_query']->is_home = true;
+			$GLOBALS['wp_query']->is_page = false;
+		}
+	}
+
+	private function use_all_events_query(): void {
+		if ( isset( $GLOBALS['wp_query'] ) && $GLOBALS['wp_query'] instanceof WP_Query ) {
+			$GLOBALS['wp_query']             = clone $GLOBALS['wp_query'];
+			$GLOBALS['wp_query']->is_home    = false;
+			$GLOBALS['wp_query']->query_vars = array( 'ec_events_router' => 'all' );
+		}
+	}
 	private function use_events_blog(): void {
 		if ( function_exists( 'wp_get_ability' ) ) {
 			$GLOBALS['blog_id'] = 7;
@@ -389,6 +540,7 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_resolves_coordinates_from_user_ability(): void {
+		$this->use_logged_in_user();
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
@@ -423,6 +575,7 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_fails_open_when_ability_is_unavailable(): void {
+		$this->use_logged_in_user();
 		$GLOBALS['test_is_user_logged_in'] = true;
 
 		$this->assertNull( extrachill_events_get_account_market() );
@@ -431,6 +584,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_adds_taxonomy_default_without_mutating_request_globals(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_front_page_query();
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_front_page']          = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -483,6 +639,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_explore_all_suppresses_fallback_without_mutating_preference(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_all_events_query();
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_all_events_page']     = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -524,6 +683,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_near_me_adds_geo_defaults_without_taxonomy_filter(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_page_query( 'near-me' );
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_near_me_page']        = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -603,6 +765,8 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_my_shows_route_map_uses_account_market_center(): void {
+		$this->use_logged_in_user();
+		$this->use_page_query( 'my-shows' );
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_current_user_id']        = 42;
 		$GLOBALS['test_page_slug']              = 'my-shows';
@@ -802,6 +966,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_active_market_context_escapes_label_and_links_to_account_details(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_all_events_query();
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_all_events_page']     = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -829,6 +996,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_logged_in_without_market_and_anonymous_prompts(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_front_page_query();
 		$GLOBALS['test_is_front_page']     = true;
 		$GLOBALS['test_is_user_logged_in'] = true;
 
@@ -837,6 +1007,7 @@ final class AccountMarketTest extends TestCase {
 		$logged_in = (string) ob_get_clean();
 		$this->assertStringContainsString( 'Set Local Scene', $logged_in );
 
+		$this->use_anonymous_user();
 		$GLOBALS['test_is_user_logged_in'] = false;
 		ob_start();
 		extrachill_events_render_home_market_router( array() );
@@ -848,6 +1019,9 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_homepage_promotes_saved_market_as_primary_city_route(): void {
+		$this->use_logged_in_user();
+		$this->use_events_blog();
+		$this->use_front_page_query();
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_is_front_page']          = true;
 		$GLOBALS['test_account_market_ability'] = new class() {
@@ -920,6 +1094,7 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_archive_cta_shows_save_form_or_current_confirmation(): void {
+		$this->use_logged_in_user();
 		$GLOBALS['test_is_tax']            = true;
 		$GLOBALS['test_is_user_logged_in'] = true;
 		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
@@ -936,6 +1111,7 @@ final class AccountMarketTest extends TestCase {
 	/**
 	 */
 	public function test_archive_cta_confirms_current_scene_without_save_form(): void {
+		$this->use_logged_in_user();
 		$GLOBALS['test_is_tax']                 = true;
 		$GLOBALS['test_is_user_logged_in']      = true;
 		$GLOBALS['test_queried_term']           = $this->term( 1618, 'Charleston', 'charleston' );
@@ -975,6 +1151,7 @@ final class AccountMarketTest extends TestCase {
 		};
 
 		$this->assertFalse( extrachill_events_update_archive_scene( $term, 'nonce-extrachill_events_save_scene_1618' ) );
+		$this->use_logged_in_user();
 		$GLOBALS['test_is_user_logged_in'] = true;
 		$this->assertFalse( extrachill_events_update_archive_scene( $term, 'wrong' ) );
 		$this->assertTrue( extrachill_events_update_archive_scene( $term, 'nonce-extrachill_events_save_scene_1618' ) );

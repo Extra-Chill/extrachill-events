@@ -12,7 +12,7 @@ final class ConcertStatsPublicProfileRenderTest extends WP_UnitTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		if ( ! wp_has_ability_category( 'extrachill-events-tests' ) ) {
-			wp_register_ability_category(
+			WP_Ability_Categories_Registry::get_instance()->register(
 				'extrachill-events-tests',
 				array(
 					'label'       => 'Extra Chill Events tests',
@@ -23,7 +23,7 @@ final class ConcertStatsPublicProfileRenderTest extends WP_UnitTestCase {
 		if ( wp_has_ability( 'extrachill/get-user-settings' ) ) {
 			wp_unregister_ability( 'extrachill/get-user-settings' );
 		}
-		wp_register_ability(
+		WP_Abilities_Registry::get_instance()->register(
 			'extrachill/get-user-settings',
 			array(
 				'label'               => 'User settings test',

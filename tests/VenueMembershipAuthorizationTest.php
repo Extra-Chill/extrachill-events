@@ -900,6 +900,9 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 					array( 'ID' => $user_id )
 				);
 				clean_user_cache( $user_id );
+				if ( $user_id > 1 ) {
+					( new WP_User( $user_id ) )->add_cap( VenueAuthorization::ACCESS_CAPABILITY );
+				}
 			}
 
 			register_taxonomy( 'venue', 'data_machine_events' );

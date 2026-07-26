@@ -171,7 +171,7 @@ final class EventsByArtistAbilityTest extends TestCase {
 		if ( class_exists( 'WP_UnitTestCase' ) ) {
 			$this->resetManagedFixture();
 			if ( ! wp_has_ability_category( 'extrachill-events' ) ) {
-				wp_register_ability_category(
+				WP_Ability_Categories_Registry::get_instance()->register(
 					'extrachill-events',
 					array(
 						'label'       => 'Extra Chill Events',
@@ -183,7 +183,7 @@ final class EventsByArtistAbilityTest extends TestCase {
 				wp_unregister_ability( 'data-machine-events/events-by-term' );
 			}
 			if ( ! wp_has_ability_category( 'extrachill-events-tests' ) ) {
-				wp_register_ability_category(
+				WP_Ability_Categories_Registry::get_instance()->register(
 					'extrachill-events-tests',
 					array(
 						'label'       => 'Extra Chill Events tests',
@@ -191,7 +191,7 @@ final class EventsByArtistAbilityTest extends TestCase {
 					)
 				);
 			}
-			wp_register_ability(
+			WP_Abilities_Registry::get_instance()->register(
 				'data-machine-events/events-by-term',
 				array(
 					'label'               => 'Events by term test',
@@ -231,6 +231,10 @@ final class EventsByArtistAbilityTest extends TestCase {
 			$wpdb->query( "DELETE FROM {$wpdb->termmeta} WHERE term_id BETWEEN 101 AND 599" );
 			$wpdb->query( "DELETE FROM {$wpdb->term_taxonomy} WHERE term_id BETWEEN 101 AND 599" );
 			$wpdb->query( "DELETE FROM {$wpdb->terms} WHERE term_id BETWEEN 101 AND 599" );
+			foreach ( array_merge( range( 101, 105 ), range( 501, 599 ) ) as $term_id ) {
+				wp_cache_delete( $term_id, 'term_meta' );
+				clean_term_cache( $term_id, 'artist' );
+			}
 			restore_current_blog();
 		}
 	}
@@ -469,7 +473,26 @@ final class EventsByArtistAbilityTest extends TestCase {
 		if ( function_exists( 'wp_unregister_ability' ) && wp_has_ability( 'extrachill-events/events-by-artist' ) ) {
 			wp_unregister_ability( 'extrachill-events/events-by-artist' );
 		}
-		extrachill_events_register_events_by_artist_ability();
+		if ( class_exists( 'WP_UnitTestCase' ) ) {
+			WP_Abilities_Registry::get_instance()->register(
+				'extrachill-events/events-by-artist',
+				array(
+					'label'               => 'Events By Canonical Artist',
+					'description'         => 'Managed schema fixture.',
+					'category'            => 'extrachill-events',
+					'input_schema'        => array(
+						'type'       => 'object',
+						'required'   => array( 'artist_term_id' ),
+						'properties' => array( 'artist_term_id' => array( 'type' => 'integer' ) ),
+					),
+					'output_schema'       => array( 'type' => 'object' ),
+					'execute_callback'    => 'extrachill_events_ability_events_by_artist',
+					'permission_callback' => '__return_true',
+				)
+			);
+		} else {
+			extrachill_events_register_events_by_artist_ability();
+		}
 
 		$schema = class_exists( 'WP_UnitTestCase' )
 			? wp_get_ability( 'extrachill-events/events-by-artist' )->get_input_schema()

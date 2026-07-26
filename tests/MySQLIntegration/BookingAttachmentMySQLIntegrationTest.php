@@ -150,7 +150,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$venue          = self::factory()->term->create_and_get(
 			array(
 				'taxonomy' => 'venue',
-				'name'     => 'Integration Room',
+				'name'     => 'Integration Room ' . wp_generate_uuid4(),
 			)
 		);
 		$this->venue_id = (int) $venue->term_id;

@@ -270,7 +270,11 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->assertSame( 'purged', ( new BookingAttachmentRepository() )->get( $attachment['id'] )['state'] );
 	}
 
-	/** Prove overlapping application processes converge on one complete winner. */
+	/**
+	 * Prove overlapping application processes converge on one complete winner.
+	 *
+	 * @group host-concurrency
+	 */
 	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
 		global $wpdb;
 		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The MySQL concurrency proof requires pcntl_fork().' );

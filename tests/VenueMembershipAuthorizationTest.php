@@ -366,6 +366,8 @@ if ( ! function_exists( 'maybe_unserialize' ) ) {
 final class VenueMembershipWpdb {
 	public $prefix                = 'wp_7_';
 	public $users                 = 'wp_users';
+	public $usermeta              = 'wp_usermeta';
+	public $options               = 'wp_options';
 	public $terms                 = 'wp_7_terms';
 	public $term_taxonomy         = 'wp_7_term_taxonomy';
 	public $termmeta              = 'wp_7_termmeta';
@@ -384,6 +386,24 @@ final class VenueMembershipWpdb {
 	private $meta_values_snapshot = array();
 	private $meta_records         = array();
 	private $meta_records_snapshot = array();
+	private $wordpress_wpdb;
+
+	public function __construct( $wordpress_wpdb = null ) {
+		$this->wordpress_wpdb = $wordpress_wpdb;
+		if ( $wordpress_wpdb ) {
+			$this->users    = $wordpress_wpdb->users;
+			$this->usermeta = $wordpress_wpdb->usermeta;
+			$this->options  = $wordpress_wpdb->options;
+		}
+	}
+
+	public function suppress_errors( $suppress = true ) {
+		return $this->wordpress_wpdb ? $this->wordpress_wpdb->suppress_errors( $suppress ) : false;
+	}
+
+	public function get_blog_prefix( $blog_id = null ) {
+		return $this->wordpress_wpdb ? $this->wordpress_wpdb->get_blog_prefix( $blog_id ) : $this->prefix;
+	}
 
 	public function prepare( $query, ...$args ) {
 		if ( 1 === count( $args ) && is_array( $args[0] ) ) {
@@ -401,6 +421,9 @@ final class VenueMembershipWpdb {
 	}
 
 	public function insert( $table, $row ) {
+		if ( $this->wordpress_wpdb && in_array( $table, array( $this->users, $this->usermeta, $this->options ), true ) ) {
+			return $this->wordpress_wpdb->insert( $table, $row );
+		}
 		$this->last_error = '';
 		if ( $this->fail_invitation_insert && 'wp_7_ec_venue_invitations' === $table ) {
 			$this->last_error = 'simulated invitation write failure';
@@ -452,6 +475,9 @@ final class VenueMembershipWpdb {
 	}
 
 	public function get_row( $query, $output = null ) {
+		if ( $this->wordpress_wpdb && false !== strpos( $query, $this->users ) ) {
+			return $this->wordpress_wpdb->get_row( $query, $output );
+		}
 		unset( $output );
 		$this->last_error = '';
 		if ( preg_match( "/SELECT meta_id, meta_value FROM .*term_id = (\d+) AND meta_key = '([^']+)'/", $query, $meta_match ) ) {
@@ -514,10 +540,16 @@ final class VenueMembershipWpdb {
 		if ( preg_match( '/SELECT term_id FROM .*term_id = (\d+) FOR UPDATE/', $query, $match ) ) {
 			return isset( $GLOBALS['venue_membership_test']['terms'][ (int) $match[1] ] ) ? (int) $match[1] : null;
 		}
+		if ( $this->wordpress_wpdb && ( false !== strpos( $query, $this->users ) || false !== strpos( $query, $this->usermeta ) || false !== strpos( $query, $this->options ) ) ) {
+			return $this->wordpress_wpdb->get_var( $query );
+		}
 		return null;
 	}
 
 	public function get_results( $query, $output = null ) {
+		if ( $this->wordpress_wpdb && ( false !== strpos( $query, $this->users ) || false !== strpos( $query, $this->usermeta ) || false !== strpos( $query, $this->options ) ) ) {
+			return $this->wordpress_wpdb->get_results( $query, $output );
+		}
 		unset( $output );
 		$this->last_error = '';
 		if ( false !== strpos( $query, 'ec_venue_invitations' ) ) {
@@ -611,6 +643,9 @@ final class VenueMembershipWpdb {
 	}
 
 	public function query( $query ) {
+		if ( $this->wordpress_wpdb && ( false !== strpos( $query, $this->users ) || false !== strpos( $query, $this->usermeta ) || false !== strpos( $query, $this->options ) ) ) {
+			return $this->wordpress_wpdb->query( $query );
+		}
 		$this->last_error = '';
 		if ( 'START TRANSACTION' === $query ) {
 			$this->snapshot             = $this->rows;
@@ -680,6 +715,9 @@ final class VenueMembershipWpdb {
 	}
 
 	public function update( $table, $data, $where, $format = null, $where_format = null ) {
+		if ( $this->wordpress_wpdb && in_array( $table, array( $this->users, $this->usermeta, $this->options ), true ) ) {
+			return $this->wordpress_wpdb->update( $table, $data, $where, $format, $where_format );
+		}
 		unset( $format, $where_format );
 		$this->last_error = '';
 		if ( $this->prefix . 'ec_venue_members' === $table ) {
@@ -717,6 +755,9 @@ final class VenueMembershipWpdb {
 	}
 
 	public function delete( $table, $where, $where_format = null ) {
+		if ( $this->wordpress_wpdb && in_array( $table, array( $this->users, $this->usermeta, $this->options ), true ) ) {
+			return $this->wordpress_wpdb->delete( $table, $where, $where_format );
+		}
 		unset( $where_format );
 		$this->last_error = '';
 		$meta_id          = (int) ( $where['meta_id'] ?? 0 );
@@ -800,11 +841,90 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 /**
  * Venue membership and profile composition coverage uses isolated WP doubles.
  *
- * @runTestsInSeparateProcesses
- * @preserveGlobalState disabled
  */
 final class VenueMembershipAuthorizationTest extends TestCase {
+	private $original_wpdb;
+
+	private function set_current_user( int $user_id ): void {
+		if ( function_exists( 'wp_set_current_user' ) ) {
+			wp_set_current_user( $user_id );
+		}
+	}
+
 	protected function setUp(): void {
+		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
+		if ( $this->original_wpdb ) {
+			$user_emails = array(
+				1 => 'admin@example.com',
+				2 => 'owner@example.com',
+				3 => 'member3@example.com',
+				4 => 'member4@example.com',
+				5 => 'member5@example.com',
+				6 => 'member6@example.com',
+				7 => 'existing@example.com',
+				8 => 'member8@example.com',
+				9 => 'member9@example.com',
+			);
+			for ( $user_id = 1; $user_id <= 9; ++$user_id ) {
+				if ( ! get_user_by( 'id', $user_id ) ) {
+					$this->original_wpdb->insert(
+						$this->original_wpdb->users,
+						array(
+							'ID'              => $user_id,
+							'user_login'      => 'venue-member-' . $user_id,
+							'user_pass'       => wp_hash_password( 'test-password' ),
+							'user_nicename'   => 'venue-member-' . $user_id,
+							'user_email'      => $user_emails[ $user_id ],
+							'user_registered' => current_time( 'mysql' ),
+							'user_status'     => 0,
+							'display_name'    => 'Venue Member ' . $user_id,
+						)
+					);
+					clean_user_cache( $user_id );
+				}
+				$this->original_wpdb->update(
+					$this->original_wpdb->users,
+					array( 'user_email' => $user_emails[ $user_id ] ),
+					array( 'ID' => $user_id )
+				);
+				clean_user_cache( $user_id );
+			}
+
+			register_taxonomy( 'venue', 'data_machine_events' );
+			register_taxonomy( 'artist', 'data_machine_events' );
+			foreach (
+				array(
+					55 => array( 'The Royal American', 'the-royal-american', 'venue', 'Neighborhood venue.' ),
+					56 => array( 'Music Farm', 'music-farm', 'venue', '' ),
+					57 => array( 'Test Artist', 'test-artist', 'artist', '' ),
+				) as $term_id => $term_data
+			) {
+				$this->original_wpdb->replace(
+					$this->original_wpdb->terms,
+					array(
+						'term_id'    => $term_id,
+						'name'       => $term_data[0],
+						'slug'       => $term_data[1],
+						'term_group' => 0,
+					)
+				);
+				$this->original_wpdb->replace(
+					$this->original_wpdb->term_taxonomy,
+					array(
+						'term_taxonomy_id' => $term_id,
+						'term_id'          => $term_id,
+						'taxonomy'         => $term_data[2],
+						'description'      => $term_data[3],
+						'parent'           => 0,
+						'count'            => 0,
+					)
+				);
+				clean_term_cache( $term_id, $term_data[2] );
+			}
+
+			( new WP_User( 1 ) )->set_role( 'administrator' );
+		}
+		$this->set_current_user( 1 );
 		$GLOBALS['venue_membership_test'] = array(
 			'terms'             => array(
 				55 => (object) array(
@@ -889,7 +1009,13 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 				return new WP_Error( 'unexpected_dme_update' );
 			},
 		);
-		$GLOBALS['wpdb']                  = new VenueMembershipWpdb();
+		$GLOBALS['wpdb']                  = new VenueMembershipWpdb( $this->original_wpdb );
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['wpdb'] = $this->original_wpdb;
+		$this->set_current_user( 0 );
+		parent::tearDown();
 	}
 
 	private function create_member( int $venue, int $user, bool $is_owner, string $status = VenueAuthorization::STATUS_ACTIVE, int $creator = 1 ) {
@@ -1093,6 +1219,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	public function test_abilities_share_authorization_and_execution_rechecks_it(): void {
 		$this->create_member( 55, 2, true );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 2;
+		$this->set_current_user( 2 );
 		$abilities = new VenueMembershipAbilities();
 		$abilities->register();
 
@@ -1125,6 +1252,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 3, $created['user_id'] );
 
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
+		$this->set_current_user( 3 );
 		$denied = call_user_func(
 			$GLOBALS['venue_membership_test']['abilities']['extrachill/create-venue-membership']['execute_callback'],
 			array(
@@ -1573,6 +1701,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->create_member( 55, 2, true );
 		$this->create_member( 55, 3, false );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
+		$this->set_current_user( 3 );
 		$abilities = new VenueBookingConfigAbilities();
 		$abilities->register();
 
@@ -1716,6 +1845,7 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->create_member( 55, 3, false );
 		$this->create_member( 56, 4, true, VenueAuthorization::STATUS_INVITED );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 3;
+		$this->set_current_user( 3 );
 
 		$abilities = new VenueProfileAbilities();
 		$abilities->register();
@@ -1733,8 +1863,10 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 		$this->assertSame( 'string', $update['input_schema']['properties']['expected_revision']['type'] );
 
 		$GLOBALS['venue_membership_test']['current_user_id'] = 4;
+		$this->set_current_user( 4 );
 		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 56 ) )->get_error_code() );
 		$GLOBALS['venue_membership_test']['current_user_id'] = 1;
+		$this->set_current_user( 1 );
 		$this->assertSame( 'venue_action_forbidden', call_user_func( $get['execute_callback'], array( 'venue_term_id' => 55 ) )->get_error_code() );
 	}
 

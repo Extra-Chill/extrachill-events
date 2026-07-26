@@ -147,7 +147,11 @@ final class CanonicalAdapterContractsTest extends TestCase {
 
 		$detail = extrachill_events_ability_get_venue( array( 'id' => 44 ) );
 
-		$this->assertTrue( $GLOBALS['ec_adapter_venue_reads'][0]['primed'] );
+		if ( function_exists( 'wp_cache_get' ) ) {
+			$this->assertNotFalse( wp_cache_get( 44, 'term_meta' ) );
+		} else {
+			$this->assertTrue( $GLOBALS['ec_adapter_venue_reads'][0]['primed'] );
+		}
 		foreach ( array( 'id', 'name', 'slug', 'address', 'city', 'state', 'zip', 'country', 'latitude', 'longitude', 'coordinates', 'timezone', 'website' ) as $field ) {
 			$this->assertSame( $detail[ $field ], $list[0][ $field ], $field );
 		}
@@ -280,6 +284,9 @@ final class CanonicalAdapterContractsTest extends TestCase {
 		$root = getenv( 'DME_CALENDAR_CONTRACT_ROOT' );
 		if ( false === $root || '' === $root ) {
 			$root = defined( 'DATA_MACHINE_EVENTS_PATH' ) ? DATA_MACHINE_EVENTS_PATH . 'contracts' : '';
+		}
+		if ( '' === $root && defined( 'WP_PLUGIN_DIR' ) ) {
+			$root = WP_PLUGIN_DIR . '/data-machine-events/contracts';
 		}
 		$this->assertDirectoryExists( $root, 'A composed Data Machine Events contract source is required.' );
 

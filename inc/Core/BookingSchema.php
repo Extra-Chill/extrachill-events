@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '11';
+	public const SCHEMA_VERSION = '12';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -1199,7 +1199,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::sales_reports_table()       => array(
+			self::sales_reports_table()         => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -1252,7 +1252,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::settlements_table()         => array(
+			self::settlements_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                   => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),

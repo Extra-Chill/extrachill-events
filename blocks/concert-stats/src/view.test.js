@@ -1,6 +1,8 @@
 /**
  * Concert stats public/owner request boundaries.
  */
+/* global afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest */
+
 /**
  * WordPress dependencies
  */

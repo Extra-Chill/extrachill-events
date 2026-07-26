@@ -1,6 +1,8 @@
 /**
  * useShows pagination and query identity behavior.
  */
+/* global MouseEvent, afterAll, beforeAll, beforeEach, describe, expect, it, jest */
+
 /**
  * WordPress dependencies
  */

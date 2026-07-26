@@ -285,7 +285,7 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 			),
 		);
 		$blocked = false;
-		$lock    = $this->inquiry_lock_name( $this->venue_id, $input['idempotency_key'] );
+		$lock    = BookingInquiryAdmissionService::inquiry_lock_name( $this->venue_id, $input['idempotency_key'] );
 		$this->provider->stage_probe = function () use ( $lock, &$blocked ): void {
 			$escaped = $this->contender->real_escape_string( $lock );
 			$result  = $this->contender->query( "SELECT GET_LOCK('{$escaped}', 1)" );
@@ -337,8 +337,4 @@ final class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		return 'ec_booking_file_' . substr( hash( 'sha256', $scope ), 0, 40 );
 	}
 
-	/** Derive the exact production inquiry ownership lock. */
-	private function inquiry_lock_name( int $venue_id, string $idempotency_key ): string {
-		return 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
-	}
 }

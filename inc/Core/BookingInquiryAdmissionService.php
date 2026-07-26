@@ -197,9 +197,14 @@ final class BookingInquiryAdmissionService {
 		if ( $venue_id < 1 || '' === trim( $idempotency_key ) ) {
 			return new \WP_Error( 'booking_inquiry_lock_invalid', __( 'The inquiry ownership lock is invalid.', 'extrachill-events' ) );
 		}
-		$name     = 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
+		$name     = self::inquiry_lock_name( $venue_id, $idempotency_key );
 		$acquired = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $name, 10 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Serializes the cross-store inquiry saga.
 		return 1 === (int) $acquired ? $name : new \WP_Error( 'booking_inquiry_lock_unavailable', __( 'The inquiry is already being processed.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+
+	/** Return the stable complete-saga lock identity. */
+	public static function inquiry_lock_name( int $venue_id, string $idempotency_key ): string {
+		return 'ec_booking_inquiry_' . substr( hash( 'sha256', get_current_blog_id() . "\0" . $venue_id . "\0" . $idempotency_key ), 0, 40 );
 	}
 
 	/** Release the complete-saga lock without guessing on uncertainty. */

@@ -61,7 +61,14 @@ class QualifyRecheckHandlerTest extends TestCase {
 			array(
 				'label'               => 'Qualify venue test',
 				'description'         => 'Returns the controlled qualification result.',
-				'execute_callback'    => static fn() => $GLOBALS['ec_test_ability_result'],
+				'input_schema'        => array(
+					'type'       => 'object',
+					'properties' => array(
+						'url' => array( 'type' => 'string' ),
+					),
+					'required'   => array( 'url' ),
+				),
+				'execute_callback'    => static fn( array $input ) => $GLOBALS['ec_test_ability_result'],
 				'permission_callback' => '__return_true',
 			)
 		);

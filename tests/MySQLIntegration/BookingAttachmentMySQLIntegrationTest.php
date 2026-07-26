@@ -134,7 +134,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	 *
 	 * @var int
 	 */
-	private $actor_id;
+	protected $actor_id;
 	/** Whether the membership contender remained blocked during claim.
 	 *
 	 * @var bool

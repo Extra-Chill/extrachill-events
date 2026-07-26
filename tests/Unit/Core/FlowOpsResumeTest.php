@@ -28,21 +28,33 @@ use ExtraChillEvents\Cli\FlowOps;
 class FlowOpsResumeTest extends TestCase {
 	private $original_wpdb;
 	private $log_callback;
+	private $original_log_hooks;
+	private $enqueue_callback;
 
 	protected function setUp(): void {
 		parent::setUp();
-		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
+		$this->original_wpdb      = $GLOBALS['wpdb'] ?? null;
+		$this->original_log_hooks = $GLOBALS['wp_filter']['datamachine_log'] ?? null;
 
 		// Load the focused fake database before exercising the real FlowOps class.
 		require_once __DIR__ . '/Stubs/flowops-resume-stubs.php';
 		require_once dirname( __DIR__, 3 ) . '/inc/Cli/FlowOps.php';
 
+		if ( function_exists( 'remove_all_actions' ) ) {
+			remove_all_actions( 'datamachine_log' );
+		}
 		$GLOBALS['wpdb']                  = new FlowOpsFakeWpdb();
 		$GLOBALS['ec_test_log_entries']   = array();
+		$GLOBALS['ec_test_async_actions'] = array();
 		$this->log_callback               = static function ( string $level, string $message, array $context ): void {
 			$GLOBALS['ec_test_log_entries'][] = compact( 'level', 'message', 'context' );
 		};
 		add_action( 'datamachine_log', $this->log_callback, 10, 3 );
+		$this->enqueue_callback = static function ( $pre, string $hook, array $args, string $group ) {
+			$GLOBALS['ec_test_async_actions'][] = compact( 'hook', 'args', 'group' );
+			return 1;
+		};
+		add_filter( 'pre_as_enqueue_async_action', $this->enqueue_callback, 10, 4 );
 		add_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
 	}
 
@@ -53,8 +65,14 @@ class FlowOpsResumeTest extends TestCase {
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
 		remove_action( 'datamachine_log', $this->log_callback, 10 );
+		remove_filter( 'pre_as_enqueue_async_action', $this->enqueue_callback, 10 );
+		if ( null === $this->original_log_hooks ) {
+			unset( $GLOBALS['wp_filter']['datamachine_log'] );
+		} else {
+			$GLOBALS['wp_filter']['datamachine_log'] = $this->original_log_hooks;
+		}
 		remove_filter( 'pre_option_timezone_string', array( $this, 'filter_timezone_string' ) );
-		unset( $GLOBALS['ec_test_log_entries'] );
+		unset( $GLOBALS['ec_test_log_entries'], $GLOBALS['ec_test_async_actions'] );
 		parent::tearDown();
 	}
 

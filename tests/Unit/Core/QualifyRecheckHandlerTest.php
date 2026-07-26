@@ -27,13 +27,24 @@ require_once dirname( __DIR__, 3 ) . '/inc/Core/QualifyRecheckHandler.php';
 
 class QualifyRecheckHandlerTest extends TestCase {
 	private $original_wpdb;
+	private $original_log_hooks;
+	private $schedule_callback;
 
 	protected function setUp(): void {
 		parent::setUp();
 		$this->original_wpdb                  = $GLOBALS['wpdb'] ?? null;
+		$this->original_log_hooks             = $GLOBALS['wp_filter']['datamachine_log'] ?? null;
+		if ( function_exists( 'remove_all_actions' ) ) {
+			remove_all_actions( 'datamachine_log' );
+		}
 		$GLOBALS['wpdb']                     = new QualifyRecheckWpdb();
 		$GLOBALS['ec_test_action_scheduler'] = array();
 		$GLOBALS['ec_test_ability_result']   = null;
+		$this->schedule_callback             = static function ( $pre, int $timestamp, string $hook, array $args, string $group ) {
+			$GLOBALS['ec_test_action_scheduler'][] = compact( 'timestamp', 'hook', 'args', 'group' );
+			return 12345;
+		};
+		add_filter( 'pre_as_schedule_single_action', $this->schedule_callback, 10, 5 );
 		$this->register_ability();
 	}
 
@@ -43,6 +54,12 @@ class QualifyRecheckHandlerTest extends TestCase {
 		}
 		if ( function_exists( 'wp_unregister_ability_category' ) && wp_has_ability_category( 'extrachill-events-tests' ) ) {
 			wp_unregister_ability_category( 'extrachill-events-tests' );
+		}
+		remove_filter( 'pre_as_schedule_single_action', $this->schedule_callback, 10 );
+		if ( null === $this->original_log_hooks ) {
+			unset( $GLOBALS['wp_filter']['datamachine_log'] );
+		} else {
+			$GLOBALS['wp_filter']['datamachine_log'] = $this->original_log_hooks;
 		}
 		$GLOBALS['wpdb'] = $this->original_wpdb;
 		unset(

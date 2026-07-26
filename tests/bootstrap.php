@@ -132,3 +132,14 @@ require_once dirname( __DIR__ ) . '/inc/Core/QualifyVerdictResolver.php';
 require_once dirname( __DIR__ ) . '/inc/Core/PlatformDetector.php';
 require_once dirname( __DIR__ ) . '/inc/Core/QualifyFingerprinter.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/VenueQualificationAbilities.php';
+
+// Managed multisite tests exercise the production network's Events blog ID.
+if ( function_exists( 'is_multisite' ) && is_multisite() && function_exists( 'get_site' ) && function_exists( 'wpmu_create_blog' ) && ! get_site( 7 ) ) {
+	while ( ! get_site( 7 ) ) {
+		$next_id = get_sites( array( 'count' => true ) ) + 1;
+		$created = wpmu_create_blog( 'site-' . $next_id . '.example.org', '/', 'Test Site ' . $next_id, 1 );
+		if ( is_wp_error( $created ) || (int) $created > 7 ) {
+			throw new RuntimeException( 'Unable to provision the Events multisite test fixture.' );
+		}
+	}
+}

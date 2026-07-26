@@ -514,6 +514,9 @@ final class VenueMembershipWpdb {
 
 	public function get_var( $query ) {
 		$this->last_error = '';
+		if ( preg_match( "/SHOW TABLES LIKE '([^']+)'/", $query, $table_match ) ) {
+			return $table_match[1];
+		}
 		if ( preg_match( '/SELECT ID FROM .* WHERE ID = (\d+) FOR UPDATE/', $query, $user_match ) ) {
 			return isset( $GLOBALS['venue_membership_test']['users'][ (int) $user_match[1] ] ) ? (int) $user_match[1] : null;
 		}

@@ -313,6 +313,9 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
 
 /**
  * Verifies the account preference integration and its precedence gates.
+ *
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
  */
 final class AccountMarketTest extends TestCase {
 	private function term( int $term_id, string $name, string $slug ): WP_Term {
@@ -609,13 +612,13 @@ final class AccountMarketTest extends TestCase {
 
 	public function test_scoped_query_pagination_preserves_serving_url_identity(): void {
 		$GLOBALS['ec_locations_blog_id'] = 7;
-		$GLOBALS['test_is_tax']           = true;
-		$GLOBALS['test_query_vars']       = array(
+		$GLOBALS['test_is_tax']          = true;
+		$GLOBALS['test_query_vars']      = array(
 			'event_scope' => 'this-weekend',
 			'paged'       => 2,
 		);
-		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
-		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
+		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
 
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=2' );
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );
@@ -625,13 +628,13 @@ final class AccountMarketTest extends TestCase {
 
 	public function test_scoped_page_one_canonical_matches_slashless_serving_url(): void {
 		$GLOBALS['ec_locations_blog_id'] = 7;
-		$GLOBALS['test_is_tax']           = true;
-		$GLOBALS['test_query_vars']       = array(
+		$GLOBALS['test_is_tax']          = true;
+		$GLOBALS['test_query_vars']      = array(
 			'event_scope' => 'tonight',
 			'paged'       => 1,
 		);
-		$GLOBALS['test_queried_term'] = new WP_Term( 1618, 'Charleston', 'charleston' );
-		$GLOBALS['test_term_link']     = 'https://events.example/location/usa/south-carolina/charleston/';
+		$GLOBALS['test_queried_term']    = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_link']       = 'https://events.example/location/usa/south-carolina/charleston/';
 
 		$canonical = extrachill_events_discovery_canonical( 'https://events.example/?paged=1' );
 		unset( $GLOBALS['ec_locations_blog_id'], $GLOBALS['test_term_link'] );

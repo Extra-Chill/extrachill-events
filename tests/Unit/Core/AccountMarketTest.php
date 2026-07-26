@@ -522,6 +522,29 @@ final class AccountMarketTest extends TestCase {
 		return array();
 	}
 
+	private function venue_settings_rewrite_rule(): array {
+		$this->use_events_blog();
+		if ( isset( $GLOBALS['wp_rewrite'] ) && $GLOBALS['wp_rewrite'] instanceof WP_Rewrite ) {
+			$GLOBALS['wp_rewrite']->extra_rules_top = array();
+			extrachill_events_router_rewrite_rules();
+			$query = $GLOBALS['wp_rewrite']->extra_rules_top['^venue-settings/?$'] ?? null;
+			return null === $query ? array() : array(
+				'regex' => '^venue-settings/?$',
+				'query' => $query,
+				'after' => 'top',
+			);
+		}
+
+		$GLOBALS['test_rewrite_rules'] = array();
+		extrachill_events_router_rewrite_rules();
+		foreach ( $GLOBALS['test_rewrite_rules'] as $rule ) {
+			if ( '^venue-settings/?$' === $rule['regex'] ) {
+				return $rule;
+			}
+		}
+		return array();
+	}
+
 	private function use_discovery_query( WP_Term $term, string $scope, int $paged ): ?WP_Query {
 		$this->use_events_blog();
 		if ( ! isset( $GLOBALS['wp_query'] ) || ! $GLOBALS['wp_query'] instanceof WP_Query ) {
@@ -856,17 +879,13 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_venue_settings_rewrite_uses_existing_router_surface(): void {
-		$GLOBALS['test_rewrite_rules'] = array();
-
-		extrachill_events_router_rewrite_rules();
-
-		$this->assertContains(
+		$this->assertSame(
 			array(
 				'regex' => '^venue-settings/?$',
 				'query' => 'index.php?ec_events_router=venue-settings',
 				'after' => 'top',
 			),
-			$GLOBALS['test_rewrite_rules']
+			$this->venue_settings_rewrite_rule()
 		);
 	}
 
@@ -982,6 +1001,7 @@ final class AccountMarketTest extends TestCase {
 	}
 
 	public function test_venue_settings_query_uses_router_archive_flags(): void {
+		$this->use_events_blog();
 		$query = new class( array( 'ec_events_router' => 'venue-settings' ) ) {
 			public bool $is_404     = true;
 			public bool $is_archive = false;

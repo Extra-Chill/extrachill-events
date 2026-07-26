@@ -7,6 +7,7 @@
 
 use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingCommunicationService;
+use ExtraChillEvents\Core\BookingNotificationService;
 use ExtraChillEvents\Core\BookingPrivateFileProvider;
 use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingHoldRepository;
@@ -617,6 +618,15 @@ final class BookingWpdb {
 			}
 			return $count;
 		}
+		if ( preg_match( "/SELECT COUNT\(\*\) FROM .*ec_booking_activity WHERE external_id = '(\d+)' AND kind = 'notification_delivery_attempted'/", $query, $match ) ) {
+			$count = 0;
+			foreach ( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array() as $row ) {
+				if ( (string) ( $row['external_id'] ?? '' ) === $match[1] && 'notification_delivery_attempted' === $row['kind'] ) {
+					++$count;
+				}
+			}
+			return $count;
+		}
 		++$this->schema_queries;
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated schema read failure';
@@ -670,6 +680,11 @@ final class BookingWpdb {
 		if ( $is_activity && preg_match( '/WHERE communication_intent_id = (\d+) ORDER BY id DESC LIMIT 1/', $query, $match ) ) {
 			++$this->communication_state_queries;
 			$rows = array_values( array_filter( $this->rows[ $table ] ?? array(), static function ( $row ) use ( $match ) { return (int) ( $row['communication_intent_id'] ?? 0 ) === (int) $match[1]; } ) );
+			usort( $rows, static function ( $left, $right ) { return $right['id'] <=> $left['id']; } );
+			return $rows[0] ?? null;
+		}
+		if ( $is_activity && preg_match( "/WHERE external_id = '(\d+)' AND kind IN \('notification_delivered', 'notification_suppressed'\)/", $query, $match ) ) {
+			$rows = array_values( array_filter( $this->rows[ $table ] ?? array(), static function ( $row ) use ( $match ) { return (string) ( $row['external_id'] ?? '' ) === $match[1] && in_array( $row['kind'], array( 'notification_delivered', 'notification_suppressed' ), true ); } ) );
 			usort( $rows, static function ( $left, $right ) { return $right['id'] <=> $left['id']; } );
 			return $rows[0] ?? null;
 		}
@@ -837,6 +852,30 @@ final class BookingWpdb {
 		if ( $this->fail_reads ) {
 			$this->last_error = 'simulated result read failure';
 			return null; }
+		if ( false !== strpos( $query, 'SELECT source.* FROM' ) && false !== strpos( $query, "source.kind IN ('inquiry_submitted'" ) ) {
+			preg_match( '/LIMIT (\d+)/', $query, $limit );
+			$requests = array();
+			foreach ( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array() as $row ) {
+				if ( in_array( $row['kind'], array( 'notification_requested', 'notification_source_ignored' ), true ) ) {
+					$requests[] = (string) $row['external_id'];
+				}
+			}
+			$rows = array_values( array_filter( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array(), static function ( $row ) use ( $requests ) { return in_array( $row['kind'], array( 'inquiry_submitted', 'assignment_changed', 'status_changed', 'hold_expired', 'event_conversion_failed' ), true ) && ! in_array( (string) $row['id'], $requests, true ); } ) );
+			usort( $rows, static function ( $left, $right ) { return $left['id'] <=> $right['id']; } );
+			return array_slice( $rows, 0, (int) ( $limit[1] ?? 50 ) );
+		}
+		if ( false !== strpos( $query, 'SELECT request.* FROM' ) && false !== strpos( $query, "request.kind = 'notification_requested'" ) ) {
+			preg_match( '/LIMIT (\d+)/', $query, $limit );
+			$terminals = array();
+			foreach ( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array() as $row ) {
+				if ( in_array( $row['kind'], array( 'notification_delivered', 'notification_suppressed' ), true ) ) {
+					$terminals[] = (string) $row['external_id'];
+				}
+			}
+			$rows = array_values( array_filter( $this->rows[ $this->prefix . 'ec_booking_activity' ] ?? array(), static function ( $row ) use ( $terminals ) { return 'notification_requested' === $row['kind'] && ! in_array( (string) $row['id'], $terminals, true ); } ) );
+			usort( $rows, static function ( $left, $right ) { return $left['id'] <=> $right['id']; } );
+			return array_slice( $rows, 0, (int) ( $limit[1] ?? 50 ) );
+		}
 		if ( false !== strpos( $query, 'ec_booking_communication_state' ) && false !== strpos( $query, 'INNER JOIN' ) && preg_match( "/s\.booking_id = (\d+) AND s\.status = 'scheduled' AND s\.intent_id > (\d+).*LIMIT (\d+)/", $query, $match ) ) {
 			++$this->communication_state_queries;
 			$this->pending_reminder_query_cursors[] = (int) $match[2];
@@ -1364,6 +1403,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingNotificationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingCommunicationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMutationService.php';

@@ -166,7 +166,11 @@ class BookingLifecycle {
 			return $this->rollback( $event );
 		}
 		$committed = $this->commit();
-		return is_wp_error( $committed ) ? $committed : $this->bookings->get( $booking['id'] );
+		if ( is_wp_error( $committed ) ) {
+			return $committed;
+		}
+		BookingNotificationService::emit( BookingNotificationService::TYPE_INQUIRY_SUBMITTED, (int) $event['id'] );
+		return $this->bookings->get( $booking['id'] );
 	}
 
 	/**
@@ -454,7 +458,15 @@ class BookingLifecycle {
 			return $this->rollback( $event );
 		}
 		$committed = $this->commit();
-		return is_wp_error( $committed ) ? $committed : $this->bookings->get( $current['id'] );
+		if ( is_wp_error( $committed ) ) {
+			return $committed;
+		}
+		if ( 'assignment_changed' === $kind ) {
+			BookingNotificationService::emit( BookingNotificationService::TYPE_ASSIGNMENT_CHANGED, (int) $event['id'] );
+		} elseif ( 'status_changed' === $kind && 'needs_info' === ( $payload['from_status'] ?? '' ) && 'submitted' === ( $payload['to_status'] ?? '' ) ) {
+			BookingNotificationService::emit( BookingNotificationService::TYPE_INFORMATION_RECEIVED, (int) $event['id'] );
+		}
+		return $this->bookings->get( $current['id'] );
 	}
 
 	/** Fail closed before any lifecycle-owned version change while conversion runs. */

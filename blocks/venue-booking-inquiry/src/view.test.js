@@ -255,13 +255,16 @@ describe( 'VenueBookingInquiryApp', () => {
 	it( 'resets single-use Turnstile tokens after attempts and rejects expired tokens', async () => {
 		apiFetch.mockRejectedValue( {
 			code: 'transport_error',
-			message: 'Offline.',
+			message: 'private server details',
 		} );
 		const { container, root, token } = await renderApp();
 		completeForm( container );
 		await submit( container, token );
 		expect( window.turnstile.reset ).toHaveBeenCalledTimes( 1 );
 		expect( token.value ).toBe( '' );
+		expect( container.textContent ).not.toContain(
+			'private server details'
+		);
 
 		await act( async () => {
 			container

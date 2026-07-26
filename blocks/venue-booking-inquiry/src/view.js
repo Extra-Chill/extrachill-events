@@ -221,6 +221,7 @@ export function VenueBookingInquiryApp( {
 			setState( 'success' );
 		} catch ( error ) {
 			const code = error?.code || '';
+			const status = Number.parseInt( error?.data?.status, 10 ) || 0;
 			const fieldErrors =
 				error?.data?.fields || error?.data?.field_errors || {};
 			if (
@@ -242,10 +243,15 @@ export function VenueBookingInquiryApp( {
 			) {
 				setState( 'unavailable' );
 			} else {
-				setErrors( fieldErrors );
+				setErrors(
+					typeof fieldErrors === 'object' && fieldErrors !== null
+						? fieldErrors
+						: {}
+				);
 				setMessage(
-					error?.message ||
-						'The inquiry could not be submitted safely. Please try again.'
+					[ 400, 403, 409, 413, 429 ].includes( status ) && code
+						? error.message
+						: 'The inquiry could not be submitted safely. Please try again.'
 				);
 				setState( 'recoverable_error' );
 			}

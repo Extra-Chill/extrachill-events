@@ -232,6 +232,37 @@ class VenueBookingConfigAbilities {
 				'required'             => array( 'version', 'fields' ),
 				'additionalProperties' => false,
 			),
+			'public_requirements'       => array(
+				'type'     => 'array',
+				'maxItems' => 20,
+				'items'    => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 500,
+				),
+			),
+			'consent'                   => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'id'       => array(
+						'type'      => 'string',
+						'minLength' => 1,
+						'maxLength' => 64,
+					),
+					'version'  => array(
+						'type'    => 'integer',
+						'minimum' => 1,
+					),
+					'label'    => array(
+						'type'      => 'string',
+						'minLength' => 1,
+						'maxLength' => 500,
+					),
+					'required' => array( 'type' => 'boolean' ),
+				),
+				'required'             => array( 'id', 'version', 'label', 'required' ),
+				'additionalProperties' => false,
+			),
 			'spaces'                    => array(
 				'type'     => 'array',
 				'maxItems' => 50,
@@ -307,7 +338,7 @@ class VenueBookingConfigAbilities {
 			),
 			'correspondence'            => $this->correspondence_schema(),
 		);
-		$required     = array( 'version', 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes', 'correspondence' );
+		$required     = array( 'version', 'enabled', 'intake', 'public_requirements', 'consent', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes', 'correspondence' );
 		if ( $include_metadata ) {
 			$properties['revision']           = array(
 				'type'    => 'integer',
@@ -334,7 +365,7 @@ class VenueBookingConfigAbilities {
 		}
 		$legacy                                  = $schema;
 		$legacy['properties']['version']['enum'] = array( VenueBookingConfig::LEGACY_VERSION );
-		$legacy['required']                      = array_values( array_diff( $legacy['required'], array( 'correspondence' ) ) );
+		$legacy['required']                      = array_values( array_diff( $legacy['required'], array( 'correspondence', 'public_requirements', 'consent' ) ) );
 		return array( 'oneOf' => array( $legacy, $schema ) );
 	}
 

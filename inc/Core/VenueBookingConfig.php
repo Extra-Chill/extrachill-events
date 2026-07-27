@@ -23,6 +23,7 @@ class VenueBookingConfig {
 	public const REMINDER_POLICY_VERSION  = 1;
 	public const CORRESPONDENCE_TEMPLATES = array( 'operator_message', 'follow_up', 'hold_expiring' );
 	public const CORRESPONDENCE_VARIABLES = array( 'artist_name', 'booking_id', 'contact_name', 'venue_name' );
+	public const CONSENT_VERSION          = 1;
 
 	/** @var VenueAuthorization */
 	private $authorization;
@@ -235,6 +236,14 @@ class VenueBookingConfig {
 		if ( is_wp_error( $fields ) ) {
 			return $fields;
 		}
+		$requirements = $this->normalize_public_requirements( $config['public_requirements'] ?? array() );
+		if ( is_wp_error( $requirements ) ) {
+			return $requirements;
+		}
+		$consent = $this->normalize_consent( $config['consent'] ?? array() );
+		if ( is_wp_error( $consent ) ) {
+			return $consent;
+		}
 		$channels = $this->normalize_channels( $config['marketing_channels'] ?? array() );
 		if ( is_wp_error( $channels ) ) {
 			return $channels;
@@ -271,6 +280,8 @@ class VenueBookingConfig {
 				'version' => 1,
 				'fields'  => $fields,
 			),
+			'public_requirements'       => $requirements,
+			'consent'                   => $consent,
 			'spaces'                    => $spaces,
 			'default_deal'              => array(
 				'version'                    => 1,
@@ -298,6 +309,13 @@ class VenueBookingConfig {
 			'intake'                    => array(
 				'version' => 1,
 				'fields'  => array(),
+			),
+			'public_requirements'       => array(),
+			'consent'                   => array(
+				'id'       => 'booking-privacy',
+				'version'  => self::CONSENT_VERSION,
+				'label'    => __( 'I agree that this venue may use these details to review and respond to my booking inquiry.', 'extrachill-events' ),
+				'required' => true,
 			),
 			'spaces'                    => array(),
 			'default_deal'              => array(
@@ -471,6 +489,40 @@ class VenueBookingConfig {
 		return $normalized;
 	}
 
+	/** Normalize public, non-operational requirements shown before inquiry intake. */
+	private function normalize_public_requirements( $requirements ) {
+		if ( ! is_array( $requirements ) || count( $requirements ) > 20 ) {
+			return new \WP_Error( 'invalid_booking_public_requirements', __( 'Public booking requirements must contain at most 20 items.', 'extrachill-events' ) );
+		}
+		$normalized = array();
+		foreach ( $requirements as $requirement ) {
+			$value = mb_substr( sanitize_text_field( (string) $requirement ), 0, 500 );
+			if ( '' === $value ) {
+				return new \WP_Error( 'invalid_booking_public_requirement', __( 'Public booking requirements must be plain text.', 'extrachill-events' ) );
+			}
+			$normalized[] = $value;
+		}
+		return $normalized;
+	}
+
+	/** Normalize the versioned public consent descriptor. */
+	private function normalize_consent( $consent ) {
+		$defaults = $this->defaults()['consent'];
+		$consent  = is_array( $consent ) ? wp_parse_args( $consent, $defaults ) : array();
+		$id       = mb_substr( sanitize_key( (string) ( $consent['id'] ?? '' ) ), 0, 64 );
+		$version  = $consent['version'] ?? null;
+		$label    = mb_substr( sanitize_text_field( (string) ( $consent['label'] ?? '' ) ), 0, 500 );
+		if ( '' === $id || ! is_int( $version ) || $version < 1 || '' === $label ) {
+			return new \WP_Error( 'invalid_booking_consent', __( 'Booking consent requires a stable identifier, version, and public label.', 'extrachill-events' ) );
+		}
+		return array(
+			'id'       => $id,
+			'version'  => $version,
+			'label'    => $label,
+			'required' => ! empty( $consent['required'] ),
+		);
+	}
+
 	private function normalize_channels( $channels ) {
 		if ( ! is_array( $channels ) || count( $channels ) > 20 ) {
 			return new \WP_Error( 'invalid_booking_marketing_channels', __( 'Marketing channels must be an array of at most 20 keys.', 'extrachill-events' ) );
@@ -640,7 +692,7 @@ class VenueBookingConfig {
 
 	/** Return top-level settings changed by the replacement document. */
 	private function changed_fields( array $current, array $next ): array {
-		$fields  = array( 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes', 'correspondence' );
+		$fields  = array( 'enabled', 'intake', 'public_requirements', 'consent', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'hold_ttl_minutes', 'correspondence' );
 		$changed = array();
 		foreach ( $fields as $field ) {
 			if ( $current[ $field ] !== $next[ $field ] ) {

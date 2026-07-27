@@ -368,6 +368,16 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertFalse( is_wp_error( $first ) );
 		$this->assertSame( $first, $second );
 		$this->assertSame( array( array( 'attachment_id' => 301, 'role' => 'image' ) ), $first['asset_refs'] );
+		$owner = static fn() => array(
+			'user_id'  => 7,
+			'agent_id' => 9,
+		);
+		add_filter( 'datamachine_socials_delegated_cross_post_execution_owner', $owner, 10, 3 );
+		$first_prepared  = DelegatedCrossPostAction::prepare( $first, array( 'operation_ref' => 'dop_' . str_repeat( 'a', 64 ), 'actor' => array( 'user_id' => 12 ) ) );
+		$second_prepared = DelegatedCrossPostAction::prepare( $second, array( 'operation_ref' => 'dop_' . str_repeat( 'a', 64 ), 'actor' => array( 'user_id' => 13 ) ) );
+		remove_filter( 'datamachine_socials_delegated_cross_post_execution_owner', $owner, 10 );
+		$this->assertSame( $first_prepared, $second_prepared );
+		$this->assertStringNotContainsString( 'delegated_actor', wp_json_encode( $first_prepared ) );
 
 		$this->configure( array( $this->newsletter( 'newsletter', 'direct' ) ), 5 );
 		$this->service()->trigger( $booking['id'], 12 );

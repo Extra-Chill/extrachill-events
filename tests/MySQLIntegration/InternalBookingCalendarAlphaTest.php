@@ -169,7 +169,7 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 			),
 			$operator_a
 		);
-		$this->assertSame( 'scheduled', $reminder['state']['status'] );
+		$this->assertSame( 'scheduled', $reminder['status'] );
 
 		$sync_input = array(
 			'booking_id'       => $booking['id'],

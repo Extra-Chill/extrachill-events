@@ -13,6 +13,7 @@ final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMy
 		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The native hold proof requires pcntl_fork().' );
 		$this->register_booking_abilities();
 		wp_set_current_user( $this->actor_id );
+		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );
 
 		$config            = wp_get_ability( 'extrachill/get-venue-booking-config' )->execute( array( 'venue_term_id' => $this->venue_id ) );
 		$this->assertIsArray( $config, is_wp_error( $config ) ? $config->get_error_code() : 'Venue config was not returned.' );

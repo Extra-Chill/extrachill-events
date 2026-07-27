@@ -28,6 +28,7 @@ on:
       - tests/MySQLIntegration/InternalBookingCalendarAlphaTest.php
       - tests/MySQLIntegration/InternalBookingHoldConcurrencyMySQLProof.php
       - tests/MySQLIntegration/host-wordpress-bootstrap.php
+      - tests/MySQLIntegration/internal-booking-alpha-bootstrap.php
       - tests/MySQLIntegration/wp-tests-config.php
 
 permissions:
@@ -151,6 +152,7 @@ jobs:
               phpunit_no_tests: "fail",
               wp_codebox_multisite: true,
               wp_codebox_phpunit_bootstrap_mode: "managed",
+              wp_codebox_phpunit_bootstrap_files: ["tests/MySQLIntegration/internal-booking-alpha-bootstrap.php"],
               wp_codebox_phpunit_test_root: $root,
               wp_codebox_phpunit_config: $config,
               wp_codebox_phpunit_cwd: "/wordpress/wp-content/plugins/extrachill-events",

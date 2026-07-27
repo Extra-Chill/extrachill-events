@@ -5,7 +5,6 @@
  * @package ExtraChillEvents\Tests\MySQLIntegration
  */
 
-use DataMachine\Core\Database\PostIdentityIndex\PostIdentityIndex;
 use DataMachineEvents\Core\EventDatesTable;
 use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingSchema;
@@ -43,9 +42,6 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		$_SERVER['HTTP_HOST']   = 'example.org';
 
 		switch_to_blog( $this->events_blog_id );
-		$this->assertTrue( BookingSchema::install() );
-		EventDatesTable::create_table();
-		( new PostIdentityIndex() )->create_table();
 		$this->assertTrue( BookingSchema::is_ready() );
 		$this->assertTrue( EventDatesTable::table_exists() );
 		restore_current_blog();

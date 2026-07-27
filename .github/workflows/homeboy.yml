@@ -25,7 +25,7 @@ jobs:
         command: [review lint, review test]
     services:
       mysql:
-        image: mysql:8.0
+        image: mysql:8.0@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b
         env:
           MYSQL_ROOT_PASSWORD: ''
           MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
@@ -62,8 +62,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Extra-Chill/homeboy-extensions
-          ref: fff5ce20a21570569feb284f8b3cf7b273ff77dc
+          ref: f9a92eb3753e0dd81d779e63465a77e00725a929
           path: .ci/homeboy-extensions
+
+      - name: Record MySQL readiness and version
+        run: |
+          mysqladmin --host=127.0.0.1 --user=root ping
+          mysql --host=127.0.0.1 --user=root --skip-column-names --execute='SELECT VERSION();'
 
       - name: Install Data Machine dependencies
         working-directory: .ci/data-machine

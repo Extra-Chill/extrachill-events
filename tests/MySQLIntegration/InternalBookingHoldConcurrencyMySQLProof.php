@@ -14,6 +14,11 @@ final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMy
 		$this->register_booking_abilities();
 		wp_set_current_user( $this->actor_id );
 		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );
+		$dme_directory = rtrim( (string) getenv( 'DME_PLUGIN_DIR' ), '/\\' );
+		$this->assertFileExists( $dme_directory . '/inc/Core/EventDatesTable.php' );
+		require_once $dme_directory . '/inc/Core/EventDatesTable.php';
+		DataMachineEvents\Core\EventDatesTable::create_table();
+		$this->assertTrue( DataMachineEvents\Core\EventDatesTable::table_exists() );
 
 		$config            = wp_get_ability( 'extrachill/get-venue-booking-config' )->execute( array( 'venue_term_id' => $this->venue_id ) );
 		$this->assertIsArray( $config, is_wp_error( $config ) ? $config->get_error_code() : 'Venue config was not returned.' );

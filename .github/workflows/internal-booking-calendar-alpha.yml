@@ -183,6 +183,7 @@ jobs:
           WP_CORE_DIR: /tmp/wordpress
           WP_TESTS_DIR: /tmp/wordpress-tests-lib
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ github.workspace }}/vendor/yoast/phpunit-polyfills
+          DME_PLUGIN_DIR: ${{ github.workspace }}/.ci/data-machine-events
         run: |
           set -euo pipefail
           vendor/bin/phpunit -c phpunit-booking-alpha-concurrency.xml.dist --filter test_overlapping_public_hold_abilities_allow_one_winner | tee "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"

@@ -1077,7 +1077,7 @@ final class AccountMarketTest extends TestCase {
 					'local_scene' => array(
 						'slug'      => 'charleston',
 						'term_id'   => 1618,
-						'hierarchy' => array( 'label' => '<b>Charleston</b>' ),
+						'hierarchy' => array( 'label' => 'Charleston<script>alert(1)</script>' ),
 					),
 				);
 			}
@@ -1087,8 +1087,9 @@ final class AccountMarketTest extends TestCase {
 		extrachill_events_render_account_market_context();
 		$output = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'Showing events for Charleston', $output );
-		$this->assertStringNotContainsString( '<script>', $output );
+		$this->assertStringContainsString( 'Showing events for Charlestonalert(1)', $output );
+		$this->assertStringNotContainsString( '<script', $output );
+		$this->assertStringNotContainsString( '</script>', $output );
 		$this->assertStringContainsString( '/settings/#tab-account-details', $output );
 		$this->assertStringContainsString( 'explore_all=1', $output );
 	}

@@ -31,6 +31,9 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		if ( ! taxonomy_exists( 'venue' ) ) {
 			register_taxonomy( 'venue', 'data_machine_events', array( 'public' => false ) );
 		}
+		if ( ! post_type_exists( 'data_machine_events' ) ) {
+			register_post_type( 'data_machine_events', array( 'public' => true ) );
+		}
 		$this->old_venue_id = $this->create_venue( 'Old Sync Room' );
 		$this->new_venue_id = $this->create_venue( 'New Sync Room' );
 		$this->actor_id     = self::factory()->user->create( array( 'role' => 'administrator' ) );
@@ -53,6 +56,8 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->contender = $this->connect_second_session();
 		$this->contender->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
 		new VenueBookingEventAbilities();
+		\DataMachineEvents\Core\EventDatesTable::create_table();
+		do_action( 'wp_abilities_api_init' );
 	}
 
 	public function tear_down(): void {
@@ -65,6 +70,7 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		foreach ( array( BookingSchema::holds_table(), BookingSchema::activity_table(), BookingSchema::bookings_table(), BookingSchema::memberships_table(), BookingSchema::communication_state_table() ) as $table ) {
 			$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
 		}
+		$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}datamachine_event_dates" );
 		delete_option( BookingSchema::VERSION_OPTION );
 		delete_option( BookingSchema::FAILURE_OPTION );
 		parent::tear_down();

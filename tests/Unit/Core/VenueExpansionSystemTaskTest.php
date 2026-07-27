@@ -30,6 +30,14 @@ class VenueExpansionSystemTaskTest extends TestCase {
 				$report['status'] = 'completed';
 				return $report;
 			}
+
+			protected function completeJob( int $jobId, array $data ): void {
+				$GLOBALS['ec_test_systemtask_calls'][] = array(
+					'method' => 'completeJob',
+					'job_id' => $jobId,
+					'data'   => $data,
+				);
+			}
 		};
 		$task->executeTask( 91, array() );
 
@@ -49,6 +57,14 @@ class VenueExpansionSystemTaskTest extends TestCase {
 
 			protected function persistPartialReport( int $job_id, array $report ): void {
 				$GLOBALS['ec_test_partial_report'] = $report;
+			}
+
+			protected function failJob( int $jobId, string $message ): void {
+				$GLOBALS['ec_test_systemtask_calls'][] = array(
+					'method'  => 'failJob',
+					'job_id'  => $jobId,
+					'message' => $message,
+				);
 			}
 		};
 		$task->executeTask( 92, array() );

@@ -44,13 +44,18 @@ class VenueExpansionRunnerTest extends TestCase {
 			static function ( string $url ) {
 				if ( 'https://resume.test' === $url ) {
 					return array(
-						'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
-						'events_url'   => 'https://resume.test/events',
-						'qualified_at' => gmdate( 'Y-m-d H:i:s' ),
+						'verdict'           => QualifyVerdict::QUALIFIED_STRUCTURED,
+						'events_url'        => 'https://resume.test/events',
+						'qualified_at'      => gmdate( 'Y-m-d H:i:s' ),
+						'qualifier_version' => self::qualifierVersion(),
 					);
 				}
 				if ( 'https://unsupported.test' === $url ) {
-					return array( 'verdict' => QualifyVerdict::UNSUPPORTED_SOURCE, 'qualified_at' => gmdate( 'Y-m-d H:i:s' ) );
+					return array(
+						'verdict'           => QualifyVerdict::UNSUPPORTED_SOURCE,
+						'qualified_at'      => gmdate( 'Y-m-d H:i:s' ),
+						'qualifier_version' => self::qualifierVersion(),
+					);
 				}
 				return null;
 			},
@@ -120,9 +125,10 @@ class VenueExpansionRunnerTest extends TestCase {
 				return $abilities[ $name ]; },
 			static function () {
 				return array(
-					'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
-					'events_url'   => 'https://retry.test/events',
-					'qualified_at' => gmdate( 'Y-m-d H:i:s' ),
+					'verdict'           => QualifyVerdict::QUALIFIED_STRUCTURED,
+					'events_url'        => 'https://retry.test/events',
+					'qualified_at'      => gmdate( 'Y-m-d H:i:s' ),
+					'qualifier_version' => self::qualifierVersion(),
 				); },
 			static function () {
 				return null; }
@@ -184,9 +190,10 @@ class VenueExpansionRunnerTest extends TestCase {
 			},
 			static function () {
 				return array(
-					'verdict'      => QualifyVerdict::QUALIFIED_STRUCTURED,
-					'events_url'   => 'https://stale.test/old-events',
-					'qualified_at' => gmdate( 'Y-m-d H:i:s', time() - 60 * DAY_IN_SECONDS ),
+					'verdict'           => QualifyVerdict::QUALIFIED_STRUCTURED,
+					'events_url'        => 'https://stale.test/old-events',
+					'qualified_at'      => gmdate( 'Y-m-d H:i:s', time() - 60 * DAY_IN_SECONDS ),
+					'qualifier_version' => self::qualifierVersion(),
 				);
 			},
 			static function () {
@@ -212,7 +219,12 @@ class VenueExpansionRunnerTest extends TestCase {
 				return $abilities[ $name ];
 			},
 			static function () {
-				return array( 'verdict' => QualifyVerdict::QUALIFIED_STRUCTURED, 'events_url' => 'https://existing.test/events', 'qualified_at' => gmdate( 'Y-m-d H:i:s' ) );
+				return array(
+					'verdict'           => QualifyVerdict::QUALIFIED_STRUCTURED,
+					'events_url'        => 'https://existing.test/events',
+					'qualified_at'      => gmdate( 'Y-m-d H:i:s' ),
+					'qualifier_version' => self::qualifierVersion(),
+				);
 			},
 			static function () {
 				return null;
@@ -267,7 +279,11 @@ class VenueExpansionRunnerTest extends TestCase {
 			static function ( string $name ) use ( $abilities ) {
 				return $abilities[ $name ]; },
 			static function () use ( $verdict ) {
-				return array( 'verdict' => $verdict, 'qualified_at' => gmdate( 'Y-m-d H:i:s' ) ); },
+				return array(
+					'verdict'           => $verdict,
+					'qualified_at'      => gmdate( 'Y-m-d H:i:s' ),
+					'qualifier_version' => self::qualifierVersion(),
+				); },
 			static function () {
 				return null; }
 		) )->runCity( array( 'city' => 'A' ) );
@@ -343,6 +359,10 @@ class VenueExpansionRunnerTest extends TestCase {
 				}
 			),
 		);
+	}
+
+	private static function qualifierVersion(): string {
+		return defined( 'EXTRACHILL_EVENTS_VERSION' ) ? (string) EXTRACHILL_EVENTS_VERSION : '';
 	}
 }
 

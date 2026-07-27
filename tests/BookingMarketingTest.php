@@ -59,8 +59,12 @@ final class BookingMarketingDelegatedBackendFake {
 			}
 			$operation = &$this->operations[ $key ];
 			if ( isset( $this->next['submit'] ) ) {
-				$operation = array_merge( $operation, $this->next['submit'] );
+				$next = $this->next['submit'];
 				unset( $this->next['submit'] );
+				if ( false === ( $next['success'] ?? true ) ) {
+					return $next;
+				}
+				$operation = array_merge( $operation, $next );
 			}
 			return array(
 				'success'       => true,
@@ -76,8 +80,12 @@ final class BookingMarketingDelegatedBackendFake {
 				continue;
 			}
 			if ( isset( $this->next[ $verb ] ) ) {
-				$operation = array_merge( $operation, $this->next[ $verb ] );
+				$next = $this->next[ $verb ];
 				unset( $this->next[ $verb ] );
+				if ( false === ( $next['success'] ?? true ) ) {
+					return $next;
+				}
+				$operation = array_merge( $operation, $next );
 			} elseif ( 'retry' === $verb && 'failed' === $operation['status'] ) {
 				$operation['status'] = 'executing';
 			} elseif ( 'cancel' === $verb && 'submitted' === $operation['status'] ) {
@@ -498,11 +506,52 @@ final class BookingMarketingTest extends TestCase {
 		);
 		$result                        = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
 		$this->assertSame( 'failed', $result['status'] );
-		$this->assertTrue( $result['retryable'] );
+		$this->assertFalse( $result['retryable'] );
 		$this->assertSame( 'partial', $result['projection']['classification'] );
 		$this->assertSame( 'ig-123', $result['projection']['share_refs'][0]['platform_post_id'] );
 		$this->assertStringNotContainsString( 'secret', serialize( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ) ) );
 		$this->assertStringNotContainsString( 'provider.invalid', serialize( $result ) );
+	}
+
+	public function test_explicit_data_machine_failure_is_the_only_retryable_evidence(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		$this->backend->next['submit'] = array(
+			'success'    => false,
+			'error_code' => 'delegated_enqueue_failed',
+			'retryable'  => true,
+			'diagnostic' => 'private scheduler state',
+		);
+		$result = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
+
+		$this->assertSame( 'delegated_enqueue_failed', $result->get_error_code() );
+		$this->assertTrue( $result->get_error_data()['retryable'] );
+		$this->assertStringNotContainsString( 'private scheduler state', serialize( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ) ) );
+	}
+
+	public function test_indeterminate_and_unsupported_failures_do_not_guess_retry_availability(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter( 'newsletter', 'direct' ) ) );
+		$this->backend->next['submit'] = array(
+			'status'     => 'failed',
+			'projection' => array(
+				'classification' => 'failed',
+				'error_code'     => 'newsletter_campaign_reconciliation_required',
+			),
+		);
+		$result = $this->service()->trigger( $booking['id'], 12 )['channels']['newsletter'];
+
+		$this->assertSame( 'failed', $result['status'] );
+		$this->assertFalse( $result['retryable'] );
+		$this->assertSame( 'newsletter_campaign_reconciliation_required', $result['projection']['error_code'] );
+
+		$this->backend->next['retry'] = array(
+			'success'    => false,
+			'error_code' => 'delegated_operation_retry_unsupported',
+		);
+		$unsupported = $this->service()->manage( 'retry', $booking['id'], $result['operation_ref'], 12 );
+		$this->assertSame( 'delegated_operation_retry_unsupported', $unsupported->get_error_code() );
+		$this->assertFalse( $unsupported->get_error_data()['retryable'] );
 	}
 
 	public function test_no_op_and_zero_result_remain_truthful(): void {
@@ -543,6 +592,33 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertSame( 'executing', $retry['status'] );
 		$this->assertSame( $failed['operation_ref'], $retry['operation_ref'] );
 		$this->assertSame( 'retry', $this->backend->calls[1][0] );
+	}
+
+	public function test_retry_rejection_preserves_failed_operation_truth(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		$this->backend->next['submit'] = array(
+			'status'     => 'failed',
+			'projection' => array(
+				'classification' => 'failure',
+				'effect_count'   => 0,
+				'error_codes'    => array( array( 'channel' => 'twitter', 'code' => 'delivery_unknown' ) ),
+			),
+		);
+		$failed = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
+		$this->backend->next['retry'] = array(
+			'success'    => false,
+			'error_code' => 'social_cross_post_retry_unsafe',
+		);
+
+		$rejected = $this->service()->manage( 'retry', $booking['id'], $failed['operation_ref'], 12 );
+		$current  = $this->service()->manage( 'get', $booking['id'], $failed['operation_ref'], 12 );
+
+		$this->assertSame( 'social_cross_post_retry_unsafe', $rejected->get_error_code() );
+		$this->assertFalse( $rejected->get_error_data()['retryable'] );
+		$this->assertSame( 'failed', $current['status'] );
+		$this->assertFalse( $current['retryable'] );
+		$this->assertSame( 'delivery_unknown', $current['projection']['error_codes'][0]['code'] );
 	}
 
 	public function test_cancellation_succeeds_only_before_execution(): void {

@@ -370,7 +370,7 @@ class BookingMarketingService {
 			'operation_ref' => $operation_ref,
 			'activity_id'   => $receipt['id'],
 			'projection'    => $projection,
-			'retryable'     => 'failed' === $status,
+			'retryable'     => ! empty( $result['retryable'] ),
 		);
 	}
 

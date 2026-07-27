@@ -126,8 +126,8 @@ jobs:
             --arg config "/wordpress/wp-content/plugins/extrachill-events/phpunit-booking-mysql.xml.dist" \
             --arg preload "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php" \
             --arg schema_preload "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-schema-multisite-bootstrap.php" \
-            --arg data_machine "/wordpress/wp-content/plugins/extrachill-events/.ci/data-machine/data-machine.php" \
-            --arg data_machine_events "/wordpress/wp-content/plugins/extrachill-events/.ci/data-machine-events/data-machine-events.php" \
+            --arg data_machine_source "$GITHUB_WORKSPACE/.ci/data-machine" \
+            --arg data_machine_events_source "$GITHUB_WORKSPACE/.ci/data-machine-events" \
             '{
               database_type: "mysql",
               phpunit_no_tests: "fail",
@@ -135,7 +135,8 @@ jobs:
               wp_codebox_phpunit_test_root: $root,
               wp_codebox_phpunit_config: $config,
               wp_codebox_phpunit_cwd: "/wordpress/wp-content/plugins/extrachill-events",
-              wp_codebox_phpunit_preload_files: [$data_machine, $data_machine_events, $schema_preload, $preload]
+              wp_codebox_phpunit_preload_files: [$schema_preload, $preload],
+              validation_dependencies: [$data_machine_source, $data_machine_events_source]
             }')
           node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs
 

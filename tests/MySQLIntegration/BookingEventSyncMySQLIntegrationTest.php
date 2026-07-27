@@ -55,9 +55,8 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		}
 		$this->contender = $this->connect_second_session();
 		$this->contender->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
-		new VenueBookingEventAbilities();
+		( new VenueBookingEventAbilities() )->register();
 		\DataMachineEvents\Core\EventDatesTable::create_table();
-		do_action( 'wp_abilities_api_init' );
 	}
 
 	public function tear_down(): void {

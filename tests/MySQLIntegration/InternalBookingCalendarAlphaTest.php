@@ -229,11 +229,15 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		$this->assertSame( $cancel, $this->ability_data( 'extrachill/reconcile-booking-event', $cancel_input, $operator_a ) );
 		$this->assertSame( 'cancelled', $this->ability_data( 'extrachill/get-venue-booking', array( 'booking_id' => $booking['id'] ), $operator_a )['status'] );
 		$this->assertSame( 'EventCancelled', $this->event_authority( $cancel['event_id'] )['eventStatus'] );
-		$communications = $this->ability_data( 'extrachill/list-booking-communications', array( 'booking_id' => $booking['id'] ), $operator_a );
-		$reminders      = array_values( array_filter( $communications, static fn( array $communication ): bool => 'hold_expiring' === ( $communication['message']['template'] ?? null ) ) );
-		$this->assertCount( 1, $reminders );
-		$this->assertSame( 'suppressed', $reminders[0]['state']['status'] );
-		$this->assertSame( 'booking_status_changed', $reminders[0]['state']['reason'] );
+		$communications        = $this->ability_data( 'extrachill/list-booking-communications', array( 'booking_id' => $booking['id'] ), $operator_a );
+		$reminder_suppressions = array_values(
+			array_filter(
+				$communications,
+				static fn( array $communication ): bool => (int) ( $communication['state']['intent_id'] ?? 0 ) === (int) $reminder['intent_id'] && 'suppressed' === ( $communication['state']['status'] ?? null )
+			)
+		);
+		$this->assertCount( 1, $reminder_suppressions );
+		$this->assertSame( 'booking_status_changed', $reminder_suppressions[0]['state']['reason'] );
 		$this->assertSame( 1, $this->count_canonical_events( $anonymous['public_id'] ) );
 
 		$this->assert_main_site_has_no_booking_writes();

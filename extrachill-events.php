@@ -31,6 +31,10 @@ define( 'EXTRACHILL_EVENTS_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
 // WP-CLI commands.
 if ( defined( 'WP_CLI' ) && WP_CLI && file_exists( __DIR__ . '/inc/Cli/AddCityCommand.php' ) ) {
+	require_once __DIR__ . '/inc/Core/EventSourceRampEvaluator.php';
+	require_once __DIR__ . '/inc/Cli/EventSourceRampCommand.php';
+	\WP_CLI::add_command( 'extrachill events ramp', \ExtraChillEvents\Cli\EventSourceRampCommand::class );
+
 	require_once __DIR__ . '/inc/Cli/AddCityCommand.php';
 	\WP_CLI::add_command( 'extrachill-events add-city', \ExtraChillEvents\Cli\AddCityCommand::class );
 	require_once __DIR__ . '/inc/Cli/ExpandVenuesCommand.php';
@@ -257,6 +261,7 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/PlatformDetector.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyFingerprinter.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueExpansionRunner.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/EventSourceRampEvaluator.php';
 
 		// Artist URL Import subsystem (migrated from data-machine-events in #200).
 		// Moderation-queue table + REST controller/routes. The abilities load in
@@ -279,6 +284,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMutationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventSyncService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventConversionService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMarketingService.php';
+		\ExtraChillEvents\Core\BookingMarketingService::register();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingLifecycle.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingPrivateFileProvider.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalBookingPrivateFileProvider.php';
@@ -315,6 +322,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/account-market.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/local-scene-digest.php';
 		extrachill_events_init_local_scene_digest();
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/venue-update-subscriptions.php';
+		extrachill_events_init_venue_update_subscriptions();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/near-me.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/discovery-pages.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/router-pages.php';
@@ -410,6 +419,9 @@ class ExtraChillEvents {
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/VenueBookingCommunicationAbilities.php';
 			new \ExtraChillEvents\Abilities\VenueBookingCommunicationAbilities();
 
+			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/VenueBookingMarketingAbilities.php';
+			new \ExtraChillEvents\Abilities\VenueBookingMarketingAbilities();
+
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/TicketSettlementAbilities.php';
 			new \ExtraChillEvents\Abilities\TicketSettlementAbilities();
 		}
@@ -440,6 +452,9 @@ class ExtraChillEvents {
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/MarketReportAbilities.php';
 		new \ExtraChillEvents\Abilities\MarketReportAbilities();
+
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/EventSourceRampAbilities.php';
+		new \ExtraChillEvents\Abilities\EventSourceRampAbilities();
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/EventTimeAuditAbilities.php';
 		new \ExtraChillEvents\Abilities\EventTimeAuditAbilities();

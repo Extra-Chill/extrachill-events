@@ -131,6 +131,7 @@ jobs:
             '{
               database_type: "mysql",
               phpunit_no_tests: "fail",
+              wp_codebox_multisite: true,
               wp_codebox_phpunit_test_root: $root,
               wp_codebox_phpunit_config: $config,
               wp_codebox_phpunit_cwd: "/wordpress/wp-content/plugins/extrachill-events",

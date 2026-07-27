@@ -509,8 +509,9 @@ class VenueBookingConfig {
 		if ( ! is_array( $triggers ) || count( $triggers ) > 20 ) {
 			return new \WP_Error( 'invalid_booking_marketing_triggers', __( 'Marketing triggers must be an array of at most 20 items.', 'extrachill-events' ) );
 		}
-		$normalized = array();
-		$seen       = array();
+		$normalized    = array();
+		$seen          = array();
+		$used_channels = array();
 		foreach ( $triggers as $trigger ) {
 			$key = mb_substr( sanitize_key( (string) ( $trigger['key'] ?? '' ) ), 0, 32 );
 			if ( '' === $key || isset( $seen[ $key ] ) || 'event_converted' !== ( $trigger['event'] ?? '' ) || ! is_array( $trigger['channels'] ?? null ) || count( $trigger['channels'] ) > 20 ) {
@@ -526,7 +527,7 @@ class VenueBookingConfig {
 				$action      = is_string( $channel['action'] ?? null ) ? $channel['action'] : '';
 				$approval    = sanitize_key( (string) ( $channel['approval'] ?? 'required' ) );
 				$delay       = $channel['delay_seconds'] ?? 0;
-				if ( '' === $channel_key || isset( $channel_seen[ $channel_key ] ) || ! in_array( $channel_key, $enabled_channels, true ) || ! in_array( $action, array( self::SOCIAL_MARKETING_ACTION, self::NEWSLETTER_MARKETING_ACTION ), true ) || ! in_array( $approval, array( 'direct', 'required' ), true ) || ! is_int( $delay ) || $delay < 0 || $delay > 31536000 ) {
+				if ( '' === $channel_key || isset( $channel_seen[ $channel_key ] ) || isset( $used_channels[ $channel_key ] ) || ! in_array( $channel_key, $enabled_channels, true ) || ! in_array( $action, array( self::SOCIAL_MARKETING_ACTION, self::NEWSLETTER_MARKETING_ACTION ), true ) || ! in_array( $approval, array( 'direct', 'required' ), true ) || ! is_int( $delay ) || $delay < 0 || $delay > 31536000 ) {
 					return new \WP_Error( 'invalid_booking_marketing_trigger_channel', __( 'Marketing trigger channels must use an enabled channel, supported owner action, approval policy, and valid delay.', 'extrachill-events' ) );
 				}
 				$social     = null;
@@ -569,8 +570,9 @@ class VenueBookingConfig {
 					}
 					$newsletter = array( 'policy' => 'canonical-post-draft' );
 				}
-				$channel_seen[ $channel_key ] = true;
-				$trigger_channels[]           = array(
+				$channel_seen[ $channel_key ]  = true;
+				$used_channels[ $channel_key ] = true;
+				$trigger_channels[]            = array(
 					'key'           => $channel_key,
 					'action'        => $action,
 					'approval'      => $approval,

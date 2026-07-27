@@ -185,6 +185,16 @@ if ( ! function_exists( 'get_post' ) ) {
 		return $state['posts'][ $state['blog_id'] ][ $post_id ] ?? null;
 	}
 }
+if ( ! function_exists( 'wp_get_attachment_url' ) ) {
+	function wp_get_attachment_url( $post_id ) {
+		return $GLOBALS['ec_artist_test']['attachment_urls'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
+if ( ! function_exists( 'get_post_mime_type' ) ) {
+	function get_post_mime_type( $post_id ) {
+		return $GLOBALS['ec_artist_test']['attachment_mimes'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
 if ( ! function_exists( 'get_post_meta' ) ) {
 	function get_post_meta( $post_id, $key, $single = false ) {
 		unset( $single );

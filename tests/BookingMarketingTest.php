@@ -157,19 +157,21 @@ final class BookingMarketingTest extends TestCase {
 	protected function setUp(): void {
 		$this->original_wpdb       = $GLOBALS['wpdb'] ?? null;
 		$GLOBALS['ec_artist_test'] = array(
-			'blog_id'         => 7,
-			'stack'           => array(),
-			'uuid'            => 0,
-			'options'         => array(),
-			'dbdelta'         => array(),
-			'abilities'       => array(),
-			'ability_objects' => array(),
-			'actions'         => array(),
-			'fired_actions'   => array(),
-			'scheduled'       => array(),
-			'cache_deletes'   => array(),
-			'permalinks'      => array( 7 => array( 901 => 'https://events.example/show' ) ),
-			'terms'           => array(
+			'blog_id'          => 7,
+			'stack'            => array(),
+			'uuid'             => 0,
+			'options'          => array(),
+			'dbdelta'          => array(),
+			'abilities'        => array(),
+			'ability_objects'  => array(),
+			'actions'          => array(),
+			'fired_actions'    => array(),
+			'scheduled'        => array(),
+			'cache_deletes'    => array(),
+			'permalinks'       => array( 7 => array( 901 => 'https://events.example/show' ) ),
+			'attachment_urls'  => array( 7 => array( 301 => 'https://events.example/uploads/event.jpg' ) ),
+			'attachment_mimes' => array( 7 => array( 301 => 'image/jpeg' ) ),
+			'terms'            => array(
 				7 => array(
 					55 => (object) array(
 						'term_id'  => 55,
@@ -178,8 +180,8 @@ final class BookingMarketingTest extends TestCase {
 					),
 				),
 			),
-			'meta'            => array( 7 => array( 55 => array() ) ),
-			'posts'           => array(
+			'meta'             => array( 7 => array( 55 => array() ) ),
+			'posts'            => array(
 				7 => array(
 					901 => (object) array(
 						'ID'                => 901,
@@ -190,9 +192,15 @@ final class BookingMarketingTest extends TestCase {
 						'post_excerpt'      => '',
 						'post_modified_gmt' => '2030-01-01 00:00:00',
 					),
+					301 => (object) array(
+						'ID'                => 301,
+						'post_type'         => 'attachment',
+						'post_status'       => 'inherit',
+						'post_modified_gmt' => '2030-01-01 00:00:00',
+					),
 				),
 			),
-			'post_meta'       => array(),
+			'post_meta'        => array(),
 		);
 		$GLOBALS['wpdb']           = new BookingWpdb();
 		$GLOBALS['wpdb']->rows[ BookingSchema::memberships_table() ][1] = array(
@@ -446,6 +454,25 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertSame( 'executing', $denied['status'] );
 	}
 
+	public function test_delayed_operation_can_be_cancelled_after_booking_and_event_become_stale(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		$submitted = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
+		$request   = $this->backend->calls[0][1];
+		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $booking['id'] ]['status'] = 'cancelled';
+		$GLOBALS['ec_artist_test']['posts'][7][901]->post_status                              = 'draft';
+		$cancel_context = array(
+			'phase'         => 'cancel',
+			'action'        => BookingMarketingService::SOCIAL_ACTION,
+			'operation_ref' => $submitted['operation_ref'],
+			'actor'         => array( 'user_id' => 12 ),
+			'input'         => $request['input'],
+		);
+		$this->assertTrue( BookingMarketingService::authorize_social_operation( false, $cancel_context ) );
+		$this->assertSame( 'cancelled', $this->service()->manage( 'cancel', $booking['id'], $submitted['operation_ref'], 12 )['status'] );
+	}
+
 	public function test_owner_action_rechecks_exact_actor_resource_and_frozen_binding(): void {
 		BookingSchema::install();
 		$booking = $this->booking();
@@ -474,6 +501,23 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertSame( 'booking_marketing_owner_forbidden', BookingMarketingService::authorize_social_operation( false, $context )->get_error_code() );
 		$context['actor']['user_id']                            = 12;
 		$GLOBALS['ec_artist_test']['posts'][7][901]->post_title = 'Changed event';
+		$this->assertSame( 'booking_marketing_binding_stale', BookingMarketingService::authorize_social_operation( false, $context )->get_error_code() );
+	}
+
+	public function test_owner_action_rejects_same_attachment_id_after_asset_replacement(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		$submitted = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
+		$request   = $this->backend->calls[0][1];
+		$context   = array(
+			'phase'         => 'effect',
+			'action'        => BookingMarketingService::SOCIAL_ACTION,
+			'operation_ref' => $submitted['operation_ref'],
+			'actor'         => array( 'user_id' => 12 ),
+			'input'         => $request['input'],
+		);
+		$GLOBALS['ec_artist_test']['attachment_urls'][7][301] = 'https://events.example/uploads/replaced.jpg';
 		$this->assertSame( 'booking_marketing_binding_stale', BookingMarketingService::authorize_social_operation( false, $context )->get_error_code() );
 	}
 
@@ -575,5 +619,58 @@ final class BookingMarketingTest extends TestCase {
 			)
 		);
 		$this->assertSame( 'invalid_booking_marketing_social', $result->get_error_code() );
+	}
+
+	public function test_existing_accepted_approval_must_match_current_frozen_binding(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$pending               = $this->service()->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$stored                = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$input                 = $stored->get_apply_input();
+		$input['binding_hash'] = str_repeat( '0', 64 );
+		BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ] = BookingMarketingPendingActionFake::from_array(
+			array(
+				'action_id'   => $pending['approval_id'],
+				'kind'        => 'extrachill_run_booking_marketing',
+				'status'      => 'accepted',
+				'apply_input' => $input,
+				'preview'     => array(),
+			)
+		);
+		$this->assertSame( 'booking_marketing_approval_conflict', $this->service()->trigger( $booking['id'], 12 )['channels']['newsletter']->get_error_code() );
+		$this->assertCount( 0, $this->backend->calls );
+	}
+
+	public function test_automatic_trigger_records_and_logs_each_channel_failure(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		unset( $GLOBALS['ec_artist_test']['attachment_urls'][7][301] );
+		BookingMarketingService::on_event_converted( array( 'booking_id' => $booking['id'] ), 12 );
+		$activities = ( new BookingActivityRepository() )->list_for_booking( $booking['id'] );
+		$this->assertContains( 'marketing_operation_trigger_failed', array_column( $activities, 'kind' ) );
+		$this->assertNotEmpty( $GLOBALS['ec_artist_test']['fired_actions']['datamachine_log'] ?? array() );
+	}
+
+	public function test_config_rejects_duplicate_channel_keys_across_triggers(): void {
+		$channel = $this->social();
+		$result  = ( new VenueBookingConfig() )->normalize(
+			array(
+				'marketing_channels' => array( 'social' ),
+				'marketing_triggers' => array(
+					array(
+						'key'      => 'first',
+						'event'    => 'event_converted',
+						'channels' => array( $channel ),
+					),
+					array(
+						'key'      => 'second',
+						'event'    => 'event_converted',
+						'channels' => array( $channel ),
+					),
+				),
+			)
+		);
+		$this->assertSame( 'invalid_booking_marketing_trigger_channel', $result->get_error_code() );
 	}
 }

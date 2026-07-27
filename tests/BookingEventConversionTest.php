@@ -81,6 +81,9 @@ final class BookingEventConversionTest extends TestCase {
 			'post_meta'       => array( 4 => array( 501 => array( '_artist_term_id' => 101 ) ) ),
 		);
 		$GLOBALS['wpdb'] = new BookingWpdb();
+		$GLOBALS['ec_test_ability_resolver'] = static function ( string $name ) {
+			return $GLOBALS['ec_artist_test']['ability_objects'][ $name ] ?? null;
+		};
 		$this->install_ability();
 	}
 
@@ -1059,6 +1062,8 @@ final class BookingEventConversionTest extends TestCase {
 		$this->service()->convert( $booking['id'], 1, 12 );
 		$this->install_update_ability();
 		$GLOBALS['wpdb']->fail_activity_kinds = array( 'event_marketing_change_delivered' );
+		$calls = 0;
+		add_action( 'extrachill_events_booking_event_changed', static function () use ( &$calls ): void { ++$calls; } );
 		$sync    = new BookingEventSyncService( null, null, new BookingTestAuthorization() );
 		$changes = array( 'ticket_url' => 'https://tickets.example/replay-marketing' );
 		$error = $sync->reconcile( $booking['id'], 2, 12, $changes );
@@ -1067,7 +1072,7 @@ final class BookingEventConversionTest extends TestCase {
 		$result   = $sync->reconcile( $booking['id'], 2, 12, $changes );
 		$activity = ( new BookingActivityRepository() )->list_for_booking( $booking['id'] );
 		$this->assertSame( 'succeeded', $result['status'] );
-		$this->assertCount( 2, $GLOBALS['ec_artist_test']['fired_actions']['extrachill_events_booking_event_changed'] );
+		$this->assertSame( 2, $calls );
 		$this->assertCount( 1, array_filter( $activity, static function ( $item ) { return 'event_marketing_change_delivered' === $item['kind']; } ) );
 	}
 }

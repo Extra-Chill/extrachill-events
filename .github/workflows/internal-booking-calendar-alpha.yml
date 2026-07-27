@@ -99,6 +99,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
       - name: Install plugin test dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
@@ -136,7 +142,7 @@ jobs:
             --arg dm "${GITHUB_WORKSPACE}/.ci/data-machine" \
             --arg dme "${GITHUB_WORKSPACE}/.ci/data-machine-events" \
             '{
-              php: "8.4",
+              wordpress_runtime_php_version: "8.4",
               database_type: "mysql",
               phpunit_no_tests: "fail",
               wp_codebox_multisite: true,

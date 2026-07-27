@@ -70,7 +70,15 @@ final class BookingMarketingDelegatedBackendFake {
 				$operation = array_merge( $operation, $next );
 			}
 			if ( is_callable( $this->on_submit ) ) {
-				( $this->on_submit )( $input, $operation );
+				$authorized = ( $this->on_submit )( $input, $operation );
+				if ( is_wp_error( $authorized ) ) {
+					$data = $authorized->get_error_data();
+					return array(
+						'success'    => false,
+						'error_code' => $authorized->get_error_code(),
+						'retryable'  => is_array( $data ) && true === ( $data['retryable'] ?? false ),
+					);
+				}
 			}
 			return array(
 				'success'       => true,
@@ -132,6 +140,7 @@ final class BookingMarketingDelegatedAbilityFake {
 final class BookingMarketingActivityRepositoryFake extends BookingActivityRepository {
 	public string $fail_kind = '';
 	public int $failures_remaining = 0;
+	public $next_conversion_state_error;
 
 	public function append( array $data ) {
 		if ( $this->failures_remaining > 0 && $this->fail_kind === ( $data['kind'] ?? '' ) ) {
@@ -139,6 +148,28 @@ final class BookingMarketingActivityRepositoryFake extends BookingActivityReposi
 			return new WP_Error( 'booking_activity_write_failed', 'simulated write failure' );
 		}
 		return parent::append( $data );
+	}
+
+	public function event_conversion_state( int $booking_id, string $public_id ) {
+		if ( is_wp_error( $this->next_conversion_state_error ) ) {
+			$error                             = $this->next_conversion_state_error;
+			$this->next_conversion_state_error = null;
+			return $error;
+		}
+		return parent::event_conversion_state( $booking_id, $public_id );
+	}
+}
+
+final class BookingMarketingRepositoryFake extends BookingRepository {
+	public $next_error;
+
+	public function get( $identifier, bool $include_reservations = false ) {
+		if ( is_wp_error( $this->next_error ) ) {
+			$error            = $this->next_error;
+			$this->next_error = null;
+			return $error;
+		}
+		return parent::get( $identifier, $include_reservations );
 	}
 }
 
@@ -364,8 +395,8 @@ final class BookingMarketingTest extends TestCase {
 		);
 	}
 
-	private function service( ?BookingTestAuthorization $authorization = null, ?BookingActivityRepository $activity = null ): BookingMarketingService {
-		return new BookingMarketingService( null, $activity, null, $authorization ?: new BookingTestAuthorization() );
+	private function service( ?BookingTestAuthorization $authorization = null, ?BookingActivityRepository $activity = null, ?BookingRepository $bookings = null ): BookingMarketingService {
+		return new BookingMarketingService( $bookings, $activity, null, $authorization ?: new BookingTestAuthorization() );
 	}
 
 	private function accept_pending( string $approval_id ): void {
@@ -667,6 +698,103 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertSame( 1, $this->backend->owner_operation_creations );
 	}
 
+	public function test_approved_apply_recovers_after_context_lookup_failure(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$pending  = $this->service()->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$bookings = new BookingMarketingRepositoryFake();
+		$bookings->next_error = new WP_Error( 'booking_read_failed', 'simulated transient read failure' );
+		$service              = $this->service( null, null, $bookings );
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertArrayNotHasKey( 'operation_id', $first );
+		$this->assertCount( 0, $this->backend->calls );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$replayed  = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertSame( $recovered['operation_ref'], $replayed['operation_ref'] );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+	}
+
+	public function test_approved_apply_recovers_after_operation_lookup_failure(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$activity = new BookingMarketingActivityRepositoryFake();
+		$service  = $this->service( null, $activity );
+		$pending  = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$activity->next_conversion_state_error = new WP_Error( 'booking_event_conversion_state_read_failed', 'simulated transient state read failure' );
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertCount( 0, $this->backend->calls );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+	}
+
+	public function test_approved_apply_recovers_after_frozen_binding_write_failure(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->social( 'social', 'required' ) ) );
+		$activity = new BookingMarketingActivityRepositoryFake();
+		$service  = $this->service( null, $activity );
+		$pending  = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$activity->fail_kind          = 'marketing_operation_frozen';
+		$activity->failures_remaining = 1;
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertCount( 0, $this->backend->calls );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+	}
+
+	public function test_approved_apply_recovers_after_authorization_mapping_write_failure(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->social( 'social', 'required' ) ) );
+		$service  = $this->service();
+		$pending  = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$GLOBALS['wpdb']->fail_activity_kinds = array( 'marketing_operation_authorized' );
+		$this->backend->on_submit = static function ( array $request, array $operation ) {
+			$result = BookingMarketingService::authorize_social_operation(
+				false,
+				array(
+					'phase'         => 'submit',
+					'action'        => BookingMarketingService::SOCIAL_ACTION,
+					'operation_id'  => $request['operation_id'],
+					'operation_ref' => $operation['operation_ref'],
+					'actor'         => array( 'user_id' => 12 ),
+					'input'         => $request['input'],
+				)
+			);
+			$GLOBALS['wpdb']->fail_activity_kinds = array();
+			return $result;
+		};
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertCount( 1, $this->backend->operations );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$replayed  = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertSame( $recovered['operation_ref'], $replayed['operation_ref'] );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+	}
+
 	public function test_approved_apply_recovers_after_created_operation_receipt_persistence_failure(): void {
 		$booking = $this->booking();
 		$this->configure( array( $this->social( 'social', 'required' ) ) );
@@ -709,6 +837,24 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertFalse( $again->get_error_data()['retryable'] );
 		$this->assertCount( 1, $this->backend->calls );
 		$this->assertCount( 1, $this->backend->operations );
+	}
+
+	public function test_permanent_pre_effect_failures_remain_terminal(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$pending  = $this->service()->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+
+		$denied = $this->service( new BookingTestAuthorization( array( '12:55' => false ) ) )->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'venue_action_forbidden', $denied->get_error_code() );
+		$this->assertFalse( (bool) ( $denied->get_error_data()['retryable'] ?? false ) );
+
+		$activity = new BookingMarketingActivityRepositoryFake();
+		$activity->next_conversion_state_error = new WP_Error( 'booking_event_conversion_state_invalid', 'simulated permanent state corruption' );
+		$invalid = $this->service( null, $activity )->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'booking_event_conversion_state_invalid', $invalid->get_error_code() );
+		$this->assertFalse( (bool) ( $invalid->get_error_data()['retryable'] ?? false ) );
+		$this->assertCount( 0, $this->backend->calls );
 	}
 
 	public function test_duplicate_submission_is_cross_user_stable_and_changed_request_conflicts(): void {

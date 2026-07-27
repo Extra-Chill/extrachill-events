@@ -118,15 +118,15 @@ class BookingMarketingService {
 	public function apply( array $input, int $actor_id ) {
 		$context = $this->context( absint( $input['booking_id'] ?? 0 ), $actor_id );
 		if ( is_wp_error( $context ) ) {
-			return $context;
+			return $this->apply_error( $context );
 		}
 		$resolved = $this->configured_channel( $context['config'], (string) ( $input['trigger_key'] ?? '' ), (string) ( $input['channel_key'] ?? '' ) );
 		if ( is_wp_error( $resolved ) ) {
-			return $resolved;
+			return $this->apply_error( $resolved );
 		}
 		$operation = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
 		if ( is_wp_error( $operation ) ) {
-			return $operation;
+			return $this->apply_error( $operation );
 		}
 		if ( ! is_string( $input['binding_hash'] ?? null ) || ! hash_equals( $operation['binding_hash'], $input['binding_hash'] ) ) {
 			return $this->stale_error();
@@ -135,13 +135,8 @@ class BookingMarketingService {
 		if ( ! is_wp_error( $result ) ) {
 			return $result;
 		}
-		$data = $result->get_error_data();
-		if ( is_array( $data ) && ! empty( $data['retryable'] ) ) {
-			return array(
-				'status'       => 'recovery-pending',
-				'operation_id' => $operation['operation_id'],
-				'retryable'    => true,
-			);
+		if ( $this->is_recoverable_apply_error( $result ) ) {
+			return $this->apply_error( $result, $operation['operation_id'] );
 		}
 		$failure = $this->activity->append(
 			array(
@@ -199,6 +194,9 @@ class BookingMarketingService {
 	/** Stage one deterministic approval containing hashes and references only. */
 	private function stage( array $context, array $operation, int $actor_id ) {
 		$existing = $this->frozen_activity( $context['booking']['id'], $operation['operation_id'] );
+		if ( is_wp_error( $existing ) ) {
+			return $this->recoverable_infrastructure_error( $existing );
+		}
 		if ( is_array( $existing ) ) {
 			$prior = (string) ( $existing['payload']['data']['binding_hash'] ?? '' );
 			if ( ! hash_equals( $prior, $operation['binding_hash'] ) ) {
@@ -535,7 +533,17 @@ class BookingMarketingService {
 		$event_id = self::SOCIAL_ACTION === $action ? (int) ( $owner_context['input']['post_id'] ?? 0 ) : (int) ( $owner_context['input']['source']['post_id'] ?? 0 );
 		$booking  = $this->bookings->get_by_event( $event_id );
 		$actor_id = is_int( $owner_context['actor']['user_id'] ?? null ) ? $owner_context['actor']['user_id'] : 0;
-		if ( ! is_array( $booking ) || $actor_id < 1 || true !== $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) ) {
+		if ( is_wp_error( $booking ) ) {
+			return $this->recoverable_infrastructure_error( $booking );
+		}
+		if ( ! is_array( $booking ) || $actor_id < 1 ) {
+			return new \WP_Error( 'booking_marketing_owner_forbidden' );
+		}
+		$allowed = $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE );
+		if ( is_wp_error( $allowed ) && $this->is_recoverable_apply_error( $allowed ) ) {
+			return $this->recoverable_infrastructure_error( $allowed );
+		}
+		if ( true !== $allowed ) {
 			return new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}
 		$phase         = (string) ( $owner_context['phase'] ?? '' );
@@ -550,12 +558,18 @@ class BookingMarketingService {
 		if ( '' !== $operation_ref ) {
 			$authorization = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_authorized', $operation_ref );
 			$receipt       = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $operation_ref );
+			if ( is_wp_error( $authorization ) || is_wp_error( $receipt ) ) {
+				return $this->recoverable_infrastructure_error( is_wp_error( $authorization ) ? $authorization : $receipt );
+			}
 			if ( '' === $operation_id && ! is_array( $frozen ) && is_array( $receipt ) ) {
 				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
 			}
 			if ( '' === $operation_id && ! is_array( $frozen ) && is_array( $authorization ) ) {
 				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $authorization['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
 			}
+		}
+		if ( is_wp_error( $frozen ) ) {
+			return $this->recoverable_infrastructure_error( $frozen );
 		}
 		$receipt_operation_id = is_array( $receipt ) ? (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) : '';
 		$frozen_operation_id  = is_array( $frozen ) ? (string) ( $frozen['payload']['data']['operation_id'] ?? '' ) : '';
@@ -567,7 +581,7 @@ class BookingMarketingService {
 		}
 		$context = $this->context( $booking['id'], $actor_id );
 		if ( is_wp_error( $context ) ) {
-			return $context;
+			return $this->recoverable_infrastructure_error( $context );
 		}
 		if ( is_array( $frozen ) ) {
 			$data     = $frozen['payload']['data'];
@@ -580,7 +594,7 @@ class BookingMarketingService {
 			return new \WP_Error( 'booking_marketing_binding_missing' );
 		}
 		if ( is_wp_error( $current ) ) {
-			return $this->stale_error();
+			return $this->is_recoverable_apply_error( $current ) ? $this->recoverable_infrastructure_error( $current ) : $this->stale_error();
 		}
 		$data        = $frozen['payload']['data'];
 		$owner_input = $owner_context['input'];
@@ -607,7 +621,14 @@ class BookingMarketingService {
 				)
 			);
 			if ( is_wp_error( $authorization ) ) {
-				return new \WP_Error( 'booking_marketing_authorization_persist_failed' );
+				return new \WP_Error(
+					'booking_marketing_authorization_persist_failed',
+					__( 'The delegated marketing authorization could not be persisted.', 'extrachill-events' ),
+					array(
+						'status'    => 503,
+						'retryable' => true,
+					)
+				);
 			}
 			return is_array( $authorization )
 				&& hash_equals( $operation_ref, (string) ( $authorization['external_id'] ?? '' ) )
@@ -731,6 +752,55 @@ class BookingMarketingService {
 	private function frozen_activity( int $booking_id, string $operation_id ) {
 		$frozen = $this->activity->find_by_idempotency( $booking_id, $operation_id . ':frozen' );
 		return is_array( $frozen ) || is_wp_error( $frozen ) ? $frozen : $this->activity->find_by_idempotency( $booking_id, $operation_id . ':approval' );
+	}
+
+	/** Convert only known pre-effect infrastructure failures into pending recovery. */
+	private function apply_error( \WP_Error $error, string $operation_id = '' ) {
+		if ( ! $this->is_recoverable_apply_error( $error ) ) {
+			return $error;
+		}
+		$result = array(
+			'status'    => 'recovery-pending',
+			'retryable' => true,
+		);
+		if ( '' !== $operation_id ) {
+			$result['operation_id'] = $operation_id;
+		}
+		return $result;
+	}
+
+	/** Identify bounded failures that occur before a delegated effect is trusted. */
+	private function is_recoverable_apply_error( \WP_Error $error ): bool {
+		$data = $error->get_error_data();
+		if ( is_array( $data ) && true === ( $data['retryable'] ?? false ) ) {
+			return true;
+		}
+		return in_array(
+			$error->get_error_code(),
+			array(
+				'booking_read_failed',
+				'venue_membership_schema_unavailable',
+				'venue_membership_read_failed',
+				'booking_activity_booking_read_failed',
+				'booking_activity_read_failed',
+				'booking_activity_write_failed',
+				'booking_event_conversion_state_read_failed',
+				'booking_marketing_authorization_persist_failed',
+				'booking_marketing_receipt_persist_failed',
+			),
+			true
+		);
+	}
+
+	/** Add bounded retry metadata when an owner callback must carry the failure. */
+	private function recoverable_infrastructure_error( \WP_Error $error ): \WP_Error {
+		if ( ! $this->is_recoverable_apply_error( $error ) ) {
+			return $error;
+		}
+		$data              = is_array( $error->get_error_data() ) ? $error->get_error_data() : array();
+		$data['status']    = (int) ( $data['status'] ?? 503 );
+		$data['retryable'] = true;
+		return new \WP_Error( $error->get_error_code(), $error->get_error_message(), $data );
 	}
 
 	private function scheduled_at( array $booking, array $channel ) {

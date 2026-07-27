@@ -24,7 +24,11 @@ on:
       - inc/Core/VenueBookingConfig.php
       - inc/Core/VenueMembershipRepository.php
       - phpunit-booking-alpha.xml.dist
+      - phpunit-booking-alpha-concurrency.xml.dist
       - tests/MySQLIntegration/InternalBookingCalendarAlphaTest.php
+      - tests/MySQLIntegration/InternalBookingHoldConcurrencyMySQLProof.php
+      - tests/MySQLIntegration/host-wordpress-bootstrap.php
+      - tests/MySQLIntegration/wp-tests-config.php
 
 permissions:
   contents: read
@@ -152,7 +156,37 @@ jobs:
               wp_codebox_phpunit_cwd: "/wordpress/wp-content/plugins/extrachill-events",
               validation_dependencies: [$network, $api, $dm, $dme]
             }')
-          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs
+          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs --filter=test_internal_booking_to_calendar_alpha
+
+      - name: Install native WordPress test runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes subversion
+          curl --fail --location --silent --show-error https://wordpress.org/latest.tar.gz | tar -xz -C /tmp
+          wp_version=$(php -r "include '/tmp/wordpress/wp-includes/version.php'; echo \$wp_version;")
+          wp_branch=$(printf '%s' "$wp_version" | cut -d. -f1,2)
+          mkdir -p /tmp/wordpress-tests-lib
+          svn export --quiet "https://develop.svn.wordpress.org/tags/${wp_branch}/tests/phpunit/includes" /tmp/wordpress-tests-lib/includes
+          svn export --quiet "https://develop.svn.wordpress.org/tags/${wp_branch}/tests/phpunit/data" /tmp/wordpress-tests-lib/data
+
+      - name: Run native overlapping hold proof
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: ""
+          DB_NAME: wordpress_test
+          WP_CORE_DIR: /tmp/wordpress
+          WP_TESTS_DIR: /tmp/wordpress-tests-lib
+          WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ github.workspace }}/vendor/yoast/phpunit-polyfills
+        run: |
+          set -euo pipefail
+          vendor/bin/phpunit -c phpunit-booking-alpha-concurrency.xml.dist --filter test_overlapping_public_hold_abilities_allow_one_winner | tee "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"
+          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"
+          if grep -Eiq 'skip|no tests executed|OK, but' "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"; then
+            exit 1
+          fi
 
       - name: Verify nonzero execution evidence
         env:
@@ -185,5 +219,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: internal-booking-calendar-alpha-evidence
-          path: ${{ runner.temp }}/internal-booking-calendar-alpha
+          path: |
+            ${{ runner.temp }}/internal-booking-calendar-alpha
+            ${{ runner.temp }}/internal-booking-hold-concurrency.txt
           if-no-files-found: error

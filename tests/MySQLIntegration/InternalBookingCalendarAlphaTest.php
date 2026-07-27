@@ -8,7 +8,6 @@
 use DataMachine\Core\Database\PostIdentityIndex\PostIdentityIndex;
 use DataMachineEvents\Core\EventDatesTable;
 use ExtraChillEvents\Core\BookingActivityRepository;
-use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingSchema;
 use ExtraChillEvents\Core\VenueAuthorization;
 
@@ -31,7 +30,6 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 
 		$this->assertTrue( is_multisite(), 'The alpha proof requires WordPress multisite.' );
 		$this->assertTrue( extension_loaded( 'mysqli' ), 'The alpha proof requires mysqli.' );
-		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The alpha proof requires pcntl_fork().' );
 		$this->assertNotSame( ':memory:', DB_NAME, 'The alpha proof requires managed MySQL.' );
 
 		$this->main_blog_id   = get_current_blog_id();
@@ -80,7 +78,7 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		parent::tear_down();
 	}
 
-	/** Execute the complete current alpha and its real two-process hold race. */
+	/** Execute the complete current alpha through public REST and Abilities. */
 	public function test_internal_booking_to_calendar_alpha(): void {
 		$this->assert_required_contracts();
 		list( $operator_a, $operator_b ) = $this->create_operators();
@@ -176,7 +174,6 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		$cancel = $this->transition( $cancel, 'cancelled', $operator_b );
 		$this->assertSame( 'cancelled', $cancel['status'] );
 
-		$this->prove_overlapping_hold_race( $venue_a, $operator_a );
 		$this->assert_main_site_has_no_booking_writes();
 		$this->assert_bounded_recovery_activity( $booking['id'] );
 	}
@@ -333,91 +330,6 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 			)
 		);
 		return count( $query->posts );
-	}
-
-	/** Prove two native PHP processes cannot win the same venue-space interval. */
-	private function prove_overlapping_hold_race( int $venue_id, int $operator_id ): void {
-		$first  = $this->prepare_race_booking( $venue_id, $operator_id, 'Race One' );
-		$second = $this->prepare_race_booking( $venue_id, $operator_id, 'Race Two' );
-		$blocker = $this->connect_mysql();
-		$lock    = BookingHoldRepository::venue_lock_name( $venue_id );
-		$escaped = $blocker->real_escape_string( $lock );
-		$this->assertSame( 1, (int) $blocker->query( "SELECT GET_LOCK('{$escaped}', 5)" )->fetch_row()[0] );
-		$directory = sys_get_temp_dir() . '/ec-alpha-' . wp_generate_uuid4();
-		$this->assertTrue( mkdir( $directory, 0700 ) );
-		$pids = array();
-		foreach ( array( $first, $second ) as $index => $booking ) {
-			$pid = pcntl_fork();
-			$this->assertGreaterThanOrEqual( 0, $pid );
-			if ( 0 === $pid ) {
-				$this->reconnect_database();
-				file_put_contents( $directory . '/ready-' . $index, '1', LOCK_EX );
-				$response = $this->ability_request( 'extrachill/create-booking-hold', array( 'booking_id' => $booking['id'], 'expected_booking_version' => $booking['version'] ), $operator_id );
-				file_put_contents( $directory . '/result-' . $index, wp_json_encode( array( 'status' => $response->get_status(), 'data' => $response->get_data() ) ), LOCK_EX );
-				exit( 0 );
-			}
-			$pids[] = $pid;
-		}
-		$deadline = microtime( true ) + 5;
-		while ( ( ! file_exists( $directory . '/ready-0' ) || ! file_exists( $directory . '/ready-1' ) ) && microtime( true ) < $deadline ) {
-			usleep( 10000 );
-		}
-		$this->assertFileExists( $directory . '/ready-0' );
-		$this->assertFileExists( $directory . '/ready-1' );
-		$this->assertSame( 1, (int) $blocker->query( "SELECT RELEASE_LOCK('{$escaped}')" )->fetch_row()[0] );
-		$blocker->close();
-		foreach ( $pids as $pid ) {
-			$status = 0;
-			pcntl_waitpid( $pid, $status );
-			$this->assertTrue( pcntl_wifexited( $status ) && 0 === pcntl_wexitstatus( $status ) );
-		}
-		$this->assertFileExists( $directory . '/result-0' );
-		$this->assertFileExists( $directory . '/result-1' );
-		$results  = array( json_decode( (string) file_get_contents( $directory . '/result-0' ), true ), json_decode( (string) file_get_contents( $directory . '/result-1' ), true ) );
-		$statuses = array_map( static function ( array $result ): int { return (int) $result['status']; }, $results );
-		sort( $statuses );
-		$this->assertSame( array( 200, 409 ), $statuses );
-		$this->assertSame( 1, count( $this->ability_data( 'extrachill/list-booking-holds', array( 'venue_term_id' => $venue_id, 'status' => 'active', 'range_start' => '2031-07-01 00:00:00', 'range_end' => '2031-07-01 03:00:00' ), $operator_id ) ) );
-		foreach ( glob( $directory . '/*' ) as $file ) {
-			unlink( $file );
-		}
-		rmdir( $directory );
-	}
-
-	/** Prepare one negotiating booking for the concurrent hold race. */
-	private function prepare_race_booking( int $venue_id, int $operator_id, string $artist ): array {
-		switch_to_blog( $this->main_blog_id );
-		$receipt = $this->submit_inquiry( $venue_id, 0, sanitize_key( $artist ) . '-race', array( 'artist_name' => $artist ) );
-		restore_current_blog();
-		$booking = $this->booking_by_public_id( $venue_id, $receipt['public_id'], $operator_id );
-		$booking = $this->transition( $booking, 'under_review', $operator_id );
-		$booking = $this->transition( $booking, 'negotiating', $operator_id );
-		return $this->select_performance( $booking, 'main-room', '2031-07-01 00:00:00', '2031-07-01 03:00:00', $operator_id );
-	}
-
-	/** Reconnect a forked WordPress process to managed MySQL. */
-	private function reconnect_database(): void {
-		global $wpdb, $table_prefix;
-		if ( $wpdb->dbh instanceof mysqli ) {
-			$wpdb->dbh->close();
-		}
-		$wpdb = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
-		$wpdb->set_prefix( $table_prefix );
-		$wpdb->set_blog_id( $this->events_blog_id );
-	}
-
-	/** Open one independent managed MySQL session. */
-	private function connect_mysql(): mysqli {
-		$host = (string) DB_HOST;
-		$port = 3306;
-		if ( 1 === preg_match( '/^(.+):(\d+)$/', $host, $matches ) ) {
-			$host = $matches[1];
-			$port = (int) $matches[2];
-		}
-		$connection = mysqli_init();
-		$this->assertTrue( mysqli_real_connect( $connection, $host, DB_USER, DB_PASSWORD, DB_NAME, $port ), mysqli_connect_error() );
-		$connection->set_charset( 'utf8mb4' );
-		return $connection;
 	}
 
 	/** Assert route affinity never wrote booking state under the main prefix. */

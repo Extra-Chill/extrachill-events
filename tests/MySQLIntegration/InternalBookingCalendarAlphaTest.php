@@ -7,6 +7,7 @@
 
 use DataMachineEvents\Core\EventDatesTable;
 use ExtraChillEvents\Core\BookingActivityRepository;
+use ExtraChillEvents\Core\BookingEventSyncService;
 use ExtraChillEvents\Core\BookingSchema;
 use ExtraChillEvents\Core\VenueAuthorization;
 
@@ -155,20 +156,84 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		$this->assertSame( 1, $this->count_canonical_events( $anonymous['public_id'] ) );
 		$this->assertSame( $this->events_blog_id, get_current_blog_id() );
 		$booking['version'] = $conversion['booking_version'];
-		$booking = $this->transition( $booking, 'completed', $operator_a );
-		$this->assertSame( 'completed', $booking['status'] );
 
-		$cancel = $this->booking_by_public_id( $venue_b, $authenticated['public_id'], $operator_b );
-		$cancel = $this->transition( $cancel, 'under_review', $operator_b );
-		$cancel = $this->transition( $cancel, 'negotiating', $operator_b );
-		$cancel = $this->select_performance( $cancel, 'club-room', '2031-06-02 00:00:00', '2031-06-02 03:00:00', $operator_b );
-		$cancel = $this->update_deal( $cancel, $operator_b );
-		$cancel_hold = $this->ability_data( 'extrachill/create-booking-hold', array( 'booking_id' => $cancel['id'], 'expected_booking_version' => $cancel['version'] ), $operator_b );
-		$cancel['version'] = $cancel_hold['booking_version'];
-		$cancel = $this->transition( $cancel, 'held', $operator_b );
-		$cancel = $this->transition( $cancel, 'confirmed', $operator_b );
-		$cancel = $this->transition( $cancel, 'cancelled', $operator_b );
-		$this->assertSame( 'cancelled', $cancel['status'] );
+		$reminder = $this->ability_data(
+			'extrachill/send-booking-message',
+			array(
+				'booking_id'      => $booking['id'],
+				'idempotency_key' => 'alpha-cancellation-cleanup',
+				'template'        => 'hold_expiring',
+				'recipient'       => 'anonymous@example.test',
+				'message'         => 'This reminder must be suppressed if the event is cancelled.',
+				'reply_to'        => 'bookings@example.test',
+			),
+			$operator_a
+		);
+		$this->assertSame( 'scheduled', $reminder['state']['status'] );
+
+		$sync_input = array(
+			'booking_id'       => $booking['id'],
+			'expected_version' => $booking['version'],
+			'changes'          => array(
+				'venue_term_id'        => $venue_b,
+				'space_key'            => 'patio',
+				'performance_start_at' => '2031-06-03 00:00:00',
+				'performance_end_at'   => '2031-06-03 03:00:00',
+				'performer'            => 'Anonymous Alpha and Friends',
+				'ticket_url'           => 'https://tickets.example.test/alpha-corrected',
+			),
+		);
+		$this->assert_ability_denied( 'extrachill/reconcile-booking-event', $sync_input, $operator_b );
+		$this->grant_venue_owner( $venue_b, $operator_a, $operator_b );
+
+		$stale_sync = $sync_input;
+		$stale_sync['expected_version'] -= 1;
+		$stale = $this->ability_request( 'extrachill/reconcile-booking-event', $stale_sync, $operator_a );
+		$this->assertSame( 409, $stale->get_status() );
+		$this->assertSame( 'booking_version_conflict', $stale->get_data()['code'] );
+
+		$sync = $this->ability_data( 'extrachill/reconcile-booking-event', $sync_input, $operator_a );
+		$this->assertSame( 'succeeded', $sync['status'] );
+		$this->assertSame( $conversion['event_id'], $sync['event_id'] );
+		$this->assertSame( $sync, $this->ability_data( 'extrachill/reconcile-booking-event', $sync_input, $operator_a ) );
+		$booking = $this->ability_data( 'extrachill/get-venue-booking', array( 'booking_id' => $booking['id'] ), $operator_a );
+		$this->assertSame( $venue_b, $booking['venue_term_id'] );
+		$this->assertSame( 'patio', $booking['space_key'] );
+		$this->assertSame( '2031-06-03 00:00:00', $booking['performance_start_at'] );
+		$this->assertSame( '2031-06-03 03:00:00', $booking['performance_end_at'] );
+		$this->assertSame( 'Anonymous Alpha and Friends', $booking['artist_name'] );
+		$this->assertSame( 'https://tickets.example.test/alpha-corrected', $booking['confirmed_deal']['data']['ticket_url'] );
+		$corrected_hold = $this->ability_data( 'extrachill/list-booking-holds', array( 'venue_term_id' => $venue_b, 'booking_id' => $booking['id'] ), $operator_a )[0];
+		$this->assertSame( 'converted', $corrected_hold['status'] );
+		$this->assertSame( 'patio', $corrected_hold['space_key'] );
+		$this->assertSame( '2031-06-03 00:00:00', $corrected_hold['start_at'] );
+		$this->assertSame( '2031-06-03 03:00:00', $corrected_hold['end_at'] );
+
+		$authority = $this->event_authority( $sync['event_id'] );
+		$this->assertSame( '2031-06-02', $authority['startDate'] );
+		$this->assertSame( '20:00', $authority['startTime'] );
+		$this->assertSame( '23:00', $authority['endTime'] );
+		$this->assertSame( 'EventRescheduled', $authority['eventStatus'] );
+		$this->assertSame( 'Anonymous Alpha and Friends', $authority['performer'] );
+		$this->assertSame( 'https://tickets.example.test/alpha-corrected', $authority['ticketUrl'] );
+		$this->assertSame( $venue_b, $authority['venue_id'] );
+		$this->assertSame( 1, $this->count_canonical_events( $anonymous['public_id'] ) );
+
+		$cancel_input = array(
+			'booking_id'       => $booking['id'],
+			'expected_version' => $sync['booking_version'],
+			'changes'          => array( 'cancelled' => true ),
+		);
+		$cancel = $this->ability_data( 'extrachill/reconcile-booking-event', $cancel_input, $operator_a );
+		$this->assertSame( 'succeeded', $cancel['status'] );
+		$this->assertSame( $cancel, $this->ability_data( 'extrachill/reconcile-booking-event', $cancel_input, $operator_a ) );
+		$this->assertSame( 'cancelled', $this->ability_data( 'extrachill/get-venue-booking', array( 'booking_id' => $booking['id'] ), $operator_a )['status'] );
+		$this->assertSame( 'EventCancelled', $this->event_authority( $cancel['event_id'] )['eventStatus'] );
+		$communications = $this->ability_data( 'extrachill/list-booking-communications', array( 'booking_id' => $booking['id'] ), $operator_a );
+		$this->assertCount( 1, $communications );
+		$this->assertSame( 'suppressed', $communications[0]['state']['status'] );
+		$this->assertSame( 'booking_status_changed', $communications[0]['state']['reason'] );
+		$this->assertSame( 1, $this->count_canonical_events( $anonymous['public_id'] ) );
 
 		$this->assert_main_site_has_no_booking_writes();
 		$this->assert_bounded_recovery_activity( $booking['id'] );
@@ -178,7 +243,7 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 	private function assert_required_contracts(): void {
 		$this->assertTrue( function_exists( 'extrachill_api_route_affinity_dispatch' ), 'Extra Chill API must be an active validation dependency.' );
 		$this->assertTrue( function_exists( 'ec_cross_site_rest_request' ), 'Extra Chill Network must be an active validation dependency.' );
-		foreach ( array( 'extrachill/create-booking-inquiry', 'extrachill/create-venue-membership', 'extrachill/update-venue-booking-config', 'extrachill/transition-venue-booking', 'extrachill/select-venue-booking-performance', 'extrachill/update-venue-booking-deal', 'extrachill/create-booking-hold', 'extrachill/convert-booking-to-event', 'data-machine-events/upsert-event' ) as $name ) {
+		foreach ( array( 'extrachill/create-booking-inquiry', 'extrachill/create-venue-membership', 'extrachill/update-venue-booking-config', 'extrachill/transition-venue-booking', 'extrachill/select-venue-booking-performance', 'extrachill/update-venue-booking-deal', 'extrachill/create-booking-hold', 'extrachill/convert-booking-to-event', 'extrachill/reconcile-booking-event', 'extrachill/send-booking-message', 'extrachill/list-booking-communications', 'data-machine-events/upsert-event', 'data-machine-events/update-source-event' ) as $name ) {
 			$this->assertInstanceOf( WP_Ability::class, wp_get_ability( $name ), $name . ' is unavailable.' );
 		}
 		$routes = rest_get_server()->get_routes();
@@ -216,8 +281,8 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 	}
 
 	/** Grant the first explicit owner through the public membership ability. */
-	private function grant_venue_owner( int $venue_id, int $operator_id ): void {
-		$membership = $this->ability_data( 'extrachill/create-venue-membership', array( 'venue_term_id' => $venue_id, 'user_id' => $operator_id, 'is_owner' => true ), $operator_id );
+	private function grant_venue_owner( int $venue_id, int $operator_id, ?int $actor_id = null ): void {
+		$membership = $this->ability_data( 'extrachill/create-venue-membership', array( 'venue_term_id' => $venue_id, 'user_id' => $operator_id, 'is_owner' => true ), $actor_id ?? $operator_id );
 		$this->assertSame( $venue_id, $membership['venue_term_id'] );
 		$this->assertTrue( $membership['is_owner'] );
 	}
@@ -229,6 +294,9 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		unset( $config['revision'], $config['updated_by_user_id'], $config['updated_at'] );
 		$config['enabled'] = true;
 		$config['spaces']  = array();
+		$config['correspondence']['reminder_policies']['hold_expiring']['enabled']           = true;
+		$config['correspondence']['reminder_policies']['hold_expiring']['delay_minutes']     = 60;
+		$config['correspondence']['reminder_policies']['hold_expiring']['expected_statuses'] = array( 'confirmed' );
 		foreach ( $space_keys as $index => $key ) {
 			$config['spaces'][] = array( 'key' => $key, 'name' => ucwords( str_replace( '-', ' ', $key ) ), 'is_default' => 0 === $index );
 		}
@@ -326,6 +394,24 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 			)
 		);
 		return count( $query->posts );
+	}
+
+	/** Read the public event authority after reconciliation. */
+	private function event_authority( int $event_id ): array {
+		$post = get_post( $event_id );
+		$this->assertInstanceOf( WP_Post::class, $post );
+		$attrs = array();
+		foreach ( parse_blocks( $post->post_content ) as $block ) {
+			if ( 'data-machine-events/event-details' === ( $block['blockName'] ?? '' ) ) {
+				$attrs = (array) ( $block['attrs'] ?? array() );
+				break;
+			}
+		}
+		$this->assertNotEmpty( $attrs );
+		$venues = wp_get_object_terms( $event_id, 'venue', array( 'fields' => 'ids' ) );
+		$this->assertNotWPError( $venues );
+		$this->assertCount( 1, $venues );
+		return BookingEventSyncService::authority_from_event( $attrs, (int) reset( $venues ) );
 	}
 
 	/** Assert route affinity never wrote booking state under the main prefix. */

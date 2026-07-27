@@ -1,46 +1,44 @@
-name: Booking attachment MySQL concurrency
+name: Internal booking calendar alpha
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
-      - .github/workflows/booking-attachment-mysql.yml
+      - .github/workflows/internal-booking-calendar-alpha.yml
       - composer.json
-      - composer.lock
-      - inc/Core/BookingAttachmentService.php
-      - inc/Core/BookingAttachmentRepository.php
-      - inc/Core/TicketSettlementService.php
-      - inc/Core/BookingAttachmentPolicy.php
+      - inc/Abilities/VenueBookingAbilities.php
+      - inc/Abilities/VenueBookingConfigAbilities.php
+      - inc/Abilities/VenueBookingEventAbilities.php
+      - inc/Abilities/VenueBookingHoldAbilities.php
+      - inc/Abilities/VenueBookingMutationAbilities.php
+      - inc/Abilities/VenueMembershipAbilities.php
+      - inc/Core/BookingActivityRepository.php
+      - inc/Core/BookingEventConversionService.php
+      - inc/Core/BookingHoldRepository.php
       - inc/Core/BookingInquiryAdmissionService.php
       - inc/Core/BookingLifecycle.php
-      - inc/Core/BookingEventSyncService.php
-      - inc/Core/BookingEventConversionService.php
-      - inc/Core/BookingActivityRepository.php
+      - inc/Core/BookingMutationService.php
       - inc/Core/BookingRepository.php
       - inc/Core/BookingSchema.php
       - inc/Core/VenueAuthorization.php
+      - inc/Core/VenueBookingConfig.php
       - inc/Core/VenueMembershipRepository.php
-      - phpunit-booking-mysql.xml.dist
-      - phpunit-booking-concurrency.xml.dist
-      - inc/Abilities/VenueBookingAbilities.php
-      - inc/Abilities/VenueBookingEventAbilities.php
-      - tests/BookingInquiryAdmissionTest.php
-      - tests/MySQLIntegration/BookingAttachmentMySQLIntegrationTest.php
-      - tests/MySQLIntegration/BookingEventSyncMySQLIntegrationTest.php
-      - tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLProof.php
-      - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
-      - tests/MySQLIntegration/booking-schema-multisite-bootstrap.php
+      - phpunit-booking-alpha.xml.dist
+      - phpunit-booking-alpha-concurrency.xml.dist
+      - tests/MySQLIntegration/InternalBookingCalendarAlphaTest.php
+      - tests/MySQLIntegration/InternalBookingHoldConcurrencyMySQLProof.php
       - tests/MySQLIntegration/host-wordpress-bootstrap.php
+      - tests/MySQLIntegration/internal-booking-alpha-bootstrap.php
       - tests/MySQLIntegration/wp-tests-config.php
 
 permissions:
   contents: read
 
 jobs:
-  booking-attachment-mysql:
-    name: Booking attachment MySQL concurrency
+  managed-alpha:
+    name: Managed MySQL multisite alpha
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       mysql:
         image: mysql:8.4
@@ -58,6 +56,20 @@ jobs:
     steps:
       - name: Checkout Extra Chill Events
         uses: actions/checkout@v4
+
+      - name: Checkout Extra Chill Network
+        uses: actions/checkout@v4
+        with:
+          repository: Extra-Chill/extrachill-network
+          ref: main
+          path: .ci/extrachill-network
+
+      - name: Checkout Extra Chill API
+        uses: actions/checkout@v4
+        with:
+          repository: Extra-Chill/extrachill-api
+          ref: main
+          path: .ci/extrachill-api
 
       - name: Checkout Data Machine
         uses: actions/checkout@v4
@@ -84,7 +96,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Extra-Chill/homeboy-extensions
-          ref: aee32285109c8d293aec9ed8ddfcd70dd0ff9188
+          ref: main
           path: .ci/homeboy-extensions
 
       - name: Set up Node.js
@@ -92,13 +104,18 @@ jobs:
         with:
           node-version: 24
 
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
       - name: Install plugin test dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
-      - name: Install canonical event dependencies
-        run: |
-          composer install --working-dir=.ci/data-machine --no-interaction --no-progress --prefer-dist
-          composer install --working-dir=.ci/data-machine-events --no-interaction --no-progress --prefer-dist
+      - name: Install Data Machine dependencies
+        working-directory: .ci/data-machine
+        run: composer install --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative
 
       - name: Install Homeboy WordPress PHPUnit harness
         working-directory: .ci/homeboy-extensions/wordpress
@@ -111,35 +128,38 @@ jobs:
           npm install
           npm run build
 
-      - name: Run application-level two-session MySQL proof
+      - name: Run managed MySQL multisite alpha proof
         env:
           HOMEBOY_COMPONENT_ID: extrachill-events
           HOMEBOY_COMPONENT_PATH: ${{ github.workspace }}
           HOMEBOY_EXTENSION_PATH: ${{ github.workspace }}/.ci/homeboy-extensions/wordpress
           HOMEBOY_WP_CODEBOX_BIN: ${{ github.workspace }}/.ci/wp-codebox/packages/cli/dist/index.js
           HOMEBOY_WP_CODEBOX_CORE_MODULE: ${{ github.workspace }}/.ci/wp-codebox/packages/runtime-core/dist/index.js
-          HOMEBOY_WP_CODEBOX_ARTIFACTS_DIR: ${{ runner.temp }}/booking-attachment-mysql
+          HOMEBOY_WP_CODEBOX_ARTIFACTS_DIR: ${{ runner.temp }}/internal-booking-calendar-alpha
         run: |
           set -euo pipefail
           export HOMEBOY_SETTINGS_JSON
           HOMEBOY_SETTINGS_JSON=$(jq -nc \
             --arg root "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration" \
-            --arg config "/wordpress/wp-content/plugins/extrachill-events/phpunit-booking-mysql.xml.dist" \
-            --arg preload "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php" \
-            --arg schema_preload "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-schema-multisite-bootstrap.php" \
-            --arg data_machine_source "$GITHUB_WORKSPACE/.ci/data-machine" \
-            --arg data_machine_events_source "$GITHUB_WORKSPACE/.ci/data-machine-events" \
+            --arg config "/wordpress/wp-content/plugins/extrachill-events/phpunit-booking-alpha.xml.dist" \
+            --arg bootstrap "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/internal-booking-alpha-bootstrap.php" \
+            --arg network "${GITHUB_WORKSPACE}/.ci/extrachill-network" \
+            --arg api "${GITHUB_WORKSPACE}/.ci/extrachill-api" \
+            --arg dm "${GITHUB_WORKSPACE}/.ci/data-machine" \
+            --arg dme "${GITHUB_WORKSPACE}/.ci/data-machine-events" \
             '{
+              wordpress_runtime_php_version: "8.4",
               database_type: "mysql",
               phpunit_no_tests: "fail",
               wp_codebox_multisite: true,
+              wp_codebox_phpunit_bootstrap_mode: "managed",
+              wp_codebox_phpunit_preload_files: [$bootstrap],
               wp_codebox_phpunit_test_root: $root,
               wp_codebox_phpunit_config: $config,
               wp_codebox_phpunit_cwd: "/wordpress/wp-content/plugins/extrachill-events",
-              wp_codebox_phpunit_preload_files: [$schema_preload, $preload],
-              validation_dependencies: [$data_machine_source, $data_machine_events_source]
+              validation_dependencies: [$network, $api, $dm, $dme]
             }')
-          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs --filter='BookingAttachmentMySQLIntegrationTest|BookingEventSyncMySQLIntegrationTest'
+          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs --filter=test_internal_booking_to_calendar_alpha
 
       - name: Install native WordPress test runtime
         run: |
@@ -153,7 +173,7 @@ jobs:
           svn export --quiet "https://develop.svn.wordpress.org/tags/${wp_branch}/tests/phpunit/includes" /tmp/wordpress-tests-lib/includes
           svn export --quiet "https://develop.svn.wordpress.org/tags/${wp_branch}/tests/phpunit/data" /tmp/wordpress-tests-lib/data
 
-      - name: Run overlapping application admission proof
+      - name: Run native overlapping hold proof
         env:
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
@@ -163,17 +183,18 @@ jobs:
           WP_CORE_DIR: /tmp/wordpress
           WP_TESTS_DIR: /tmp/wordpress-tests-lib
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ github.workspace }}/vendor/yoast/phpunit-polyfills
+          DME_PLUGIN_DIR: ${{ github.workspace }}/.ci/data-machine-events
         run: |
           set -euo pipefail
-          vendor/bin/phpunit -c phpunit-booking-concurrency.xml.dist --filter test_concurrent_exact_inquiry_retry_reuses_one_complete_winner | tee "$RUNNER_TEMP/booking-admission-concurrency.txt"
-          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/booking-admission-concurrency.txt"
-          if grep -Eiq 'skip|no tests executed|OK, but' "$RUNNER_TEMP/booking-admission-concurrency.txt"; then
+          vendor/bin/phpunit -c phpunit-booking-alpha-concurrency.xml.dist --filter test_overlapping_public_hold_abilities_allow_one_winner | tee "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"
+          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"
+          if grep -Eiq 'skip|no tests executed|OK, but' "$RUNNER_TEMP/internal-booking-hold-concurrency.txt"; then
             exit 1
           fi
 
-      - name: Verify executed PHPUnit evidence
+      - name: Verify nonzero execution evidence
         env:
-          ARTIFACTS_DIR: ${{ runner.temp }}/booking-attachment-mysql
+          ARTIFACTS_DIR: ${{ runner.temp }}/internal-booking-calendar-alpha
         run: |
           set -euo pipefail
           run_artifacts_dir=$(find "$ARTIFACTS_DIR" -maxdepth 1 -type d -name 'wp-codebox-phpunit.*' -print -quit)
@@ -188,23 +209,21 @@ jobs:
             | ($runs | length) == 1
               and $runs[0].exitCode == 0
               and $runs[0].result.status == "ok"
-              and ($runs[0].stdout | test("OK \\(3 tests, [1-9][0-9]* assertions?\\)"))
+              and ($runs[0].stdout | test("OK \\(1 test, [1-9][0-9]* assertions?\\)"))
               and (($runs[0].stdout | test("skip|no tests executed|OK, but"; "i")) | not)
           ' "$commands" >/dev/null
           jq -e '
-            any(.context.managedRuntimeServices[]; .kind == "mysql" and .provider == "docker" and .readiness == "ready")
+            any(.context.managedRuntimeServices[]; .kind == "mysql" and .readiness == "ready")
             and any(.context.recipe.workflow.steps[].args[]; . == "database-type=mysql")
+            and any(.context.recipe.workflow.steps[].args[]; . == "multisite=1")
           ' "$metadata" >/dev/null
-          jq -rs '[.[] | select(.command == "wordpress.phpunit")][0].stdout' "$commands" > "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
-          printf '%s\n' "Verified application-level MySQL proof:"
-          grep -E 'OK \(3 tests, [1-9][0-9]* assertions?\)' "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
 
-      - name: Upload WP Codebox evidence
+      - name: Upload managed proof evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: booking-attachment-mysql-evidence
+          name: internal-booking-calendar-alpha-evidence
           path: |
-            ${{ runner.temp }}/booking-attachment-mysql
-            ${{ runner.temp }}/booking-admission-concurrency.txt
+            ${{ runner.temp }}/internal-booking-calendar-alpha
+            ${{ runner.temp }}/internal-booking-hold-concurrency.txt
           if-no-files-found: error

@@ -119,6 +119,11 @@ if ( ! function_exists( 'sanitize_textarea_field' ) ) {
 }
 if ( ! function_exists( 'wp_generate_uuid4' ) ) {
 	function wp_generate_uuid4() {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			static $venue_sequence = 0;
+			++$venue_sequence;
+			return sprintf( '00000000-0000-4000-8000-%012d', $venue_sequence );
+		}
 		++$GLOBALS['ec_artist_test']['uuid'];
 		return sprintf( '123e4567-e89b-42d3-a456-%012d', $GLOBALS['ec_artist_test']['uuid'] );
 	}
@@ -137,6 +142,9 @@ if ( ! function_exists( 'ec_get_blog_id' ) ) {
 }
 if ( ! function_exists( 'get_current_blog_id' ) ) {
 	function get_current_blog_id() {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return $GLOBALS['venue_membership_test']['current_blog_id'];
+		}
 		return $GLOBALS['ec_artist_test']['blog_id']; }
 }
 if ( ! function_exists( 'switch_to_blog' ) ) {
@@ -151,6 +159,10 @@ if ( ! function_exists( 'restore_current_blog' ) ) {
 }
 if ( ! function_exists( 'get_term' ) ) {
 	function get_term( $term_id, $taxonomy = '' ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			$term = $GLOBALS['venue_membership_test']['terms'][ $term_id ] ?? null;
+			return $term && ( '' === $taxonomy || $taxonomy === $term->taxonomy ) ? $term : null;
+		}
 		if ( ! empty( $GLOBALS['ec_artist_test']['throw_get_term'] ) ) {
 			throw new RuntimeException( 'term read failed' );
 		}
@@ -162,12 +174,19 @@ if ( ! function_exists( 'get_term' ) ) {
 if ( ! function_exists( 'get_term_meta' ) ) {
 	function get_term_meta( $term_id, $key, $single = false ) {
 		unset( $single );
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return $GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] ?? '';
+		}
 		$state = $GLOBALS['ec_artist_test'];
 		return $state['meta'][ $state['blog_id'] ][ $term_id ][ $key ] ?? '';
 	}
 }
 if ( ! function_exists( 'update_term_meta' ) ) {
 	function update_term_meta( $term_id, $key, $value ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			$GLOBALS['venue_membership_test']['term_meta'][ $term_id ][ $key ] = $value;
+			return 1;
+		}
 		$current = get_term_meta( $term_id, $key, true );
 		if ( ! empty( $GLOBALS['ec_artist_test']['fail_term_meta'] ) || $current === $value ) {
 			return false;
@@ -239,6 +258,9 @@ if ( ! function_exists( 'parse_blocks' ) ) {
 }
 if ( ! function_exists( 'get_option' ) ) {
 	function get_option( $key, $default = false ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return $GLOBALS['venue_membership_test']['options'][ $key ] ?? $default;
+		}
 		return $GLOBALS['ec_artist_test']['options'][ $key ] ?? $default; }
 }
 if ( ! function_exists( 'update_option' ) ) {
@@ -256,14 +278,26 @@ if ( ! function_exists( 'delete_option' ) ) {
 }
 if ( ! function_exists( 'get_current_user_id' ) ) {
 	function get_current_user_id() {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return $GLOBALS['venue_membership_test']['current_user_id'];
+		}
 		return $GLOBALS['ec_artist_test']['current_user_id'] ?? 12; }
 }
 if ( ! function_exists( 'get_userdata' ) ) {
 	function get_userdata( $user_id ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return $GLOBALS['venue_membership_test']['users'][ $user_id ] ?? false;
+		}
 		return (int) $user_id > 0 ? (object) array( 'ID' => (int) $user_id ) : false; }
 }
 if ( ! function_exists( 'user_can' ) ) {
 	function user_can( $user_id, $capability ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			if ( 'manage_options' === $capability ) {
+				return ! empty( $GLOBALS['venue_membership_test']['administrators'][ $user_id ] );
+			}
+			return VenueAuthorization::ACCESS_CAPABILITY === $capability && ! empty( $GLOBALS['venue_membership_test']['team_access'][ $user_id ] );
+		}
 		if ( isset( $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ] ) && array_key_exists( $capability, $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ] ) ) {
 			return (bool) $GLOBALS['ec_artist_test']['user_caps'][ (int) $user_id ][ $capability ];
 		}
@@ -271,6 +305,9 @@ if ( ! function_exists( 'user_can' ) ) {
 }
 if ( ! function_exists( 'ec_feature_available' ) ) {
 	function ec_feature_available( $feature, $user_id ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			return VenueAuthorization::FEATURE === $feature && ! empty( $GLOBALS['venue_membership_test']['feature_available'] );
+		}
 		return 'venue_booking' === $feature && (int) $user_id > 0; }
 }
 if ( ! function_exists( 'add_action' ) ) {
@@ -280,6 +317,10 @@ if ( ! function_exists( 'add_action' ) ) {
 }
 if ( ! function_exists( 'wp_register_ability' ) ) {
 	function wp_register_ability( $name, $definition ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			$GLOBALS['venue_membership_test']['abilities'][ $name ] = $definition;
+			return;
+		}
 		$GLOBALS['ec_artist_test']['abilities'][ $name ] = $definition; }
 }
 if ( ! function_exists( 'wp_get_ability' ) ) {
@@ -311,6 +352,10 @@ if ( ! function_exists( 'ec_users_notify_with_receipts' ) ) {
 }
 if ( ! function_exists( 'wp_cache_delete' ) ) {
 	function wp_cache_delete( $key, $group = '' ) {
+		if ( isset( $GLOBALS['venue_membership_test'] ) ) {
+			$GLOBALS['venue_membership_test']['cache_deletes'][] = array( $key, $group );
+			return true;
+		}
 		$GLOBALS['ec_artist_test']['cache_deletes'][] = array( $key, $group );
 		return true; }
 }

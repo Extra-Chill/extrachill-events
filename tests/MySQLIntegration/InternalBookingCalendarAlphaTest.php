@@ -400,7 +400,8 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		wp_set_current_user( 0 );
 		switch_to_blog( $this->events_blog_id );
 		try {
-			$response = rest_get_server()->dispatch( $request );
+			$authentication = apply_filters( 'rest_authentication_errors', null );
+			$response       = is_wp_error( $authentication ) ? rest_convert_error_to_response( $authentication ) : rest_get_server()->dispatch( $request );
 		} finally {
 			restore_current_blog();
 			wp_set_current_user( $source_user );

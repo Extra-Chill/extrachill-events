@@ -182,7 +182,7 @@ class LocalSupportRepository {
 		$values = null === $interest_id
 			? array( $request_id, $kind, $version )
 			: array( $request_id, $interest_id, $kind, $version );
-		$row    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE request_id = %d AND {$where} AND kind = %s AND result_version = %d ORDER BY id DESC LIMIT 1", $values ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Fixed clause with prepared change identity.
+		$row    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE request_id = %d AND {$where} AND kind = %s AND result_version = %d ORDER BY id DESC LIMIT 1", $values ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Fixed clause with prepared change identity; the optional interest placeholder determines the runtime count.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'local_support_activity_read_failed', __( 'Local support activity could not be read.', 'extrachill-events' ) );
 		}
@@ -194,7 +194,8 @@ class LocalSupportRepository {
 		global $wpdb;
 		$table = LocalSupportSchema::activity_table();
 		$limit = max( 1, min( 100, $limit ) );
-		$rows  = $wpdb->get_results(
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Reuses the trusted current-prefix activity table in the bounded subquery.
+		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT source.* FROM {$table} source
 				WHERE source.kind IN ('request_opened', 'interest_expressed', 'interest_status_changed', 'contact_consent_granted', 'contact_consent_revoked')
@@ -208,7 +209,8 @@ class LocalSupportRepository {
 				$limit
 			),
 			ARRAY_A
-		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded recovery query over immutable source activity.
+		); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded recovery query over immutable source activity.
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'local_support_notification_sources_read_failed', __( 'Local support notification source activities could not be read.', 'extrachill-events' ) );
 		}
@@ -220,7 +222,8 @@ class LocalSupportRepository {
 		global $wpdb;
 		$table = LocalSupportSchema::activity_table();
 		$limit = max( 1, min( 100, $limit ) );
-		$rows  = $wpdb->get_results(
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Reuses the trusted current-prefix activity table in bounded subqueries.
+		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT intent.* FROM {$table} intent
 				WHERE intent.kind = 'notification_intent'
@@ -241,7 +244,8 @@ class LocalSupportRepository {
 				$limit
 			),
 			ARRAY_A
-		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded due outbox query over private activity.
+		); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded due outbox query over private activity.
+		// phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'local_support_notification_intents_read_failed', __( 'Local support notification intents could not be read.', 'extrachill-events' ) );
 		}

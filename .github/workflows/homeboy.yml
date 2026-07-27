@@ -58,6 +58,13 @@ jobs:
           ref: main
           path: .ci/data-machine-events
 
+      - name: Checkout Homeboy Extensions adapter fix
+        uses: actions/checkout@v4
+        with:
+          repository: Extra-Chill/homeboy-extensions
+          ref: fix-2435-phpunit-status
+          path: .ci/homeboy-extensions
+
       - name: Install Data Machine dependencies
         working-directory: .ci/data-machine
         run: composer install --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative
@@ -85,6 +92,7 @@ jobs:
         uses: Extra-Chill/homeboy-action@v2
         with:
           commands: ${{ matrix.command }}
+          extension-source: ${{ github.workspace }}/.ci/homeboy-extensions
           expected-commands: review lint,review test
 
       - name: Upload managed PHPUnit evidence

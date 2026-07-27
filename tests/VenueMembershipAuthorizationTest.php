@@ -1025,16 +1025,19 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 				return new WP_Error( 'unexpected_dme_update' );
 			},
 		);
-		$this->schema_option_callback = static function () {
-			return $GLOBALS['venue_membership_test']['options'][ BookingSchema::VERSION_OPTION ] ?? false;
+		$this->schema_option_callback = static function ( $value, string $option ) {
+			if ( BookingSchema::VERSION_OPTION !== $option ) {
+				return $value;
+			}
+			return $GLOBALS['venue_membership_test']['options'][ BookingSchema::VERSION_OPTION ] ?? null;
 		};
-		add_filter( 'pre_option_' . BookingSchema::VERSION_OPTION, $this->schema_option_callback );
+		add_filter( 'pre_option', $this->schema_option_callback, PHP_INT_MAX, 2 );
 		$GLOBALS['wpdb']                  = new VenueMembershipWpdb( $this->original_wpdb );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
-		remove_filter( 'pre_option_' . BookingSchema::VERSION_OPTION, $this->schema_option_callback );
+		remove_filter( 'pre_option', $this->schema_option_callback, PHP_INT_MAX );
 		$this->set_current_user( 0 );
 		if ( $this->switched_blog ) {
 			restore_current_blog();

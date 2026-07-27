@@ -680,6 +680,9 @@ final class BookingMarketingTest extends TestCase {
 			'input'         => $request['input'],
 		);
 		$this->assertTrue( BookingMarketingService::authorize_social_operation( false, $cancel_context ) );
+		$mismatched_context                 = $cancel_context;
+		$mismatched_context['operation_id'] = 'booking-marketing:' . str_repeat( '0', 64 );
+		$this->assertSame( 'booking_marketing_owner_forbidden', BookingMarketingService::authorize_social_operation( false, $mismatched_context )->get_error_code() );
 		$this->assertSame( 'cancelled', $this->service()->manage( 'cancel', $booking['id'], $submitted['operation_ref'], 12 )['status'] );
 	}
 

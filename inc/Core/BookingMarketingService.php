@@ -486,20 +486,24 @@ class BookingMarketingService {
 		if ( ! is_array( $booking ) || $actor_id < 1 || true !== $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) ) {
 			return new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}
-		$phase   = (string) ( $owner_context['phase'] ?? '' );
-		$frozen  = null;
-		$receipt = null;
-		if ( is_string( $owner_context['operation_id'] ?? null ) && '' !== $owner_context['operation_id'] ) {
-			$frozen = $this->frozen_activity( $booking['id'], $owner_context['operation_id'] );
+		$phase        = (string) ( $owner_context['phase'] ?? '' );
+		$frozen       = null;
+		$receipt      = null;
+		$operation_id = is_string( $owner_context['operation_id'] ?? null ) ? $owner_context['operation_id'] : '';
+		if ( '' !== $operation_id ) {
+			$frozen = $this->frozen_activity( $booking['id'], $operation_id );
 		}
 		if ( is_string( $owner_context['operation_ref'] ?? null ) ) {
 			$receipt = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $owner_context['operation_ref'] );
-			if ( ! is_array( $frozen ) && is_array( $receipt ) ) {
+			if ( '' === $operation_id && ! is_array( $frozen ) && is_array( $receipt ) ) {
 				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
 			}
 		}
+		$receipt_operation_id = is_array( $receipt ) ? (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) : '';
+		$frozen_operation_id  = is_array( $frozen ) ? (string) ( $frozen['payload']['data']['operation_id'] ?? '' ) : '';
+		$identifiers_match    = '' !== $operation_id && hash_equals( $operation_id, $receipt_operation_id ) && hash_equals( $operation_id, $frozen_operation_id );
 		if ( in_array( $phase, array( 'reconcile', 'cancel' ), true ) ) {
-			return is_array( $frozen ) && is_array( $receipt ) && ( $receipt['payload']['data']['action'] ?? '' ) === $action && (int) $booking['event_id'] === $event_id
+			return $identifiers_match && ( $receipt['payload']['data']['action'] ?? '' ) === $action && (int) $booking['event_id'] === $event_id
 				? true
 				: new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}

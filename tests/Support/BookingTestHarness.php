@@ -25,6 +25,7 @@ use ExtraChillEvents\Abilities\VenueBookingMutationAbilities;
 use ExtraChillEvents\Abilities\VenueBookingEventAbilities;
 use ExtraChillEvents\Abilities\VenueBookingCommunicationAbilities;
 use ExtraChillEvents\Core\VenueAuthorization;
+use ExtraChillEvents\Core\LocalSupportSchema;
 
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
@@ -185,6 +186,34 @@ if ( ! function_exists( 'get_post' ) ) {
 		return $state['posts'][ $state['blog_id'] ][ $post_id ] ?? null;
 	}
 }
+if ( ! function_exists( 'get_post_type' ) ) {
+	function get_post_type( $post_id ) {
+		$post = get_post( $post_id );
+		return $post->post_type ?? false;
+	}
+}
+if ( ! function_exists( 'get_post_status' ) ) {
+	function get_post_status( $post_id ) {
+		$post = get_post( $post_id );
+		return $post->post_status ?? false;
+	}
+}
+if ( ! function_exists( 'get_attached_file' ) ) {
+	function get_attached_file( $post_id, $unfiltered = false ) {
+		unset( $unfiltered );
+		return $GLOBALS['ec_artist_test']['attachment_files'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
+if ( ! function_exists( 'wp_get_attachment_url' ) ) {
+	function wp_get_attachment_url( $post_id ) {
+		return $GLOBALS['ec_artist_test']['attachment_urls'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
+if ( ! function_exists( 'get_post_mime_type' ) ) {
+	function get_post_mime_type( $post_id ) {
+		return $GLOBALS['ec_artist_test']['attachment_mimes'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
 if ( ! function_exists( 'get_post_meta' ) ) {
 	function get_post_meta( $post_id, $key, $single = false ) {
 		unset( $single );
@@ -197,11 +226,26 @@ if ( ! function_exists( 'wp_get_object_terms' ) ) {
 		if ( ! empty( $GLOBALS['ec_artist_test']['venue_terms_error'] ) ) {
 			return new WP_Error( 'venue_terms_read_failed', 'simulated venue taxonomy read failure' );
 		}
+		if ( 'artist' === $taxonomy ) {
+			$ids = $GLOBALS['ec_artist_test']['event_artists'][ get_current_blog_id() ][ $post_id ] ?? array();
+			return ( $args['fields'] ?? '' ) === 'ids' ? $ids : array();
+		}
 		if ( 'venue' !== $taxonomy ) {
 			return array();
 		}
 		$ids = $GLOBALS['ec_artist_test']['event_venues'][ get_current_blog_id() ][ $post_id ] ?? array();
 		return ( $args['fields'] ?? '' ) === 'ids' ? $ids : array();
+	}
+}
+if ( ! function_exists( 'extrachill_events_resolve_artist_term' ) ) {
+	function extrachill_events_resolve_artist_term( $artist_term_id ) {
+		$mapped = $GLOBALS['ec_artist_test']['artist_mappings'][ (int) $artist_term_id ] ?? 0;
+		return $mapped > 0 ? array( 'term_id' => $mapped, 'term_slug' => 'artist-' . $mapped ) : new WP_Error( 'artist_mapping_missing' );
+	}
+}
+if ( ! function_exists( 'ec_user_can' ) ) {
+	function ec_user_can( $capability, array $context = array() ) {
+		return 'manage_artist' === $capability && ! empty( $GLOBALS['ec_artist_test']['artist_managers'][ (int) ( $context['artist_id'] ?? 0 ) ][ (int) ( $context['user_id'] ?? 0 ) ] );
 	}
 }
 if ( ! function_exists( 'parse_blocks' ) ) {
@@ -938,6 +982,20 @@ final class BookingWpdb {
 					return $row; }
 			}
 		}
+		if ( ! $is_activity && preg_match( "/WHERE event_id = (\d+) AND status <> 'admission_pending'/", $query, $match ) ) {
+			foreach ( $this->rows[ $table ] ?? array() as $row ) {
+				if ( (int) ( $row['event_id'] ?? 0 ) === (int) $match[1] && 'admission_pending' !== ( $row['status'] ?? '' ) ) {
+					return $row;
+				}
+			}
+		}
+		if ( $is_activity && preg_match( "/WHERE booking_id = (\d+) AND kind = '([^']+)' AND external_id = '([^']+)'/", $query, $match ) ) {
+			$rows = array_values( array_filter( $this->rows[ $table ] ?? array(), static function ( $row ) use ( $match ) {
+				return (int) $row['booking_id'] === (int) $match[1] && $row['kind'] === stripslashes( $match[2] ) && (string) ( $row['external_id'] ?? '' ) === stripslashes( $match[3] );
+			} ) );
+			usort( $rows, static fn( array $left, array $right ): int => $right['id'] <=> $left['id'] );
+			return $rows[0] ?? null;
+		}
 		if ( preg_match( "/WHERE venue_term_id = (\d+) AND inquiry_idempotency_key = '([^']+)'/", $query, $match ) ) {
 			if ( $this->transaction_active ) {
 				++$this->natural_key_reads_in_transaction;
@@ -1573,9 +1631,13 @@ final class BookingWpdb {
 }
 
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingSchema.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportSchema.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportAuthorization.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingActivityRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingNotificationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingCommunicationService.php';
@@ -1583,6 +1645,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingHoldRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMutationService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingEventSyncService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingEventConversionService.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingMarketingService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingLifecycle.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingPrivateFileProvider.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalBookingPrivateFileProvider.php';
@@ -1596,11 +1659,13 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueBookingConfig.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/TicketSettlementService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/CanonicalEventPublicationGuard.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingAbilities.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Abilities/LocalSupportAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/BookingAttachmentAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingHoldAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMutationAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingEventAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingCommunicationAbilities.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Abilities/VenueBookingMarketingAbilities.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Abilities/TicketSettlementAbilities.php';
 
 final class BookingTestAuthorization extends VenueAuthorization {

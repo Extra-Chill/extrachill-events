@@ -11,7 +11,7 @@ import {
 } from './state';
 
 const validConfig = () => ( {
-	version: 1,
+	version: 3,
 	enabled: true,
 	intake: { version: 1, fields: [] },
 	public_requirements: [],
@@ -32,6 +32,7 @@ const validConfig = () => ( {
 	},
 	ticket_provider_reference: null,
 	marketing_channels: [],
+	marketing_triggers: [],
 	hold_ttl_minutes: 1440,
 } );
 

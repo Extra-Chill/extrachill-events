@@ -68,7 +68,7 @@ const profile = ( id ) => ( {
 	revision: String( id ).padStart( 64, '0' ),
 } );
 const config = ( id ) => ( {
-	version: 1,
+	version: 3,
 	revision: id,
 	updated_by_user_id: null,
 	updated_at: null,
@@ -92,6 +92,7 @@ const config = ( id ) => ( {
 	},
 	ticket_provider_reference: null,
 	marketing_channels: [],
+	marketing_triggers: [],
 	hold_ttl_minutes: 1440,
 } );
 const context = ( overrides = {} ) => ( {

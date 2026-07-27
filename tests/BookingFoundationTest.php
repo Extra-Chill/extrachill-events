@@ -597,9 +597,9 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( $config, $service->normalize( $config ) );
 		$this->assertSame( 'invalid_booking_config_venue', $service->get( 56 )->get_error_code() );
 		$migrated = $service->normalize( array( 'version' => 1, 'enabled' => true ) );
-		$this->assertSame( 2, $migrated['version'] );
+		$this->assertSame( VenueBookingConfig::VERSION, $migrated['version'] );
 		$this->assertArrayHasKey( 'correspondence', $migrated );
-		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 3 ) )->get_error_code() );
+		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 4 ) )->get_error_code() );
 		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => '1junk' ) )->get_error_code() );
 		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'intake' => array( 'version' => 2 ) ) )->get_error_code() );
 		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'correspondence' => array( 'version' => 2 ) ) )->get_error_code() );
@@ -964,7 +964,7 @@ final class BookingFoundationTest extends TestCase {
 
 		$created = $lifecycle->create_inquiry( $input );
 		$this->assertIsArray( $created );
-		$this->assertSame( 125.0, $created['intake']['fields']['draw'] );
+		$this->assertSame( 125, $created['intake']['data']['fields']['draw'] );
 		$stale = $lifecycle->create_inquiry( array_replace_recursive( $input, array( 'idempotency_key' => 'public-stale', 'intake' => array( 'config_revision' => 2 ) ) ) );
 		$this->assertSame( 'booking_config_revision_conflict', $stale->get_error_code() );
 		$missing = $lifecycle->create_inquiry( array_replace_recursive( $input, array( 'idempotency_key' => 'public-missing', 'intake' => array( 'fields' => array( 'draw' => '' ) ) ) ) );

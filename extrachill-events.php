@@ -270,8 +270,10 @@ class ExtraChillEvents {
 		// init_abilities(); the admin screen instantiates in init_admin().
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/ArtistUrlSubmissionsTable.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingSchema.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportSchema.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueMembershipRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueAuthorization.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportAuthorization.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueMembershipService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueInvitationToken.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueOnboardingRepository.php';
@@ -279,6 +281,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueInvitationDeliveryWorker.php';
 		\ExtraChillEvents\Core\VenueInvitationDeliveryWorker::register();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingRepository.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportRepository.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingActivityRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingNotificationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingCommunicationService.php';
@@ -286,6 +290,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMutationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventSyncService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventConversionService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMarketingService.php';
+		\ExtraChillEvents\Core\BookingMarketingService::register();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingLifecycle.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingPrivateFileProvider.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalBookingPrivateFileProvider.php';
@@ -419,8 +425,16 @@ class ExtraChillEvents {
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/VenueBookingCommunicationAbilities.php';
 			new \ExtraChillEvents\Abilities\VenueBookingCommunicationAbilities();
 
+			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/VenueBookingMarketingAbilities.php';
+			new \ExtraChillEvents\Abilities\VenueBookingMarketingAbilities();
+
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/TicketSettlementAbilities.php';
 			new \ExtraChillEvents\Abilities\TicketSettlementAbilities();
+		}
+
+		if ( \ExtraChillEvents\Core\LocalSupportSchema::is_ready() ) {
+			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/LocalSupportAbilities.php';
+			new \ExtraChillEvents\Abilities\LocalSupportAbilities();
 		}
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/PriorityVenueAbilities.php';
@@ -516,6 +530,10 @@ class ExtraChillEvents {
 
 		if ( class_exists( '\\ExtraChillEvents\\Core\\BookingSchema' ) ) {
 			\ExtraChillEvents\Core\BookingSchema::maybe_install();
+		}
+
+		if ( class_exists( '\\ExtraChillEvents\\Core\\LocalSupportSchema' ) ) {
+			\ExtraChillEvents\Core\LocalSupportSchema::maybe_install();
 		}
 	}
 

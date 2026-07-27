@@ -40,15 +40,17 @@ require_once dirname( __DIR__, 3 ) . '/inc/core/booking-console.php';
 
 final class BookingConsoleTest extends TestCase {
 	public function test_booking_route_is_deterministic_and_calendar_first(): void {
+		$base_url = get_home_url( (int) ec_get_blog_id( 'events' ), '/venue-settings/' );
 		$this->assertSame(
-			'https://events.example/venue-settings/?venue_id=44&booking_id=91#tab-calendar',
+			$base_url . '?venue_id=44&booking_id=91#tab-calendar',
 			ec_events_get_booking_console_url( 44, 91 )
 		);
 	}
 
 	public function test_manage_venue_route_does_not_emit_placeholder_ids(): void {
+		$base_url = get_home_url( (int) ec_get_blog_id( 'events' ), '/venue-settings/' );
 		$this->assertSame(
-			'https://events.example/venue-settings/#tab-calendar',
+			$base_url . '#tab-calendar',
 			ec_events_get_booking_console_url( 0 )
 		);
 	}

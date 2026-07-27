@@ -158,6 +158,7 @@ final class BookingMarketingTest extends TestCase {
 	private BookingMarketingDelegatedBackendFake $backend;
 	private $original_wpdb;
 	private array $asset_files = array();
+	private $log_callback;
 
 	protected function setUp(): void {
 		foreach ( array( 301, 302, 303, 304 ) as $attachment_id ) {
@@ -258,10 +259,17 @@ final class BookingMarketingTest extends TestCase {
 		foreach ( array( 'submit', 'get', 'retry', 'cancel' ) as $verb ) {
 			$GLOBALS['ec_artist_test']['ability_objects'][ 'datamachine/' . $verb . '-delegated-operation' ] = new BookingMarketingDelegatedAbilityFake( $this->backend, $verb );
 		}
+		$GLOBALS['ec_test_ability_resolver'] = static fn( string $name ) => $GLOBALS['ec_artist_test']['ability_objects'][ $name ] ?? null;
+		$this->log_callback                  = static function ( $level, $message, $context ): void {
+			$GLOBALS['ec_artist_test']['fired_actions']['datamachine_log'][] = array( $level, $message, $context );
+		};
+		add_action( 'datamachine_log', $this->log_callback, 10, 3 );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
+		remove_action( 'datamachine_log', $this->log_callback, 10 );
+		unset( $GLOBALS['ec_test_ability_resolver'] );
 		foreach ( $this->asset_files as $file ) {
 			if ( is_file( $file ) ) {
 				unlink( $file );

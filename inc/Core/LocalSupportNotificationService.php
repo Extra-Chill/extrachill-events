@@ -14,15 +14,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Coordinates Events-owned matching with dependency-owned storage and eligibility. */
 class LocalSupportNotificationService {
 
-	public const REQUEST_OPENED_HOOK   = 'extrachill_events_local_support_request_opened';
-	public const INTEREST_CHANGED_HOOK = 'extrachill_events_local_support_interest_changed';
-	public const RECONCILE_HOOK        = 'extrachill_events_reconcile_local_support_notifications';
-	public const ADAPTER_FILTER        = 'extrachill_events_local_support_notification_adapter';
-	public const ERROR_HOOK            = 'extrachill_events_local_support_notification_error';
-	public const ELIGIBILITY_ABILITY   = 'extrachill/resolve-local-support-candidates';
-	public const PRODUCER              = 'extrachill-events-local-support';
-	public const SCHEDULER_GROUP       = 'extrachill-events-local-support';
-	public const MAX_ATTEMPTS          = 5;
+	public const CHANGE_HOOK         = 'extrachill_events_local_support_changed';
+	public const RECONCILE_HOOK      = 'extrachill_events_reconcile_local_support_notifications';
+	public const ERROR_HOOK          = 'extrachill_events_local_support_notification_error';
+	public const ELIGIBILITY_ABILITY = 'extrachill/artist-query-local-support-candidates';
+	public const PRODUCER            = 'extrachill-events-local-support';
+	public const SCHEDULER_GROUP     = 'extrachill-events-local-support';
+	public const MAX_ATTEMPTS        = 5;
 
 	/** @var object|null #420-owned durable adapter. */
 	private $adapter;
@@ -54,10 +52,10 @@ class LocalSupportNotificationService {
 
 	/** Register domain event consumers and bounded reconciliation. */
 	public static function register(): void {
-		add_action( self::REQUEST_OPENED_HOOK, array( self::class, 'handle_request_opened' ), 10, 2 );
-		add_action( self::INTEREST_CHANGED_HOOK, array( self::class, 'handle_interest_changed' ), 10, 3 );
+		add_action( self::CHANGE_HOOK, array( self::class, 'handle_change' ) );
 		add_action( self::RECONCILE_HOOK, array( self::class, 'reconcile_scheduled' ) );
 		add_action( 'init', array( self::class, 'ensure_reconciliation_schedule' ) );
+		add_filter( 'extrachill_artist_platform_local_support_producer_authorized', array( self::class, 'authorize_producer' ), 10, 2 );
 	}
 
 	/** Ensure ambiguous outcomes remain recoverable after a process interruption. */
@@ -68,22 +66,18 @@ class LocalSupportNotificationService {
 		as_schedule_recurring_action( time() + MINUTE_IN_SECONDS, 5 * MINUTE_IN_SECONDS, self::RECONCILE_HOOK, array(), self::SCHEDULER_GROUP, true );
 	}
 
-	/** Consume the stable #420 request-opened event contract. */
-	public static function handle_request_opened( array $request, array $activity ): void {
+	/** Consume the landed privacy-safe #420 change event. */
+	public static function handle_change( array $change ): void {
 		$service = self::runtime();
-		$result  = is_wp_error( $service ) ? $service : $service->queue_request_opened( $request, $activity );
+		$result  = $service->queue_change( $change );
 		if ( is_wp_error( $result ) ) {
-			do_action( self::ERROR_HOOK, $result, 'request_opened', $activity );
+			do_action( self::ERROR_HOOK, $result, $change );
 		}
 	}
 
-	/** Consume the stable #420 interest-changed event contract. */
-	public static function handle_interest_changed( array $request, array $interest, array $activity ): void {
-		$service = self::runtime();
-		$result  = is_wp_error( $service ) ? $service : $service->queue_interest_changed( $request, $interest, $activity );
-		if ( is_wp_error( $result ) ) {
-			do_action( self::ERROR_HOOK, $result, 'interest_changed', $activity );
-		}
+	/** Authorize only this Events-owned producer at the Artist Platform boundary. */
+	public static function authorize_producer( bool $authorized, string $producer ): bool {
+		return $authorized || self::PRODUCER === $producer;
 	}
 
 	/** Run one scheduler reconciliation page. */
@@ -95,13 +89,32 @@ class LocalSupportNotificationService {
 		}
 	}
 
-	/** Resolve the #420 adapter only at runtime so either dependency may load later. */
-	private static function runtime() {
-		$adapter = apply_filters( self::ADAPTER_FILTER, null );
-		if ( ! is_object( $adapter ) ) {
-			return new \WP_Error( 'local_support_domain_adapter_unavailable', __( 'Local-support notification storage is unavailable; activate the request domain integration.', 'extrachill-events' ) );
+	/** Build the production service against the landed Events domain. */
+	private static function runtime(): self {
+		return new self( new LocalSupportNotificationAdapter() );
+	}
+
+	/** Map one committed domain change to its notification behavior. */
+	public function queue_change( array $change ) {
+		$source = $this->call_adapter( 'notification_source', array( $change ) );
+		if ( is_wp_error( $source ) ) {
+			return $source;
 		}
-		return new self( $adapter );
+		$kind = (string) ( $change['kind'] ?? '' );
+		if ( 'request_opened' === $kind ) {
+			$result = $this->queue_request_opened( $source['request'], $source['activity'] );
+		} elseif ( 0 === strpos( $kind, 'interest_' ) || 0 === strpos( $kind, 'contact_consent_' ) ) {
+			$result = is_array( $source['interest'] )
+				? $this->queue_interest_changed( $source['request'], $source['interest'], $source['activity'] )
+				: new \WP_Error( 'local_support_change_interest_missing', __( 'The interest change has no durable interest record.', 'extrachill-events' ) );
+		} else {
+			return array();
+		}
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		$marked = $this->call_adapter( 'mark_notification_source_processed', array( $source['activity'] ) );
+		return is_wp_error( $marked ) ? $marked : $result;
 	}
 
 	/** Queue one deterministic candidate intent per eligible artist manager. */
@@ -125,7 +138,7 @@ class LocalSupportNotificationService {
 		$queued = array();
 		foreach ( $candidates as $candidate ) {
 			foreach ( $candidate['manager_user_ids'] as $recipient_id ) {
-				$key    = sprintf( 'local-support:request-opened:%d:%d:%d', $activity['id'], $candidate['artist_term_id'], $recipient_id );
+				$key    = $this->intent_key( 'request-opened', array( $activity['id'], $candidate['artist_term_id'], $recipient_id ) );
 				$intent = $this->append_intent(
 					array(
 						'idempotency_key'    => $key,
@@ -156,9 +169,12 @@ class LocalSupportNotificationService {
 
 	/** Queue deterministic organizer intents after an artist interest mutation. */
 	public function queue_interest_changed( array $request, array $interest, array $activity ) {
-		$valid = $this->validate_source( $request, $activity, 'interest_changed' );
+		$valid = $this->validate_source( $request, $activity, (string) ( $activity['kind'] ?? '' ) );
 		if ( true !== $valid ) {
 			return $valid;
+		}
+		if ( 0 !== strpos( (string) $activity['kind'], 'interest_' ) && 0 !== strpos( (string) $activity['kind'], 'contact_consent_' ) ) {
+			return new \WP_Error( 'local_support_source_invalid', __( 'The local-support interest notification source is invalid.', 'extrachill-events' ) );
 		}
 		$artist_term_id = absint( $interest['artist_term_id'] ?? 0 );
 		if ( $artist_term_id < 1 ) {
@@ -171,7 +187,7 @@ class LocalSupportNotificationService {
 		}
 		$queued = array();
 		foreach ( $recipients as $recipient_id ) {
-			$key    = sprintf( 'local-support:interest-changed:%d:%d', $activity['id'], $recipient_id );
+			$key    = $this->intent_key( 'interest-changed', array( $activity['id'], $recipient_id ) );
 			$intent = $this->append_intent(
 				array(
 					'idempotency_key'    => $key,
@@ -200,11 +216,30 @@ class LocalSupportNotificationService {
 
 	/** Reconcile a bounded page supplied by #420's durable activity store. */
 	public function reconcile_pending( int $limit = 50 ) {
+		$limit   = max( 1, min( 100, $limit ) );
+		$sources = $this->call_adapter( 'pending_notification_sources', array( $limit ) );
+		if ( is_wp_error( $sources ) || ! is_array( $sources ) ) {
+			return is_wp_error( $sources ) ? $sources : new \WP_Error( 'local_support_pending_sources_invalid', __( 'Local-support pending notification sources returned an invalid result.', 'extrachill-events' ) );
+		}
+		$recovered = 0;
+		foreach ( $sources as $source ) {
+			$result = $this->queue_change(
+				array(
+					'kind'        => $source['kind'],
+					'request_id'  => $source['request_id'],
+					'interest_id' => $source['interest_id'],
+					'version'     => $source['result_version'],
+				)
+			);
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+			++$recovered;
+		}
 		$method = $this->adapter_method( 'pending_notification_intents' );
 		if ( is_wp_error( $method ) ) {
 			return $method;
 		}
-		$limit   = max( 1, min( 100, $limit ) );
 		$intents = $this->adapter->pending_notification_intents( $limit );
 		if ( is_wp_error( $intents ) || ! is_array( $intents ) ) {
 			return is_wp_error( $intents ) ? $intents : new \WP_Error( 'local_support_pending_intents_invalid', __( 'Local-support pending notification storage returned an invalid result.', 'extrachill-events' ) );
@@ -219,10 +254,10 @@ class LocalSupportNotificationService {
 				++$completed;
 			}
 		}
-		if ( count( $intents ) >= $limit ) {
+		if ( count( $sources ) >= $limit || count( $intents ) >= $limit ) {
 			$this->schedule_reconciliation();
 		}
-		return compact( 'completed' );
+		return compact( 'recovered', 'completed' );
 	}
 
 	/** Revalidate authorization and reconcile one idempotent Users receipt. */
@@ -231,7 +266,7 @@ class LocalSupportNotificationService {
 		if ( true !== $valid ) {
 			return $valid;
 		}
-		$terminal = $this->call_adapter( 'notification_terminal', array( $intent['idempotency_key'] ) );
+		$terminal = $this->call_adapter( 'notification_terminal', array( $intent ) );
 		if ( is_wp_error( $terminal ) || is_array( $terminal ) ) {
 			return $terminal;
 		}
@@ -242,7 +277,7 @@ class LocalSupportNotificationService {
 		if ( ! $authorized ) {
 			return $this->record_terminal( $intent, 'suppressed', array( 'reason' => 'recipient_no_longer_authorized' ) );
 		}
-		$link = $this->call_adapter( 'workspace_url', array( (int) $intent['request_id'], (int) $intent['recipient_id'] ) );
+		$link = $this->call_adapter( 'workspace_url', array( (int) $intent['request_id'], (int) $intent['recipient_id'], $intent ) );
 		if ( is_wp_error( $link ) || ! is_string( $link ) || ! $this->valid_url( $link ) ) {
 			$error = is_wp_error( $link ) ? $link : new \WP_Error( 'local_support_workspace_url_invalid', __( 'The authorized local-support workspace URL is unavailable.', 'extrachill-events' ) );
 			return $this->record_failure( $intent, $error );
@@ -286,10 +321,9 @@ class LocalSupportNotificationService {
 	/** Resolve and strictly normalize Artist Platform candidates. */
 	private function resolve_candidates( array $context, string $genre ) {
 		$input = array(
-			'producer'                => self::PRODUCER,
-			'location_term_id'        => $context['location_term_id'],
-			'location_slug'           => $context['location_slug'],
-			'exclude_artist_term_ids' => $context['artist_term_ids'],
+			'producer'           => self::PRODUCER,
+			'scene_slug'         => $context['location_slug'],
+			'exclude_artist_ids' => $context['artist_profile_ids'],
 		);
 		if ( '' !== $genre ) {
 			$input['genre'] = sanitize_text_field( $genre );
@@ -405,18 +439,62 @@ class LocalSupportNotificationService {
 			if ( is_wp_error( $artists ) ) {
 				return new \WP_Error( 'local_support_event_artists_unavailable', __( 'The event artist bindings could not be resolved.', 'extrachill-events' ) );
 			}
-			return array(
+			$context = array(
 				'title'            => get_the_title( $post ),
 				'location_term_id' => (int) $locations[0]->term_id,
 				'location_slug'    => (string) $locations[0]->slug,
 				'venue_term_id'    => (int) $venues[0],
-				'artist_term_ids'  => array_values( array_unique( array_map( 'absint', $artists ) ) ),
+				'local_artist_ids' => array_values( array_unique( array_map( 'absint', $artists ) ) ),
 			);
 		} finally {
 			if ( $switched ) {
 				restore_current_blog();
 			}
 		}
+		$bindings = $this->resolve_attached_artist_bindings( $context['local_artist_ids'] );
+		if ( is_wp_error( $bindings ) ) {
+			return $bindings;
+		}
+		unset( $context['local_artist_ids'] );
+		return array_merge( $context, $bindings );
+	}
+
+	/** Resolve Events artist terms to canonical terms and Artist Platform profiles. */
+	private function resolve_attached_artist_bindings( array $local_artist_ids ) {
+		if ( empty( $local_artist_ids ) ) {
+			return array(
+				'artist_term_ids'    => array(),
+				'artist_profile_ids' => array(),
+			);
+		}
+		$main_blog_id = function_exists( 'ec_get_blog_id' ) ? absint( ec_get_blog_id( 'main' ) ) : 0;
+		if ( $main_blog_id < 1 || ! function_exists( 'extrachill_events_find_artist_mapping_claims' ) ) {
+			return new \WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical artist mapping is unavailable.', 'extrachill-events' ) );
+		}
+		$term_ids    = array();
+		$profile_ids = array();
+		switch_to_blog( $main_blog_id );
+		try {
+			foreach ( $local_artist_ids as $local_artist_id ) {
+				$claims = extrachill_events_find_artist_mapping_claims( (int) $local_artist_id );
+				if ( 1 !== count( $claims ) ) {
+					return new \WP_Error( 'local_support_artist_binding_invalid', __( 'Every attached event artist requires one canonical artist binding.', 'extrachill-events' ) );
+				}
+				$term_id    = (int) reset( $claims );
+				$profile_id = absint( get_term_meta( $term_id, '_artist_profile_id', true ) );
+				if ( $term_id < 1 || $profile_id < 1 ) {
+					return new \WP_Error( 'local_support_artist_binding_invalid', __( 'Every attached event artist requires one Artist Platform profile binding.', 'extrachill-events' ) );
+				}
+				$term_ids[]    = $term_id;
+				$profile_ids[] = $profile_id;
+			}
+		} finally {
+			restore_current_blog();
+		}
+		return array(
+			'artist_term_ids'    => array_values( array_unique( $term_ids ) ),
+			'artist_profile_ids' => array_values( array_unique( $profile_ids ) ),
+		);
 	}
 
 	/** Validate the private, contact-free durable intent shape. */
@@ -437,7 +515,7 @@ class LocalSupportNotificationService {
 
 	/** Record retry metadata or poison after the bounded attempt count. */
 	private function record_failure( array $intent, \WP_Error $error ) {
-		$count = $this->call_adapter( 'notification_attempt_count', array( $intent['idempotency_key'] ) );
+		$count = $this->call_adapter( 'notification_attempt_count', array( $intent ) );
 		if ( is_wp_error( $count ) ) {
 			return $count;
 		}
@@ -454,14 +532,14 @@ class LocalSupportNotificationService {
 			);
 		}
 		$due_at = gmdate( 'Y-m-d H:i:s', time() + min( HOUR_IN_SECONDS, MINUTE_IN_SECONDS * ( 2 ** max( 0, $attempt - 1 ) ) ) );
-		$result = $this->call_adapter( 'record_notification_attempt', array( $intent['idempotency_key'], $attempt, $due_at, $error->get_error_code() ) );
+		$result = $this->call_adapter( 'record_notification_attempt', array( $intent, $attempt, $due_at, $error->get_error_code() ) );
 		$this->schedule_reconciliation( strtotime( $due_at . ' UTC' ) );
 		return $result;
 	}
 
 	/** Record one idempotent terminal activity through #420's adapter. */
 	private function record_terminal( array $intent, string $status, array $details ) {
-		return $this->call_adapter( 'record_notification_terminal', array( $intent['idempotency_key'], $status, $details ) );
+		return $this->call_adapter( 'record_notification_terminal', array( $intent, $status, $details ) );
 	}
 
 	/** Call one required adapter method with an actionable dependency error. */
@@ -477,6 +555,11 @@ class LocalSupportNotificationService {
 		}
 		/* translators: %s: required local-support domain adapter method. */
 		return new \WP_Error( 'local_support_domain_contract_unavailable', sprintf( __( 'The local-support request domain must provide %s().', 'extrachill-events' ), $method ) );
+	}
+
+	/** Build an internal deterministic key outside user-controlled idempotency space. */
+	private function intent_key( string $kind, array $parts ): string {
+		return 'local-support-notification:' . hash_hmac( 'sha256', $kind . ':' . implode( ':', array_map( 'strval', $parts ) ), wp_salt( 'auth' ) );
 	}
 
 	/** Delegate to Extra Chill Users without producer-specific generic changes. */

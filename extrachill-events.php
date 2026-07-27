@@ -285,6 +285,7 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingActivityRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingNotificationService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportNotificationAdapter.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportNotificationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingCommunicationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingHoldRepository.php';

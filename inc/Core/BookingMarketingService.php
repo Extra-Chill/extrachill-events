@@ -165,7 +165,7 @@ class BookingMarketingService {
 				'operation_ref' => $operation_ref,
 			)
 		);
-		return $this->record_response( $booking, $receipt['channel'], $action, $result, $actor_id, $receipt['payload']['data']['approval_id'] ?? null, (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) );
+		return $this->record_response( $booking, $receipt['channel'], $action, $result, $actor_id, $receipt['payload']['data']['approval_id'] ?? null, (string) ( $receipt['payload']['data']['operation_id'] ?? '' ), 'marketing_operation_' . $verb . '_rejected' );
 	}
 
 	/** Stage one deterministic approval containing hashes and references only. */
@@ -309,7 +309,7 @@ class BookingMarketingService {
 	}
 
 	/** Record only the opaque operation ref and owner-approved bounded projection. */
-	private function record_response( array $booking, string $channel, string $action, $result, int $actor_id, ?string $approval_id, string $operation_id ) {
+	private function record_response( array $booking, string $channel, string $action, $result, int $actor_id, ?string $approval_id, string $operation_id, string $failure_kind = 'marketing_operation_failed' ) {
 		if ( is_wp_error( $result ) ) {
 			$result = array(
 				'success'    => false,
@@ -321,11 +321,11 @@ class BookingMarketingService {
 			$this->activity->append(
 				array(
 					'booking_id'      => $booking['id'],
-					'kind'            => 'marketing_operation_failed',
+					'kind'            => $failure_kind,
 					'actor_type'      => 'user',
 					'actor_id'        => $actor_id,
 					'channel'         => $channel,
-					'idempotency_key' => 'marketing-failure:' . hash( 'sha256', $action . "\0" . $channel . "\0" . $code ),
+					'idempotency_key' => $failure_kind . ':' . hash( 'sha256', $operation_id . "\0" . $action . "\0" . $channel . "\0" . $code ),
 					'payload'         => array(
 						'action'     => $action,
 						'error_code' => $code,
@@ -486,21 +486,20 @@ class BookingMarketingService {
 		if ( ! is_array( $booking ) || $actor_id < 1 || true !== $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) ) {
 			return new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}
+		$phase   = (string) ( $owner_context['phase'] ?? '' );
 		$frozen  = null;
 		$receipt = null;
 		if ( is_string( $owner_context['operation_id'] ?? null ) && '' !== $owner_context['operation_id'] ) {
 			$frozen = $this->frozen_activity( $booking['id'], $owner_context['operation_id'] );
-		} elseif ( is_string( $owner_context['operation_ref'] ?? null ) ) {
+		}
+		if ( is_string( $owner_context['operation_ref'] ?? null ) ) {
 			$receipt = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $owner_context['operation_ref'] );
-			if ( is_array( $receipt ) ) {
+			if ( ! is_array( $frozen ) && is_array( $receipt ) ) {
 				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
 			}
 		}
-		if ( ! is_array( $frozen ) ) {
-			return new \WP_Error( 'booking_marketing_binding_missing' );
-		}
-		if ( in_array( $owner_context['phase'] ?? '', array( 'reconcile', 'cancel' ), true ) ) {
-			return is_array( $receipt ) && ( $receipt['payload']['data']['action'] ?? '' ) === $action && (int) $booking['event_id'] === $event_id
+		if ( in_array( $phase, array( 'reconcile', 'cancel' ), true ) ) {
+			return is_array( $frozen ) && is_array( $receipt ) && ( $receipt['payload']['data']['action'] ?? '' ) === $action && (int) $booking['event_id'] === $event_id
 				? true
 				: new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}
@@ -508,15 +507,27 @@ class BookingMarketingService {
 		if ( is_wp_error( $context ) ) {
 			return $context;
 		}
-		$data     = $frozen['payload']['data'];
-		$resolved = $this->configured_channel( $context['config'], (string) ( $data['trigger_key'] ?? '' ), (string) ( $data['channel_key'] ?? '' ) );
-		if ( is_wp_error( $resolved ) ) {
-			return $this->stale_error();
+		if ( is_array( $frozen ) ) {
+			$data     = $frozen['payload']['data'];
+			$resolved = $this->configured_channel( $context['config'], (string) ( $data['trigger_key'] ?? '' ), (string) ( $data['channel_key'] ?? '' ) );
+			if ( is_wp_error( $resolved ) ) {
+				return $this->stale_error();
+			}
+			$current = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
+		} elseif ( 'effect' === $phase ) {
+			$matched = $this->effect_operation( $context, $action, $owner_context['input'] );
+			if ( is_wp_error( $matched ) ) {
+				return $matched;
+			}
+			$current = $matched['operation'];
+			$frozen  = $matched['frozen'];
+		} else {
+			return new \WP_Error( 'booking_marketing_binding_missing' );
 		}
-		$current = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
 		if ( is_wp_error( $current ) ) {
 			return $this->stale_error();
 		}
+		$data        = $frozen['payload']['data'];
 		$owner_input = $owner_context['input'];
 		if ( self::SOCIAL_ACTION === $action ) {
 			$owner_input = array_intersect_key( $owner_input, $current['input'] );
@@ -525,6 +536,37 @@ class BookingMarketingService {
 			return $this->stale_error();
 		}
 		return true;
+	}
+
+	/** Match one effect-only owner input to an exact frozen configured operation. */
+	private function effect_operation( array $context, string $action, array $owner_input ) {
+		$matches = array();
+		foreach ( $context['config']['marketing_triggers'] as $trigger ) {
+			if ( self::TRIGGER !== $trigger['event'] ) {
+				continue;
+			}
+			foreach ( $trigger['channels'] as $channel ) {
+				if ( $action !== $channel['action'] ) {
+					continue;
+				}
+				$operation = $this->operation( $context, $trigger, $channel );
+				if ( is_wp_error( $operation ) ) {
+					continue;
+				}
+				$comparable = self::SOCIAL_ACTION === $action ? array_intersect_key( $owner_input, $operation['input'] ) : $owner_input;
+				if ( $operation['input'] !== $comparable ) {
+					continue;
+				}
+				$frozen = $this->frozen_activity( $context['booking']['id'], $operation['operation_id'] );
+				if ( is_array( $frozen ) ) {
+					$matches[] = array(
+						'operation' => $operation,
+						'frozen'    => $frozen,
+					);
+				}
+			}
+		}
+		return 1 === count( $matches ) ? $matches[0] : new \WP_Error( 'booking_marketing_binding_missing' );
 	}
 
 	/** Resolve and authorize canonical booking, event, and venue policy. */

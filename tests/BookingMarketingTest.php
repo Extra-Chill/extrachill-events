@@ -36,6 +36,7 @@ final class BookingMarketingDelegatedBackendFake {
 	public $operations = array();
 	public $next       = array();
 	public $user_id    = 12;
+	public $on_submit;
 
 	public function execute( string $verb, array $input ): array {
 		$this->calls[] = array( $verb, $input, $this->user_id );
@@ -65,6 +66,9 @@ final class BookingMarketingDelegatedBackendFake {
 					return $next;
 				}
 				$operation = array_merge( $operation, $next );
+			}
+			if ( is_callable( $this->on_submit ) ) {
+				( $this->on_submit )( $input, $operation );
 			}
 			return array(
 				'success'       => true,
@@ -366,6 +370,29 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertArrayNotHasKey( 'task_type', $input );
 	}
 
+	public function test_effect_authorization_uses_frozen_binding_before_submit_receipt_lands(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->social() ) );
+		$authorized = null;
+		$this->backend->on_submit = static function ( array $request, array $operation ) use ( &$authorized ): void {
+			$authorized = BookingMarketingService::authorize_social_operation(
+				false,
+				array(
+					'phase'         => 'effect',
+					'action'        => BookingMarketingService::SOCIAL_ACTION,
+					'operation_ref' => $operation['operation_ref'],
+					'actor'         => array( 'user_id' => 12 ),
+					'input'         => $request['input'],
+				)
+			);
+		};
+
+		$this->service()->trigger( $booking['id'], 12 );
+
+		$this->assertTrue( $authorized );
+	}
+
 	public function test_generated_inputs_compose_with_concrete_owner_normalizers(): void {
 		$booking = $this->booking();
 		$this->configure( array( $this->social() ) );
@@ -619,6 +646,9 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertSame( 'failed', $current['status'] );
 		$this->assertFalse( $current['retryable'] );
 		$this->assertSame( 'delivery_unknown', $current['projection']['error_codes'][0]['code'] );
+		$kinds = array_column( ( new BookingActivityRepository() )->list_for_booking( $booking['id'] ), 'kind' );
+		$this->assertContains( 'marketing_operation_retry_rejected', $kinds );
+		$this->assertNotContains( 'marketing_operation_failed', $kinds );
 	}
 
 	public function test_cancellation_succeeds_only_before_execution(): void {
@@ -644,6 +674,7 @@ final class BookingMarketingTest extends TestCase {
 		$cancel_context = array(
 			'phase'         => 'cancel',
 			'action'        => BookingMarketingService::SOCIAL_ACTION,
+			'operation_id'  => $request['operation_id'],
 			'operation_ref' => $submitted['operation_ref'],
 			'actor'         => array( 'user_id' => 12 ),
 			'input'         => $request['input'],

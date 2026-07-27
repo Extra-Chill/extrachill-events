@@ -164,7 +164,7 @@ final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMy
 	/** Open an independent MySQL session that controls the venue lock. */
 	private function connect_lock_session(): mysqli {
 		$connection = mysqli_init();
-		$this->assertTrue( mysqli_real_connect( $connection, (string) getenv( 'DB_HOST' ), (string) getenv( 'DB_USER' ), (string) getenv( 'DB_PASSWORD' ), (string) getenv( 'DB_NAME' ), (int) getenv( 'DB_PORT' ) ), mysqli_connect_error() );
+		$this->assertTrue( mysqli_real_connect( $connection, (string) getenv( 'DB_HOST' ), (string) getenv( 'DB_USER' ), (string) getenv( 'DB_PASSWORD' ), (string) getenv( 'DB_NAME' ), (int) getenv( 'DB_PORT' ) ), (string) mysqli_connect_error() );
 		$connection->set_charset( 'utf8mb4' );
 		return $connection;
 	}

@@ -60,6 +60,11 @@
     margin-bottom: 0;
 }
 
+.events-homepage > .entry-content > .calendar-stats {
+    margin-top: var(--spacing-sm);
+    text-align: center;
+}
+
 /* Account-backed market context on primary discovery surfaces. */
 .events-market-context {
     display: flex;

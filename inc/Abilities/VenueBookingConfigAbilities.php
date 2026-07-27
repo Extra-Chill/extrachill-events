@@ -336,10 +336,15 @@ class VenueBookingConfigAbilities {
 		if ( ! $accept_legacy ) {
 			return $schema;
 		}
-		$legacy                                  = $schema;
+		$previous                                  = $schema;
+		$previous['properties']['version']['enum'] = array( VenueBookingConfig::PREVIOUS_VERSION );
+		$previous['required']                      = array_values( array_diff( $previous['required'], array( 'marketing_triggers' ) ) );
+		unset( $previous['properties']['marketing_triggers'] );
+		$legacy                                  = $previous;
 		$legacy['properties']['version']['enum'] = array( VenueBookingConfig::LEGACY_VERSION );
 		$legacy['required']                      = array_values( array_diff( $legacy['required'], array( 'correspondence' ) ) );
-		return array( 'oneOf' => array( $legacy, $schema ) );
+		unset( $legacy['properties']['correspondence'] );
+		return array( 'oneOf' => array( $legacy, $previous, $schema ) );
 	}
 
 	/** Return the strict correspondence configuration schema. */

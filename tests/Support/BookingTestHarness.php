@@ -185,6 +185,24 @@ if ( ! function_exists( 'get_post' ) ) {
 		return $state['posts'][ $state['blog_id'] ][ $post_id ] ?? null;
 	}
 }
+if ( ! function_exists( 'get_post_type' ) ) {
+	function get_post_type( $post_id ) {
+		$post = get_post( $post_id );
+		return $post->post_type ?? false;
+	}
+}
+if ( ! function_exists( 'get_post_status' ) ) {
+	function get_post_status( $post_id ) {
+		$post = get_post( $post_id );
+		return $post->post_status ?? false;
+	}
+}
+if ( ! function_exists( 'get_attached_file' ) ) {
+	function get_attached_file( $post_id, $unfiltered = false ) {
+		unset( $unfiltered );
+		return $GLOBALS['ec_artist_test']['attachment_files'][ get_current_blog_id() ][ $post_id ] ?? false;
+	}
+}
 if ( ! function_exists( 'wp_get_attachment_url' ) ) {
 	function wp_get_attachment_url( $post_id ) {
 		return $GLOBALS['ec_artist_test']['attachment_urls'][ get_current_blog_id() ][ $post_id ] ?? false;

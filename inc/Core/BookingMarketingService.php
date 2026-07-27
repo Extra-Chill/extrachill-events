@@ -383,15 +383,19 @@ class BookingMarketingService {
 			return new \WP_Error( 'booking_marketing_event_unavailable', __( 'The canonical event URL is unavailable.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		if ( self::SOCIAL_ACTION === $channel['action'] ) {
-			$caption = '' !== $channel['social']['caption'] ? $channel['social']['caption'] : $event->post_title;
-			$input   = array(
+			$caption    = '' !== $channel['social']['caption'] ? $channel['social']['caption'] : $event->post_title;
+			$asset_refs = $this->social_asset_refs( $channel['social']['media_kind'], $channel['social']['asset_refs'] );
+			if ( is_wp_error( $asset_refs ) ) {
+				return $asset_refs;
+			}
+			$input = array(
 				'post_id'      => (int) $event->ID,
 				'source_url'   => $url,
 				'caption'      => $caption,
 				'content_hash' => hash( 'sha256', $caption ),
 				'channels'     => $channel['social']['channels'],
 				'media_kind'   => $channel['social']['media_kind'],
-				'asset_refs'   => $channel['social']['asset_refs'],
+				'asset_refs'   => $asset_refs,
 			);
 		} elseif ( self::NEWSLETTER_ACTION === $channel['action'] ) {
 			$input = array(
@@ -649,17 +653,43 @@ class BookingMarketingService {
 			$attachment = get_post( $asset_ref );
 			$url        = function_exists( 'wp_get_attachment_url' ) ? wp_get_attachment_url( $asset_ref ) : false;
 			$mime       = function_exists( 'get_post_mime_type' ) ? get_post_mime_type( $asset_ref ) : false;
-			if ( ! $attachment || 'attachment' !== ( $attachment->post_type ?? '' ) || ! is_string( $url ) || '' === $url || ! is_string( $mime ) || '' === $mime ) {
+			$file       = function_exists( 'get_attached_file' ) ? get_attached_file( $asset_ref, true ) : false;
+			$file_hash  = is_string( $file ) && is_readable( $file ) ? hash_file( 'sha256', $file ) : false;
+			if ( ! $attachment || 'attachment' !== ( $attachment->post_type ?? '' ) || ! is_string( $url ) || '' === $url || ! is_string( $mime ) || '' === $mime || ! is_string( $file_hash ) ) {
 				return new \WP_Error( 'booking_marketing_asset_invalid', __( 'A marketing attachment is unavailable or invalid.', 'extrachill-events' ), array( 'status' => 409 ) );
 			}
 			$identities[] = array(
 				'id'           => (int) $asset_ref,
 				'url_hash'     => hash( 'sha256', $url ),
+				'file_hash'    => $file_hash,
 				'mime'         => $mime,
 				'modified_gmt' => (string) ( $attachment->post_modified_gmt ?? '' ),
 			);
 		}
 		return $identities;
+	}
+
+	/** Map ordered venue attachment IDs onto the concrete Socials v2 role contract. */
+	private function social_asset_refs( string $media_kind, array $asset_ids ) {
+		$refs = array();
+		foreach ( $asset_ids as $index => $attachment_id ) {
+			$mime = get_post_mime_type( $attachment_id );
+			if ( 'reel' === $media_kind ) {
+				$role = 0 === $index ? 'video' : 'cover';
+			} elseif ( 'story' === $media_kind ) {
+				$role = is_string( $mime ) && str_starts_with( $mime, 'video/' ) ? 'video' : 'image';
+			} else {
+				$role = 'image';
+			}
+			if ( ! is_string( $mime ) || ( 'video' === $role && ! str_starts_with( $mime, 'video/' ) ) || ( 'video' !== $role && ! str_starts_with( $mime, 'image/' ) ) ) {
+				return new \WP_Error( 'booking_marketing_asset_kind_invalid', __( 'A marketing attachment does not match its deterministic Socials role.', 'extrachill-events' ), array( 'status' => 409 ) );
+			}
+			$refs[] = array(
+				'attachment_id' => (int) $attachment_id,
+				'role'          => $role,
+			);
+		}
+		return $refs;
 	}
 
 	/** Persist one bounded trigger failure for automatic recovery visibility. */

@@ -16,7 +16,8 @@ class VenueBookingConfig {
 
 	public const META_KEY                    = '_extrachill_booking_config';
 	public const HISTORY_META_KEY            = '_extrachill_booking_config_history';
-	public const VERSION                     = 2;
+	public const VERSION                     = 3;
+	public const PREVIOUS_VERSION            = 2;
 	public const LEGACY_VERSION              = 1;
 	public const CORRESPONDENCE_VERSION      = 1;
 	public const TEMPLATE_VERSION            = 1;
@@ -197,8 +198,14 @@ class VenueBookingConfig {
 	/** Normalize and validate the complete versioned contract. */
 	public function normalize( array $config ) {
 		$version = $config['version'] ?? self::LEGACY_VERSION;
-		if ( ! is_int( $version ) || ! in_array( $version, array( self::LEGACY_VERSION, self::VERSION ), true ) ) {
+		if ( ! is_int( $version ) || ! in_array( $version, array( self::LEGACY_VERSION, self::PREVIOUS_VERSION, self::VERSION ), true ) ) {
 			return new \WP_Error( 'booking_config_version_unsupported', __( 'The venue booking configuration version is unsupported.', 'extrachill-events' ), array( 'version' => $version ) );
+		}
+		if ( self::VERSION !== $version && array_key_exists( 'marketing_triggers', $config ) ) {
+			return new \WP_Error( 'booking_config_version_field_invalid', __( 'Marketing triggers require venue booking configuration version 3.', 'extrachill-events' ), array( 'version' => $version ) );
+		}
+		if ( self::VERSION === $version && ! array_key_exists( 'marketing_triggers', $config ) ) {
+			return new \WP_Error( 'booking_config_version_field_invalid', __( 'Venue booking configuration version 3 requires marketing triggers.', 'extrachill-events' ), array( 'version' => $version ) );
 		}
 		$intake_version         = $config['intake']['version'] ?? 1;
 		$deal_version           = $config['default_deal']['version'] ?? 1;
@@ -241,7 +248,7 @@ class VenueBookingConfig {
 		if ( is_wp_error( $channels ) ) {
 			return $channels;
 		}
-		$triggers = $this->normalize_marketing_triggers( $config['marketing_triggers'] ?? array(), $channels );
+		$triggers = $this->normalize_marketing_triggers( self::VERSION === $version ? $config['marketing_triggers'] : array(), $channels );
 		if ( is_wp_error( $triggers ) ) {
 			return $triggers;
 		}
@@ -547,6 +554,16 @@ class VenueBookingConfig {
 					$assets     = $raw['asset_refs'];
 					if ( empty( $platforms ) || count( $platforms ) > 6 || array_diff( $platforms, $allowed ) || ! in_array( $media_kind, array( 'image', 'carousel', 'reel', 'story' ), true ) || sanitize_textarea_field( $caption ) !== $caption || mb_strlen( $caption ) > 2200 || count( $assets ) > 11 || count( $assets ) !== count( array_unique( $assets ) ) ) {
 						return new \WP_Error( 'invalid_booking_marketing_social', __( 'The delegated social policy is invalid.', 'extrachill-events' ) );
+					}
+					$asset_count = count( $assets );
+					if ( ( 'image' === $media_kind && 1 !== $asset_count ) || ( 'carousel' === $media_kind && ( $asset_count < 2 || $asset_count > 10 ) ) || ( 'reel' === $media_kind && ( $asset_count < 1 || $asset_count > 2 ) ) || ( 'story' === $media_kind && 1 !== $asset_count ) ) {
+						return new \WP_Error( 'invalid_booking_marketing_assets', __( 'Marketing assets do not match the selected media kind.', 'extrachill-events' ) );
+					}
+					if ( in_array( $media_kind, array( 'reel', 'story' ), true ) && array_diff( $platforms, array( 'instagram' ) ) ) {
+						return new \WP_Error( 'invalid_booking_marketing_social', __( 'The selected channels do not support this media kind.', 'extrachill-events' ) );
+					}
+					if ( 'carousel' === $media_kind && ( array_diff( $platforms, array( 'instagram', 'twitter' ) ) || ( in_array( 'twitter', $platforms, true ) && $asset_count > 4 ) ) ) {
+						return new \WP_Error( 'invalid_booking_marketing_social', __( 'The selected channels do not support this carousel.', 'extrachill-events' ) );
 					}
 					foreach ( $assets as $asset_ref ) {
 						if ( ! is_int( $asset_ref ) || $asset_ref < 1 ) {

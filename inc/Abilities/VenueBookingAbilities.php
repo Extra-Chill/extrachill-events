@@ -8,6 +8,8 @@
 namespace ExtraChillEvents\Abilities;
 
 use ExtraChillEvents\Core\BookingLifecycle;
+use ExtraChillEvents\Core\BookingInquiryAdmissionService;
+use ExtraChillEvents\Core\BookingAttachmentPolicy;
 use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\VenueAuthorization;
@@ -37,6 +39,8 @@ class VenueBookingAbilities {
 	 * @var BookingLifecycle
 	 */
 	private $lifecycle;
+	/** @var BookingInquiryAdmissionService */
+	private $inquiry_admission;
 	/**
 	 * Exact venue authorization policy.
 	 *
@@ -49,16 +53,18 @@ class VenueBookingAbilities {
 	/**
 	 * Build and hook the booking ability surface.
 	 *
-	 * @param BookingRepository|null     $bookings      Booking reads.
-	 * @param BookingLifecycle|null      $lifecycle     Booking mutations.
-	 * @param VenueAuthorization|null    $authorization Venue authorization.
-	 * @param BookingHoldRepository|null $holds     Hold reconciliation.
+	 * @param BookingRepository|null              $bookings      Booking reads.
+	 * @param BookingLifecycle|null               $lifecycle     Booking mutations.
+	 * @param VenueAuthorization|null             $authorization Venue authorization.
+	 * @param BookingHoldRepository|null          $holds             Hold reconciliation.
+	 * @param BookingInquiryAdmissionService|null $inquiry_admission Inquiry admission.
 	 */
-	public function __construct( ?BookingRepository $bookings = null, ?BookingLifecycle $lifecycle = null, ?VenueAuthorization $authorization = null, ?BookingHoldRepository $holds = null ) {
-		$this->bookings      = $bookings ? $bookings : new BookingRepository();
-		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
-		$this->holds         = $holds ? $holds : new BookingHoldRepository( $this->bookings, null, $this->authorization );
-		$this->lifecycle     = $lifecycle ? $lifecycle : new BookingLifecycle( $this->bookings, null, $this->authorization, null, $this->holds );
+	public function __construct( ?BookingRepository $bookings = null, ?BookingLifecycle $lifecycle = null, ?VenueAuthorization $authorization = null, ?BookingHoldRepository $holds = null, ?BookingInquiryAdmissionService $inquiry_admission = null ) {
+		$this->bookings          = $bookings ? $bookings : new BookingRepository();
+		$this->authorization     = $authorization ? $authorization : new VenueAuthorization();
+		$this->holds             = $holds ? $holds : new BookingHoldRepository( $this->bookings, null, $this->authorization );
+		$this->lifecycle         = $lifecycle ? $lifecycle : new BookingLifecycle( $this->bookings, null, $this->authorization, null, $this->holds );
+		$this->inquiry_admission = $inquiry_admission ? $inquiry_admission : new BookingInquiryAdmissionService( $this->lifecycle );
 		if ( ! self::$registered ) {
 			add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
 			self::$registered = true;
@@ -278,8 +284,7 @@ class VenueBookingAbilities {
 	 */
 	public function create_inquiry( array $input ) {
 		$user_id = get_current_user_id();
-		$result  = $this->lifecycle->create_inquiry( $input, $user_id > 0 ? $user_id : null );
-		return is_array( $result ) ? $this->present_receipt( $result ) : $result;
+		return $this->inquiry_admission->admit( $input, $user_id > 0 ? $user_id : null );
 	}
 
 	/**
@@ -331,6 +336,19 @@ class VenueBookingAbilities {
 	 */
 	public function transition_booking( array $input ) {
 		$before = $this->bookings->get( (int) $input['booking_id'] );
+		if ( is_array( $before ) && null !== $before['event_id'] && 'cancelled' === (string) $input['to_status'] ) {
+			$result = ( new \ExtraChillEvents\Core\BookingEventSyncService( $this->bookings, null, $this->authorization ) )->reconcile( (int) $input['booking_id'], (int) $input['expected_version'], get_current_user_id(), array( 'cancelled' => true ) );
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+			$suppressed = ( new \ExtraChillEvents\Core\BookingCommunicationService() )->suppress_pending_reminders( (int) $input['booking_id'], 'booking_status_changed' );
+			if ( is_wp_error( $suppressed ) ) {
+				$suppressed->add_data( array_merge( (array) $suppressed->get_error_data(), array( 'booking_committed' => true ) ) );
+				return $suppressed;
+			}
+			$current = $this->bookings->get( (int) $input['booking_id'] );
+			return is_array( $current ) ? $this->present( $current ) : $current;
+		}
 		$result = $this->lifecycle->transition( (int) $input['booking_id'], (string) $input['to_status'], (int) $input['expected_version'], get_current_user_id(), $input['note'] ?? null );
 		if ( is_array( $before ) && is_array( $result ) && $before['status'] !== $result['status'] ) {
 			$suppressed = ( new \ExtraChillEvents\Core\BookingCommunicationService() )->suppress_pending_reminders( (int) $input['booking_id'], 'booking_status_changed' );
@@ -423,6 +441,37 @@ class VenueBookingAbilities {
 				'intake'              => array(
 					'type'                 => 'object',
 					'additionalProperties' => true,
+				),
+				'attachments'         => array(
+					'type'     => 'array',
+					'maxItems' => BookingInquiryAdmissionService::MAX_FILES,
+					'items'    => array(
+						'type'                 => 'object',
+						'properties'           => array(
+							'name'     => array(
+								'type'      => 'string',
+								'minLength' => 1,
+								'maxLength' => 255,
+							),
+							'tmp_name' => array(
+								'type'      => 'string',
+								'minLength' => 1,
+								'maxLength' => 4096,
+							),
+							'error'    => array( 'type' => 'integer' ),
+							'size'     => array(
+								'type'    => 'integer',
+								'minimum' => 1,
+								'maximum' => BookingAttachmentPolicy::MAX_BYTES,
+							),
+							'purpose'  => array(
+								'type' => 'string',
+								'enum' => BookingAttachmentPolicy::PURPOSES,
+							),
+						),
+						'required'             => array( 'name', 'tmp_name', 'error', 'size', 'purpose' ),
+						'additionalProperties' => false,
+					),
 				),
 			),
 			'required'             => array( 'idempotency_key', 'venue_term_id', 'intake' ),

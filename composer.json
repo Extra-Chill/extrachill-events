@@ -16,7 +16,8 @@
     "require-dev": {
         "squizlabs/php_codesniffer": "^3.7",
         "wp-coding-standards/wpcs": "^3.0",
-        "phpunit/phpunit": "^9.0"
+        "phpunit/phpunit": "^9.0",
+        "yoast/phpunit-polyfills": "^1.1"
     },
     "scripts": {
         "lint:php": "phpcs --standard=WordPress --extensions=php .",
@@ -24,6 +25,9 @@
         "test": "phpunit"
     },
     "config": {
+        "platform": {
+            "php": "8.3.6"
+        },
         "allow-plugins": {
             "dealerdirect/phpcodesniffer-composer-installer": true
         }

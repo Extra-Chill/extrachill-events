@@ -85,6 +85,35 @@ class VenueBookingMarketingAbilities {
 				),
 			)
 		);
+
+		foreach ( array( 'get', 'retry', 'cancel' ) as $verb ) {
+			wp_register_ability(
+				'extrachill/' . $verb . '-booking-marketing-operation',
+				array(
+					/* translators: %s: delegated operation action, such as Get, Retry, or Cancel. */
+					'label'               => sprintf( __( '%s Booking Marketing Operation', 'extrachill-events' ), ucfirst( $verb ) ),
+					'description'         => __( 'Act on one venue-authorized delegated marketing operation.', 'extrachill-events' ),
+					'category'            => 'extrachill-events',
+					'input_schema'        => $this->operation_schema(),
+					'output_schema'       => array(
+						'type'                 => 'object',
+						'additionalProperties' => true,
+					),
+					'execute_callback'    => function ( array $input ) use ( $verb ) {
+						return $this->marketing->manage( $verb, absint( $input['booking_id'] ?? 0 ), (string) ( $input['operation_ref'] ?? '' ), get_current_user_id() );
+					},
+					'permission_callback' => array( $this, 'can_access' ),
+					'meta'                => array(
+						'show_in_rest' => true,
+						'annotations'  => array(
+							'readonly'    => 'get' === $verb,
+							'idempotent'  => true,
+							'destructive' => 'get' !== $verb,
+						),
+					),
+				)
+			);
+		}
 	}
 
 	/**
@@ -143,5 +172,16 @@ class VenueBookingMarketingAbilities {
 			'required'             => array( 'booking_id' ),
 			'additionalProperties' => false,
 		);
+	}
+
+	/** Return the exact opaque operation receipt input contract. */
+	private function operation_schema(): array {
+		$schema                                = $this->booking_schema();
+		$schema['properties']['operation_ref'] = array(
+			'type'    => 'string',
+			'pattern' => '^dop_[a-f0-9]{64}$',
+		);
+		$schema['required'][]                  = 'operation_ref';
+		return $schema;
 	}
 }

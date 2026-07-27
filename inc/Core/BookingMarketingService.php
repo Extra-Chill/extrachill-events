@@ -7,55 +7,28 @@
 
 namespace ExtraChillEvents\Core;
 
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
+defined( 'ABSPATH' ) || exit;
 
-/** Connects canonical booking facts to owner-registered Data Machine tasks. */
+/** Delegates frozen booking marketing requests to their owning plugins. */
 class BookingMarketingService {
+
+	public const SOCIAL_ACTION     = 'datamachine-socials/cross-post';
+	public const NEWSLETTER_ACTION = 'extrachill-newsletter/canonical-post-campaign';
 
 	private const TRIGGER      = 'event_converted';
 	private const PENDING_KIND = 'extrachill_run_booking_marketing';
 
-	/**
-	 * Booking persistence.
-	 *
-	 * @var BookingRepository
-	 */
+	/** @var BookingRepository */
 	private $bookings;
-	/**
-	 * Append-only orchestration receipts.
-	 *
-	 * @var BookingActivityRepository
-	 */
+	/** @var BookingActivityRepository */
 	private $activity;
-	/**
-	 * Venue policy.
-	 *
-	 * @var VenueBookingConfig
-	 */
+	/** @var VenueBookingConfig */
 	private $config;
-	/**
-	 * Venue authority.
-	 *
-	 * @var VenueAuthorization
-	 */
+	/** @var VenueAuthorization */
 	private $authorization;
-	/**
-	 * Whether lifecycle hooks were registered.
-	 *
-	 * @var bool
-	 */
+	/** @var bool */
 	private static bool $registered = false;
 
-	/**
-	 * Build the orchestration service.
-	 *
-	 * @param BookingRepository|null         $bookings      Booking persistence.
-	 * @param BookingActivityRepository|null $activity      Activity persistence.
-	 * @param VenueBookingConfig|null        $config        Venue configuration.
-	 * @param VenueAuthorization|null        $authorization Venue authorization.
-	 */
 	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueBookingConfig $config = null, ?VenueAuthorization $authorization = null ) {
 		$this->bookings      = $bookings ? $bookings : new BookingRepository();
 		$this->activity      = $activity ? $activity : new BookingActivityRepository();
@@ -63,23 +36,19 @@ class BookingMarketingService {
 		$this->config        = $config ? $config : new VenueBookingConfig( $this->authorization );
 	}
 
-	/** Register lifecycle observers once. */
+	/** Register conversion and owner-authorization hooks once. */
 	public static function register(): void {
 		if ( self::$registered ) {
 			return;
 		}
 		add_action( 'extrachill_events_booking_event_converted', array( self::class, 'on_event_converted' ), 10, 2 );
-		add_action( 'datamachine_job_complete', array( self::class, 'on_job_complete' ), 10, 2 );
 		add_action( 'datamachine_pending_action_resolved', array( self::class, 'on_pending_action_resolved' ), 10, 3 );
+		add_filter( 'datamachine_socials_delegated_cross_post_authorized', array( self::class, 'authorize_social_operation' ), 10, 2 );
+		add_filter( 'extrachill_newsletter_authorize_delegated_campaign', array( self::class, 'authorize_newsletter_operation' ), 10, 3 );
 		self::$registered = true;
 	}
 
-	/**
-	 * Trigger recoverable post-conversion work without rolling back the event.
-	 *
-	 * @param array $conversion Canonical conversion result.
-	 * @param int   $actor_id   Authorized conversion actor.
-	 */
+	/** Trigger recoverable post-conversion work without rolling back the event. */
 	public static function on_event_converted( array $conversion, int $actor_id ): void {
 		$result = ( new self() )->trigger( (int) ( $conversion['booking_id'] ?? 0 ), $actor_id );
 		if ( is_wp_error( $result ) ) {
@@ -95,34 +64,28 @@ class BookingMarketingService {
 		}
 	}
 
-	/**
-	 * Trigger all configured channels independently.
-	 *
-	 * @param int $booking_id Booking identifier.
-	 * @param int $actor_id   Acting user identifier.
-	 * @return array|\WP_Error Trigger results.
-	 */
+	/** Trigger configured channels independently. */
 	public function trigger( int $booking_id, int $actor_id ) {
 		$context = $this->context( $booking_id, $actor_id );
 		if ( is_wp_error( $context ) ) {
 			return $context;
 		}
-		if ( empty( $context['config']['enabled'] ) ) {
-			return array(
-				'booking_id' => $booking_id,
-				'event_id'   => $context['booking']['event_id'],
-				'channels'   => array(),
-			);
-		}
 		$results = array();
-		foreach ( $context['config']['marketing_triggers'] as $trigger ) {
-			if ( self::TRIGGER !== $trigger['event'] ) {
-				continue;
-			}
-			foreach ( $trigger['channels'] as $channel ) {
-				$results[ $channel['key'] ] = 'required' === $channel['approval']
-					? $this->stage( $context, $trigger, $channel, $actor_id )
-					: $this->schedule( $context, $trigger, $channel, $actor_id, null );
+		if ( ! empty( $context['config']['enabled'] ) ) {
+			foreach ( $context['config']['marketing_triggers'] as $trigger ) {
+				if ( self::TRIGGER !== $trigger['event'] ) {
+					continue;
+				}
+				foreach ( $trigger['channels'] as $channel ) {
+					$operation = $this->operation( $context, $trigger, $channel );
+					if ( is_wp_error( $operation ) ) {
+						$results[ $channel['key'] ] = $operation;
+						continue;
+					}
+					$results[ $channel['key'] ] = 'required' === $channel['approval']
+						? $this->stage( $context, $operation, $actor_id )
+						: $this->submit( $context, $operation, $actor_id, null );
+				}
 			}
 		}
 		return array(
@@ -132,41 +95,61 @@ class BookingMarketingService {
 		);
 	}
 
-	/**
-	 * Execute one freshly authorized channel after approval.
-	 *
-	 * @param array $input    Approved replay input.
-	 * @param int   $actor_id Resolving user identifier.
-	 * @return array|\WP_Error Schedule receipt.
-	 */
+	/** Apply an accepted approval only when every frozen binding still matches. */
 	public function apply( array $input, int $actor_id ) {
 		$context = $this->context( absint( $input['booking_id'] ?? 0 ), $actor_id );
 		if ( is_wp_error( $context ) ) {
 			return $context;
 		}
-		$resolved = $this->configured_channel( $context['config'], sanitize_key( (string) ( $input['trigger_key'] ?? '' ) ), sanitize_key( (string) ( $input['channel_key'] ?? '' ) ) );
+		$resolved = $this->configured_channel( $context['config'], (string) ( $input['trigger_key'] ?? '' ), (string) ( $input['channel_key'] ?? '' ) );
 		if ( is_wp_error( $resolved ) ) {
 			return $resolved;
 		}
-		return $this->schedule( $context, $resolved['trigger'], $resolved['channel'], $actor_id, sanitize_text_field( (string) ( $input['approval_id'] ?? '' ) ) );
+		$operation = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
+		if ( is_wp_error( $operation ) ) {
+			return $operation;
+		}
+		if ( ! is_string( $input['binding_hash'] ?? null ) || ! hash_equals( $operation['binding_hash'], $input['binding_hash'] ) ) {
+			return $this->stale_error();
+		}
+		return $this->submit( $context, $operation, $actor_id, sanitize_text_field( (string) ( $input['approval_id'] ?? '' ) ) );
 	}
 
-	/**
-	 * Stage one deterministic pending action or return its existing state.
-	 *
-	 * @param array $context  Authoritative booking context.
-	 * @param array $trigger  Normalized trigger configuration.
-	 * @param array $channel  Normalized channel configuration.
-	 * @param int   $actor_id Acting user identifier.
-	 * @return array|\WP_Error Pending action receipt.
-	 */
-	private function stage( array $context, array $trigger, array $channel, int $actor_id ) {
-		$base      = $this->base_key( $context['booking'], $trigger['key'], $channel['key'] );
-		$scheduled = $this->activity->find_by_idempotency( $context['booking']['id'], $base . ':scheduled' );
-		if ( is_wp_error( $scheduled ) || is_array( $scheduled ) ) {
-			return is_wp_error( $scheduled ) ? $scheduled : $this->activity_result( 'scheduled', $scheduled );
+	/** Reconcile, retry, or cancel one previously submitted bounded operation. */
+	public function manage( string $verb, int $booking_id, string $operation_ref, int $actor_id ) {
+		if ( ! in_array( $verb, array( 'get', 'retry', 'cancel' ), true ) || ! preg_match( '/^dop_[a-f0-9]{64}$/', $operation_ref ) ) {
+			return new \WP_Error( 'booking_marketing_operation_invalid', __( 'The marketing operation reference is invalid.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
-		if ( ! class_exists( '\DataMachine\Engine\AI\Actions\PendingActionHelper' ) || ! class_exists( '\DataMachine\Engine\AI\Actions\PendingActionStore' ) ) {
+		$context = $this->context( $booking_id, $actor_id );
+		if ( is_wp_error( $context ) ) {
+			return $context;
+		}
+		$receipt = $this->activity->find_by_external_id( $booking_id, 'marketing_operation_submitted', $operation_ref );
+		if ( ! is_array( $receipt ) ) {
+			return is_wp_error( $receipt ) ? $receipt : new \WP_Error( 'booking_marketing_operation_not_found', __( 'The marketing operation was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
+		}
+		$action = (string) ( $receipt['payload']['data']['action'] ?? '' );
+		$result = $this->execute_ability(
+			'datamachine/' . $verb . '-delegated-operation',
+			array(
+				'action'        => $action,
+				'operation_ref' => $operation_ref,
+			)
+		);
+		return $this->record_response( $context['booking'], $receipt['channel'], $action, $result, $actor_id, $receipt['payload']['data']['approval_id'] ?? null, (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) );
+	}
+
+	/** Stage one deterministic approval containing hashes and references only. */
+	private function stage( array $context, array $operation, int $actor_id ) {
+		$existing = $this->frozen_activity( $context['booking']['id'], $operation['operation_id'] );
+		if ( is_array( $existing ) ) {
+			$prior = (string) ( $existing['payload']['data']['binding_hash'] ?? '' );
+			if ( ! hash_equals( $prior, $operation['binding_hash'] ) ) {
+				return new \WP_Error( 'booking_marketing_operation_conflict', __( 'This marketing operation was already approved with different content or policy.', 'extrachill-events' ), array( 'status' => 409 ) );
+			}
+		}
+		$store = apply_filters( 'wp_agent_pending_action_store', null, array( 'kind' => self::PENDING_KIND ) );
+		if ( ! is_object( $store ) || ! is_callable( array( $store, 'get' ) ) || ! is_callable( array( $store, 'store' ) ) || ! class_exists( '\AgentsAPI\AI\Approvals\WP_Agent_Pending_Action' ) ) {
 			return new \WP_Error(
 				'booking_marketing_approval_unavailable',
 				__( 'The approval substrate is unavailable.', 'extrachill-events' ),
@@ -176,205 +159,320 @@ class BookingMarketingService {
 				)
 			);
 		}
-
-		$action_id = $this->action_id( $base );
-		$stored    = \DataMachine\Engine\AI\Actions\PendingActionStore::get( $action_id, true );
-		if ( is_array( $stored ) && in_array( (string) ( $stored['status'] ?? '' ), array( 'expired', 'deleted' ), true ) ) {
-			$stored = null;
-		}
-		if ( ! is_array( $stored ) ) {
-			$staged = \DataMachine\Engine\AI\Actions\PendingActionHelper::stage(
-				array(
-					'action_id'     => $action_id,
-					'kind'          => self::PENDING_KIND,
-					'summary'       => sprintf( 'Schedule %s marketing for event #%d.', $channel['key'], $context['booking']['event_id'] ),
-					'apply_input'   => array(
-						'booking_id'  => $context['booking']['id'],
-						'trigger_key' => $trigger['key'],
-						'channel_key' => $channel['key'],
-						'approval_id' => $action_id,
-					),
-					'preview_data'  => array(
-						'booking_id'   => $context['booking']['id'],
-						'event_id'     => $context['booking']['event_id'],
-						'channel'      => $channel['key'],
-						'scheduled_at' => $this->scheduled_at( $context, $channel ),
-					),
-					'user_id'       => $actor_id,
-					'authorization' => array(
-						'operation' => 'run_booking_marketing',
-						'target'    => array(
-							'booking_id'    => $context['booking']['id'],
-							'venue_term_id' => $context['booking']['venue_term_id'],
+		$action_id = $this->approval_id( $operation['operation_id'] );
+		$stored    = $store->get( $action_id, true );
+		if ( ! is_object( $stored ) ) {
+			try {
+				$pending_action = \AgentsAPI\AI\Approvals\WP_Agent_Pending_Action::from_array(
+					array(
+						'action_id'   => $action_id,
+						'kind'        => self::PENDING_KIND,
+						'summary'     => sprintf( 'Approve %s marketing for event #%d.', $operation['channel_key'], $context['booking']['event_id'] ),
+						'preview'     => $this->binding_receipt( $operation ),
+						'apply_input' => array(
+							'booking_id'   => $context['booking']['id'],
+							'trigger_key'  => $operation['trigger_key'],
+							'channel_key'  => $operation['channel_key'],
+							'binding_hash' => $operation['binding_hash'],
+							'approval_id'  => $action_id,
 						),
-					),
-				)
-			);
-			if ( empty( $staged['staged'] ) ) {
+						'creator'     => 'user:' . $actor_id,
+						'agent'       => null,
+						'workspace'   => null,
+						'status'      => 'pending',
+						'created_at'  => gmdate( 'c' ),
+						'expires_at'  => gmdate( 'c', time() + WEEK_IN_SECONDS ),
+						'metadata'    => array(
+							'datamachine' => array(
+								'authorization' => array(
+									'operation' => 'run_booking_marketing',
+									'target'    => array(
+										'booking_id'    => $context['booking']['id'],
+										'venue_term_id' => $context['booking']['venue_term_id'],
+									),
+								),
+							),
+						),
+					)
+				);
+			} catch ( \InvalidArgumentException $exception ) {
+				unset( $exception );
 				return new \WP_Error(
 					'booking_marketing_approval_stage_failed',
 					__( 'Marketing approval could not be staged.', 'extrachill-events' ),
 					array(
 						'status'    => 503,
 						'retryable' => true,
-						'upstream'  => $staged,
 					)
 				);
 			}
-			$stored = array( 'status' => 'pending' );
+			if ( ! $store->store( $pending_action ) ) {
+				return new \WP_Error(
+					'booking_marketing_approval_stage_failed',
+					__( 'Marketing approval could not be staged.', 'extrachill-events' ),
+					array(
+						'status'    => 503,
+						'retryable' => true,
+					)
+				);
+			}
+			$stored = $pending_action;
 		}
-		$status = (string) ( $stored['status'] ?? 'pending' );
-		if ( in_array( $status, array( 'accepted', 'failed' ), true ) ) {
-			return $this->schedule( $context, $trigger, $channel, $actor_id, $action_id );
+		$activity = $this->freeze( $context['booking'], $operation, $actor_id, $action_id, 'marketing_operation_approval_pending' );
+		if ( is_wp_error( $activity ) ) {
+			return $activity;
 		}
-
-		$activity = $this->activity->append(
-			array(
-				'booking_id'      => $context['booking']['id'],
-				'kind'            => 'marketing_channel_approval_pending',
-				'actor_type'      => 'user',
-				'actor_id'        => $actor_id,
-				'channel'         => $channel['key'],
-				'external_id'     => $action_id,
-				'idempotency_key' => $base . ':approval',
-				'payload'         => array(
-					'trigger'     => $trigger['key'],
-					'channel'     => $channel['key'],
-					'approval_id' => $action_id,
-				),
-			)
-		);
-		return is_wp_error( $activity ) ? $activity : array(
+		$status = is_callable( array( $stored, 'get_status' ) ) ? (string) $stored->get_status() : 'pending';
+		if ( 'accepted' === $status ) {
+			return $this->submit( $context, $operation, $actor_id, $action_id );
+		}
+		return array(
 			'status'      => $status,
 			'approval_id' => $action_id,
 			'activity_id' => $activity['id'],
 		);
 	}
 
-	/**
-	 * Persist a stable request and enqueue the owner task.
-	 *
-	 * @param array       $context     Authoritative booking context.
-	 * @param array       $trigger     Normalized trigger configuration.
-	 * @param array       $channel     Normalized channel configuration.
-	 * @param int         $actor_id    Acting user identifier.
-	 * @param string|null $approval_id Approval reference, when required.
-	 * @return array|\WP_Error Schedule receipt.
-	 */
-	private function schedule( array $context, array $trigger, array $channel, int $actor_id, ?string $approval_id ) {
-		$booking   = $context['booking'];
-		$base      = $this->base_key( $booking, $trigger['key'], $channel['key'] );
-		$scheduled = $this->activity->find_by_idempotency( $booking['id'], $base . ':scheduled' );
-		if ( is_wp_error( $scheduled ) || is_array( $scheduled ) ) {
-			return is_wp_error( $scheduled ) ? $scheduled : $this->activity_result( 'scheduled', $scheduled );
+	/** Freeze the request, then call only Data Machine's public submit ability. */
+	private function submit( array $context, array $operation, int $actor_id, ?string $approval_id ) {
+		$frozen = $this->freeze( $context['booking'], $operation, $actor_id, $approval_id, 'marketing_operation_frozen' );
+		if ( is_wp_error( $frozen ) ) {
+			return $frozen;
 		}
-		$request = $this->activity->append(
+		$prior = (string) ( $frozen['payload']['data']['binding_hash'] ?? '' );
+		if ( ! hash_equals( $prior, $operation['binding_hash'] ) ) {
+			return new \WP_Error( 'booking_marketing_operation_conflict', __( 'This marketing operation is frozen with different content or policy.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		$result = $this->execute_ability(
+			'datamachine/submit-delegated-operation',
 			array(
-				'booking_id'      => $booking['id'],
-				'kind'            => 'marketing_channel_requested',
-				'actor_type'      => 'user',
-				'actor_id'        => $actor_id,
-				'channel'         => $channel['key'],
-				'idempotency_key' => $base . ':requested',
-				'payload'         => array(
-					'trigger'      => $trigger['key'],
-					'channel'      => $channel,
-					'scheduled_at' => $this->scheduled_at( $context, $channel ),
-					'approval_id'  => $approval_id,
-				),
+				'action'       => $operation['action'],
+				'operation_id' => $operation['operation_id'],
+				'input'        => $operation['input'],
+				'timestamp'    => $operation['scheduled_at'],
 			)
 		);
-		if ( is_wp_error( $request ) ) {
-			return $request;
-		}
-		$request_data = $request['payload']['data'];
-		$asset        = $this->render_asset( $context, $request_data['channel']['image'], $base );
-		if ( is_wp_error( $asset ) ) {
-			return $this->record_schedule_failure( $booking, $channel, $base, $actor_id, $asset );
-		}
-		$workflow = $this->workflow( $request_data['channel']['task_type'], $this->task_params( $context, $request_data['channel']['params'], $asset ) );
-		if ( is_wp_error( $workflow ) ) {
-			return $this->record_schedule_failure( $booking, $channel, $base, $actor_id, $workflow );
-		}
-		$ability = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'datamachine/execute-workflow' ) : null;
-		if ( ! is_object( $ability ) || ! is_callable( array( $ability, 'execute' ) ) ) {
-			$error = new \WP_Error(
-				'booking_marketing_workflow_unavailable',
-				__( 'The workflow execution substrate is unavailable.', 'extrachill-events' ),
-				array(
-					'status'    => 503,
-					'retryable' => true,
-				)
-			);
-			return $this->record_schedule_failure( $booking, $channel, $base, $actor_id, $error );
-		}
-		$task_context = array(
-			'booking_marketing' => array(
-				'booking_id'  => $booking['id'],
-				'trigger_key' => $trigger['key'],
-				'channel_key' => $channel['key'],
-				'base_key'    => $base,
-			),
-		);
-		$result       = $ability->execute(
-			array(
-				'workflow'      => $workflow,
-				'timestamp'     => $request_data['scheduled_at'],
-				'operation_key' => $base,
-				'initial_data'  => array(
-					'task_type'    => $channel['task_type'],
-					'task_context' => $task_context,
-					'agent_id'     => $channel['agent_id'],
-					'job'          => array( 'agent_id' => $channel['agent_id'] ),
-					'job_source'   => 'booking_marketing',
-					'job_label'    => 'Booking marketing: ' . $channel['key'],
-				),
-			)
-		);
-		if ( is_wp_error( $result ) || empty( $result['success'] ) || empty( $result['job_id'] ) ) {
-			$error = is_wp_error( $result ) ? $result : new \WP_Error(
-				'booking_marketing_schedule_failed',
-				__( 'The owner workflow could not be scheduled.', 'extrachill-events' ),
-				array(
-					'status'    => 503,
-					'retryable' => true,
-					'upstream'  => $result,
-				)
-			);
-			return $this->record_schedule_failure( $booking, $channel, $base, $actor_id, $error );
-		}
-		$receipt = $this->activity->append(
-			array(
-				'booking_id'      => $booking['id'],
-				'kind'            => 'marketing_channel_scheduled',
-				'actor_type'      => 'user',
-				'actor_id'        => $actor_id,
-				'channel'         => $channel['key'],
-				'external_id'     => (string) $result['job_id'],
-				'idempotency_key' => $base . ':scheduled',
-				'payload'         => array(
-					'trigger'        => $trigger['key'],
-					'channel'        => $channel['key'],
-					'task_type'      => $channel['task_type'],
-					'job_id'         => (int) $result['job_id'],
-					'approval_id'    => $approval_id,
-					'asset'          => $asset,
-					'scheduled_at'   => $request_data['scheduled_at'],
-					'replayed'       => ! empty( $result['replayed'] ),
-					'delivery_state' => 'owner_authoritative',
-				),
-			)
-		);
-		return is_wp_error( $receipt ) ? $receipt : $this->activity_result( 'scheduled', $receipt );
+		return $this->record_response( $context['booking'], $operation['channel_key'], $operation['action'], $result, $actor_id, $approval_id, $operation['operation_id'] );
 	}
 
-	/**
-	 * Resolve and authorize canonical booking, event, and venue policy.
-	 *
-	 * @param int $booking_id Booking identifier.
-	 * @param int $actor_id   Acting user identifier.
-	 * @return array|\WP_Error Authorized context.
-	 */
+	/** Persist one immutable hash-only approval/execution binding. */
+	private function freeze( array $booking, array $operation, int $actor_id, ?string $approval_id, string $kind ) {
+		return $this->activity->append(
+			array(
+				'booking_id'      => $booking['id'],
+				'kind'            => $kind,
+				'actor_type'      => 'user',
+				'actor_id'        => $actor_id,
+				'channel'         => $operation['channel_key'],
+				'external_id'     => $approval_id,
+				'idempotency_key' => $operation['operation_id'] . ( 'marketing_operation_frozen' === $kind ? ':frozen' : ':approval' ),
+				'payload'         => array_merge( $this->binding_receipt( $operation ), array( 'approval_id' => $approval_id ) ),
+			)
+		);
+	}
+
+	/** Record only the opaque operation ref and owner-approved bounded projection. */
+	private function record_response( array $booking, string $channel, string $action, $result, int $actor_id, ?string $approval_id, string $operation_id ) {
+		if ( is_wp_error( $result ) ) {
+			$result = array(
+				'success'    => false,
+				'error_code' => $result->get_error_code(),
+			);
+		}
+		if ( ! is_array( $result ) || true !== ( $result['success'] ?? false ) || ! preg_match( '/^dop_[a-f0-9]{64}$/', (string) ( $result['operation_ref'] ?? '' ) ) ) {
+			$code = sanitize_key( (string) ( $result['error_code'] ?? 'booking_marketing_operation_failed' ) );
+			$this->activity->append(
+				array(
+					'booking_id'      => $booking['id'],
+					'kind'            => 'marketing_operation_failed',
+					'actor_type'      => 'user',
+					'actor_id'        => $actor_id,
+					'channel'         => $channel,
+					'idempotency_key' => 'marketing-failure:' . hash( 'sha256', $action . "\0" . $channel . "\0" . $code ),
+					'payload'         => array(
+						'action'     => $action,
+						'error_code' => $code,
+						'retryable'  => ! empty( $result['retryable'] ),
+					),
+				)
+			);
+			return new \WP_Error(
+				$code,
+				__( 'The delegated marketing operation failed.', 'extrachill-events' ),
+				array(
+					'status'    => 409,
+					'retryable' => ! empty( $result['retryable'] ),
+				)
+			);
+		}
+		$operation_ref = (string) $result['operation_ref'];
+		$status        = in_array( $result['status'] ?? '', array( 'submitted', 'executing', 'executed', 'no-op', 'failed', 'cancelled', 'retrying' ), true ) ? $result['status'] : 'failed';
+		$projection    = $this->sanitize_projection( $action, $result['projection'] ?? array() );
+		$receipt       = $this->activity->append(
+			array(
+				'booking_id'      => $booking['id'],
+				'kind'            => 'marketing_operation_submitted',
+				'actor_type'      => 'user',
+				'actor_id'        => $actor_id,
+				'channel'         => $channel,
+				'external_id'     => $operation_ref,
+				'idempotency_key' => 'marketing-operation:' . hash( 'sha256', $operation_ref . "\0" . $status . "\0" . wp_json_encode( $projection ) ),
+				'payload'         => array(
+					'action'        => $action,
+					'operation_id'  => $operation_id,
+					'operation_ref' => $operation_ref,
+					'status'        => $status,
+					'replayed'      => ! empty( $result['replayed'] ),
+					'approval_id'   => $approval_id,
+					'projection'    => $projection,
+				),
+			)
+		);
+		return is_wp_error( $receipt ) ? $receipt : array(
+			'status'        => $status,
+			'operation_ref' => $operation_ref,
+			'activity_id'   => $receipt['id'],
+			'projection'    => $projection,
+			'retryable'     => 'failed' === $status,
+		);
+	}
+
+	/** Build the exact owner input plus frozen policy/content/asset/version hashes. */
+	private function operation( array $context, array $trigger, array $channel ) {
+		$booking = $context['booking'];
+		$event   = $context['event'];
+		$url     = get_permalink( $event->ID );
+		if ( ! is_string( $url ) || '' === $url ) {
+			return new \WP_Error( 'booking_marketing_event_unavailable', __( 'The canonical event URL is unavailable.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		if ( self::SOCIAL_ACTION === $channel['action'] ) {
+			$caption = '' !== $channel['social']['caption'] ? $channel['social']['caption'] : $event->post_title;
+			$input   = array(
+				'post_id'      => (int) $event->ID,
+				'source_url'   => $url,
+				'caption'      => $caption,
+				'content_hash' => hash( 'sha256', $caption ),
+				'channels'     => $channel['social']['channels'],
+				'media_kind'   => $channel['social']['media_kind'],
+				'asset_refs'   => $channel['social']['asset_refs'],
+			);
+		} elseif ( self::NEWSLETTER_ACTION === $channel['action'] ) {
+			$input = array(
+				'source' => array(
+					'site_id' => get_current_blog_id(),
+					'post_id' => (int) $event->ID,
+				),
+				'policy' => $channel['newsletter']['policy'],
+			);
+		} else {
+			return new \WP_Error( 'booking_marketing_action_invalid', __( 'The marketing action is unsupported.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$operation_id  = 'booking-marketing:' . hash( 'sha256', $booking['public_id'] . "\0" . $booking['event_id'] . "\0" . $trigger['key'] . "\0" . $channel['key'] );
+		$policy_hash   = $this->hash_value(
+			array(
+				'config_revision' => $context['config']['revision'],
+				'trigger'         => $trigger['key'],
+				'channel'         => $channel,
+			)
+		);
+		$content_hash  = $this->hash_value(
+			array(
+				'title'       => (string) $event->post_title,
+				'content'     => (string) ( $event->post_content ?? '' ),
+				'excerpt'     => (string) ( $event->post_excerpt ?? '' ),
+				'url'         => $url,
+				'owner_input' => $input,
+			)
+		);
+		$assets_hash   = $this->hash_value( self::SOCIAL_ACTION === $channel['action'] ? $channel['social']['asset_refs'] : array() );
+		$event_version = $this->hash_value(
+			array(
+				'id'           => (int) $event->ID,
+				'status'       => (string) $event->post_status,
+				'modified_gmt' => (string) ( $event->post_modified_gmt ?? '' ),
+				'content_hash' => $content_hash,
+			)
+		);
+		$binding       = array(
+			'operation_id'    => $operation_id,
+			'action'          => $channel['action'],
+			'trigger_key'     => $trigger['key'],
+			'channel_key'     => $channel['key'],
+			'booking_version' => (int) $booking['version'],
+			'event_version'   => $event_version,
+			'policy_hash'     => $policy_hash,
+			'content_hash'    => $content_hash,
+			'assets_hash'     => $assets_hash,
+		);
+		return array_merge(
+			$binding,
+			array(
+				'binding_hash' => $this->hash_value( $binding ),
+				'input'        => $input,
+				'scheduled_at' => $this->scheduled_at( $booking, $channel ),
+			)
+		);
+	}
+
+	/** Authorize Socials from exact current Events authority and frozen binding. */
+	public static function authorize_social_operation( bool $allowed, array $context ) {
+		unset( $allowed );
+		return ( new self() )->authorize_owner( self::SOCIAL_ACTION, $context );
+	}
+
+	/** Authorize Newsletter from exact current Events authority and frozen binding. */
+	public static function authorize_newsletter_operation( $allowed, array $source, array $context ) {
+		unset( $allowed, $source );
+		return ( new self() )->authorize_owner( self::NEWSLETTER_ACTION, $context );
+	}
+
+	/** Rebuild the owner request and reject stale actor, booking, event, or policy. */
+	private function authorize_owner( string $action, array $owner_context ) {
+		if ( ( $owner_context['action'] ?? '' ) !== $action || ! is_array( $owner_context['input'] ?? null ) ) {
+			return new \WP_Error( 'booking_marketing_owner_forbidden' );
+		}
+		$event_id = self::SOCIAL_ACTION === $action ? (int) ( $owner_context['input']['post_id'] ?? 0 ) : (int) ( $owner_context['input']['source']['post_id'] ?? 0 );
+		$booking  = $this->bookings->get_by_event( $event_id );
+		$actor_id = is_int( $owner_context['actor']['user_id'] ?? null ) ? $owner_context['actor']['user_id'] : 0;
+		if ( ! is_array( $booking ) || $actor_id < 1 || true !== $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) ) {
+			return new \WP_Error( 'booking_marketing_owner_forbidden' );
+		}
+		$context = $this->context( $booking['id'], $actor_id );
+		if ( is_wp_error( $context ) ) {
+			return $context;
+		}
+		$frozen = null;
+		if ( is_string( $owner_context['operation_id'] ?? null ) && '' !== $owner_context['operation_id'] ) {
+			$frozen = $this->frozen_activity( $booking['id'], $owner_context['operation_id'] );
+		} elseif ( is_string( $owner_context['operation_ref'] ?? null ) ) {
+			$receipt = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $owner_context['operation_ref'] );
+			if ( is_array( $receipt ) ) {
+				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
+			}
+		}
+		if ( ! is_array( $frozen ) ) {
+			return new \WP_Error( 'booking_marketing_binding_missing' );
+		}
+		$data     = $frozen['payload']['data'];
+		$resolved = $this->configured_channel( $context['config'], (string) ( $data['trigger_key'] ?? '' ), (string) ( $data['channel_key'] ?? '' ) );
+		if ( is_wp_error( $resolved ) ) {
+			return $this->stale_error();
+		}
+		$current = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
+		if ( is_wp_error( $current ) ) {
+			return $this->stale_error();
+		}
+		$owner_input = $owner_context['input'];
+		if ( self::SOCIAL_ACTION === $action ) {
+			$owner_input = array_intersect_key( $owner_input, $current['input'] );
+		}
+		if ( $action !== $current['action'] || $current['input'] !== $owner_input || ! hash_equals( (string) ( $data['binding_hash'] ?? '' ), $current['binding_hash'] ) ) {
+			return $this->stale_error();
+		}
+		return true;
+	}
+
+	/** Resolve and authorize canonical booking, event, and venue policy. */
 	private function context( int $booking_id, int $actor_id ) {
 		$booking = $this->bookings->get( $booking_id );
 		if ( ! is_array( $booking ) ) {
@@ -397,14 +495,7 @@ class BookingMarketingService {
 		);
 	}
 
-	/**
-	 * Resolve one channel from current venue policy for fresh replay authorization.
-	 *
-	 * @param array  $config      Current normalized venue configuration.
-	 * @param string $trigger_key Trigger key.
-	 * @param string $channel_key Channel key.
-	 * @return array|\WP_Error Resolved configuration.
-	 */
+	/** Resolve one exact configured channel. */
 	private function configured_channel( array $config, string $trigger_key, string $channel_key ) {
 		foreach ( $config['marketing_triggers'] as $trigger ) {
 			if ( $trigger_key !== $trigger['key'] || self::TRIGGER !== $trigger['event'] ) {
@@ -422,259 +513,108 @@ class BookingMarketingService {
 		return new \WP_Error( 'booking_marketing_channel_unavailable', __( 'The configured marketing channel is no longer available.', 'extrachill-events' ), array( 'status' => 409 ) );
 	}
 
-	/**
-	 * Resolve the workflow declared by an owner-registered task.
-	 *
-	 * @param string $task_type Registered task type.
-	 * @param array  $params    Task parameters.
-	 * @return array|\WP_Error Workflow specification.
-	 */
-	private function workflow( string $task_type, array $params ) {
-		if ( ! class_exists( '\DataMachine\Engine\Tasks\TaskRegistry' ) || ! \DataMachine\Engine\Tasks\TaskRegistry::isRegistered( $task_type ) ) {
-			return new \WP_Error(
-				'booking_marketing_task_unavailable',
-				__( 'The configured marketing task is not registered.', 'extrachill-events' ),
-				array(
-					'status'    => 503,
-					'retryable' => true,
-					'task_type' => $task_type,
-				)
-			);
-		}
-		$class = \DataMachine\Engine\Tasks\TaskRegistry::getHandler( $task_type );
-		if ( ! is_string( $class ) || ! class_exists( $class ) ) {
-			return new \WP_Error(
-				'booking_marketing_task_unavailable',
-				__( 'The configured marketing task handler is unavailable.', 'extrachill-events' ),
-				array(
-					'status'    => 503,
-					'retryable' => true,
-				)
-			);
-		}
-		$handler  = new $class();
-		$workflow = is_callable( array( $handler, 'getWorkflow' ) ) ? $handler->getWorkflow( $params ) : null;
-		return is_array( $workflow ) && ! empty( $workflow['steps'] ) ? $workflow : new \WP_Error(
-			'booking_marketing_workflow_invalid',
-			__( 'The configured marketing task returned no workflow.', 'extrachill-events' ),
-			array(
-				'status'    => 503,
-				'retryable' => true,
-			)
-		);
-	}
-
-	/**
-	 * Render an optional stable public asset through a registered template.
-	 *
-	 * @param array      $context Authoritative booking context.
-	 * @param array|null $image   Image configuration.
-	 * @param string     $base    Idempotency base.
-	 * @return array|null|\WP_Error Asset reference.
-	 */
-	private function render_asset( array $context, ?array $image, string $base ) {
-		if ( null === $image ) {
-			return null;
-		}
-		$ability = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'datamachine/render-image-template' ) : null;
+	private function execute_ability( string $name, array $input ) {
+		$ability = function_exists( 'wp_get_ability' ) ? wp_get_ability( $name ) : null;
 		if ( ! is_object( $ability ) || ! is_callable( array( $ability, 'execute' ) ) ) {
-			return new \WP_Error(
-				'booking_marketing_image_unavailable',
-				__( 'The registered image-template substrate is unavailable.', 'extrachill-events' ),
-				array(
-					'status'    => 503,
-					'retryable' => true,
-				)
+			return array(
+				'success'    => false,
+				'error_code' => 'booking_marketing_operation_unavailable',
+				'retryable'  => true,
 			);
 		}
-		$venue = get_term( $context['booking']['venue_term_id'], 'venue' );
-		$input = array(
-			'template_id' => $image['template_id'],
-			'data'        => array(
-				'event_name' => $context['event']->post_title,
-				'date_label' => gmdate( 'M j, Y', strtotime( $context['booking']['performance_start_at'] . ' UTC' ) ),
-				'venue'      => $venue ? $venue->name : '',
-				'city'       => (string) get_term_meta( $context['booking']['venue_term_id'], '_venue_city', true ),
-			),
-			'format'      => $image['format'],
-			'output'      => 'cached_file',
-			'cache'       => array(
-				'bucket' => 'booking-marketing',
-				'key'    => substr( hash( 'sha256', $base . ':' . $image['template_id'] . ':' . $image['preset'] . ':' . $image['format'] ), 0, 40 ),
-			),
-		);
-		if ( '' !== $image['preset'] ) {
-			$input['preset'] = $image['preset'];
+		return $ability->execute( $input );
+	}
+
+	/** Keep only fields explicitly projected by the two owner contracts. */
+	private function sanitize_projection( string $action, $projection ): array {
+		$projection = is_array( $projection ) ? $projection : array();
+		if ( self::SOCIAL_ACTION === $action ) {
+			$result = array(
+				'classification' => in_array( $projection['classification'] ?? '', array( 'success', 'partial', 'failure', 'no_op', 'cancelled' ), true ) ? $projection['classification'] : null,
+				'effect_count'   => max( 0, (int) ( $projection['effect_count'] ?? 0 ) ),
+				'share_refs'     => array(),
+				'error_codes'    => array(),
+			);
+			foreach ( array_slice( is_array( $projection['share_refs'] ?? null ) ? $projection['share_refs'] : array(), 0, 20 ) as $ref ) {
+				if ( is_array( $ref ) && is_string( $ref['channel'] ?? null ) && is_string( $ref['platform_post_id'] ?? null ) ) {
+					$result['share_refs'][] = array(
+						'channel'          => sanitize_key( $ref['channel'] ),
+						'platform_post_id' => mb_substr( sanitize_text_field( $ref['platform_post_id'] ), 0, 191 ),
+					);
+				}
+			}
+			foreach ( array_slice( is_array( $projection['error_codes'] ?? null ) ? $projection['error_codes'] : array(), 0, 20 ) as $error ) {
+				if ( is_array( $error ) ) {
+					$result['error_codes'][] = array(
+						'channel' => sanitize_key( (string) ( $error['channel'] ?? '' ) ),
+						'code'    => sanitize_key( (string) ( $error['code'] ?? '' ) ),
+					);
+				}
+			}
+			return array_filter( $result, static fn( $value ) => null !== $value );
 		}
-		$result = $ability->execute( $input );
-		if ( is_wp_error( $result ) || empty( $result['success'] ) || empty( $result['cached_urls'][0] ) ) {
-			return is_wp_error( $result ) ? $result : new \WP_Error(
-				'booking_marketing_image_failed',
-				__( 'The registered image template produced no public asset.', 'extrachill-events' ),
+		if ( self::NEWSLETTER_ACTION === $action ) {
+			$record = is_array( $projection['record'] ?? null ) ? $projection['record'] : null;
+			return array_filter(
 				array(
-					'status'    => 503,
-					'retryable' => true,
-					'upstream'  => $result,
-				)
+					'classification' => in_array( $projection['classification'] ?? '', array( 'submitted', 'executing', 'retrying', 'executed', 'no-op', 'failed', 'cancelled' ), true ) ? $projection['classification'] : null,
+					'effect_count'   => isset( $projection['effect_count'] ) ? max( 0, (int) $projection['effect_count'] ) : null,
+					'record'         => $record ? array(
+						'newsletter_post_id' => max( 0, (int) ( $record['newsletter_post_id'] ?? 0 ) ),
+						'campaign_id'        => mb_substr( sanitize_text_field( (string) ( $record['campaign_id'] ?? '' ) ), 0, 191 ),
+					) : null,
+					'error_code'     => isset( $projection['error_code'] ) ? sanitize_key( (string) $projection['error_code'] ) : null,
+				),
+				static fn( $value ) => null !== $value
 			);
 		}
-		return array(
-			'template_id' => $image['template_id'],
-			'url'         => $result['cached_urls'][0],
-		);
+		return array();
 	}
 
-	/**
-	 * Merge venue parameters with authoritative event references.
-	 *
-	 * @param array      $context    Authoritative booking context.
-	 * @param array      $configured Venue-configured task parameters.
-	 * @param array|null $asset      Generated asset reference.
-	 * @return array Owner task parameters.
-	 */
-	private function task_params( array $context, array $configured, ?array $asset ): array {
-		$params               = $configured;
-		$params['booking_id'] = $context['booking']['id'];
-		$params['event_id']   = $context['booking']['event_id'];
-		$params['event_url']  = get_permalink( $context['booking']['event_id'] );
-		$params['post_id']    = $context['booking']['event_id'];
-		if ( empty( $params['caption'] ) ) {
-			$params['caption'] = $context['event']->post_title . "\n\n" . $params['event_url'];
-		}
-		if ( null !== $asset ) {
-			$params['images'] = array( array( 'url' => $asset['url'] ) );
-		}
-		return $params;
+	private function binding_receipt( array $operation ): array {
+		return array_intersect_key( $operation, array_flip( array( 'operation_id', 'action', 'trigger_key', 'channel_key', 'booking_version', 'event_version', 'policy_hash', 'content_hash', 'assets_hash', 'binding_hash', 'scheduled_at' ) ) );
 	}
 
-	/**
-	 * Derive a stable schedule from the canonical conversion time.
-	 *
-	 * @param array $context Authoritative booking context.
-	 * @param array $channel Normalized channel configuration.
-	 * @return int Unix timestamp.
-	 */
-	private function scheduled_at( array $context, array $channel ): int {
-		$state = $this->activity->event_conversion_state( $context['booking']['id'], $context['booking']['public_id'] );
-		$time  = is_array( $state ) && ! empty( $state['completed']['occurred_at'] ) ? strtotime( $state['completed']['occurred_at'] . ' UTC' ) : time();
+	private function frozen_activity( int $booking_id, string $operation_id ) {
+		$frozen = $this->activity->find_by_idempotency( $booking_id, $operation_id . ':frozen' );
+		return is_array( $frozen ) || is_wp_error( $frozen ) ? $frozen : $this->activity->find_by_idempotency( $booking_id, $operation_id . ':approval' );
+	}
+
+	private function scheduled_at( array $booking, array $channel ): int {
+		$state = $this->activity->event_conversion_state( $booking['id'], $booking['public_id'] );
+		$time  = is_array( $state ) && ! empty( $state['completed']['occurred_at'] )
+			? strtotime( $state['completed']['occurred_at'] . ' UTC' )
+			: strtotime( (string) $booking['updated_at'] . ' UTC' );
 		return max( 1, (int) $time + (int) $channel['delay_seconds'] );
 	}
 
-	/**
-	 * Build the booking, event, trigger, and channel idempotency scope.
-	 *
-	 * @param array  $booking     Booking record.
-	 * @param string $trigger_key Trigger key.
-	 * @param string $channel_key Channel key.
-	 * @return string Stable operation key.
-	 */
-	private function base_key( array $booking, string $trigger_key, string $channel_key ): string {
-		return sprintf( 'booking-marketing:%s:%d:%s:%s', $booking['public_id'], $booking['event_id'], $trigger_key, $channel_key );
-	}
-
-	/**
-	 * Build the deterministic UUID-shaped pending action identifier.
-	 *
-	 * @param string $base Idempotency base.
-	 * @return string Pending action identifier.
-	 */
-	private function action_id( string $base ): string {
-		$hash = substr( hash( 'sha256', $base . ':approval' ), 0, 32 );
+	private function approval_id( string $operation_id ): string {
+		$hash = substr( hash( 'sha256', $operation_id . ':approval' ), 0, 32 );
 		return sprintf( 'act_%s-%s-%s-%s-%s', substr( $hash, 0, 8 ), substr( $hash, 8, 4 ), substr( $hash, 12, 4 ), substr( $hash, 16, 4 ), substr( $hash, 20, 12 ) );
 	}
 
-	/**
-	 * Normalize an activity into the public channel result.
-	 *
-	 * @param string $status   Orchestration status.
-	 * @param array  $activity Activity record.
-	 * @return array Channel result.
-	 */
-	private function activity_result( string $status, array $activity ): array {
-		return array(
-			'status'      => $status,
-			'activity_id' => $activity['id'],
-			'job_id'      => isset( $activity['payload']['data']['job_id'] ) ? (int) $activity['payload']['data']['job_id'] : null,
-		);
+	private function hash_value( $value ): string {
+		return hash( 'sha256', (string) wp_json_encode( $this->canonicalize( $value ) ) );
 	}
 
-	/**
-	 * Persist a retryable scheduling failure without replacing owner delivery state.
-	 *
-	 * @param array     $booking  Booking record.
-	 * @param array     $channel  Channel configuration.
-	 * @param string    $base     Idempotency base.
-	 * @param int       $actor_id Acting user identifier.
-	 * @param \WP_Error $error    Scheduling failure.
-	 * @return \WP_Error Original failure.
-	 */
-	private function record_schedule_failure( array $booking, array $channel, string $base, int $actor_id, \WP_Error $error ): \WP_Error {
-		$this->activity->append(
-			array(
-				'booking_id'      => $booking['id'],
-				'kind'            => 'marketing_channel_schedule_failed',
-				'actor_type'      => 'user',
-				'actor_id'        => $actor_id,
-				'channel'         => $channel['key'],
-				'idempotency_key' => $base . ':failed:' . substr( hash( 'sha256', $error->get_error_code() ), 0, 16 ),
-				'payload'         => array(
-					'error_code'     => $error->get_error_code(),
-					'error_data'     => $error->get_error_data(),
-					'retryable'      => true,
-					'delivery_state' => 'not_started',
-				),
-			)
-		);
-		return $error;
-	}
-
-	/**
-	 * Record terminal workflow evidence without claiming external delivery.
-	 *
-	 * @param int    $job_id Data Machine job identifier.
-	 * @param string $status Terminal job status.
-	 */
-	public static function on_job_complete( int $job_id, string $status ): void {
-		if ( ! class_exists( '\DataMachine\Core\Database\Jobs\Jobs' ) ) {
-			return;
+	private function canonicalize( $value ) {
+		if ( ! is_array( $value ) ) {
+			return $value;
 		}
-		$job    = ( new \DataMachine\Core\Database\Jobs\Jobs() )->get_job( $job_id );
-		$engine = is_array( $job['engine_data'] ?? null ) ? $job['engine_data'] : array();
-		$route  = $engine['task_context']['booking_marketing'] ?? null;
-		if ( ! is_array( $route ) || empty( $route['booking_id'] ) || empty( $route['base_key'] ) ) {
-			return;
+		if ( ! array_is_list( $value ) ) {
+			ksort( $value, SORT_STRING );
 		}
-		$successes = (int) ( $engine['success_count'] ?? 0 );
-		$failures  = (int) ( $engine['failure_count'] ?? 0 );
-		$outcome   = $failures > 0 ? ( $successes > 0 ? 'partial' : 'failed' ) : ( 0 === strpos( $status, 'failed' ) ? 'failed' : 'completed' );
-		( new BookingActivityRepository() )->append(
-			array(
-				'booking_id'      => (int) $route['booking_id'],
-				'kind'            => 'marketing_channel_' . $outcome,
-				'actor_type'      => 'system',
-				'channel'         => sanitize_key( (string) ( $route['channel_key'] ?? '' ) ),
-				'external_id'     => (string) $job_id,
-				'idempotency_key' => sanitize_text_field( (string) $route['base_key'] ) . ':job:' . $job_id . ':outcome',
-				'payload'         => array(
-					'job_id'         => $job_id,
-					'job_status'     => $status,
-					'outcome'        => $outcome,
-					'success_count'  => $successes,
-					'failure_count'  => $failures,
-					'owner_results'  => $engine['results'] ?? null,
-					'delivery_state' => 'owner_authoritative',
-				),
-			)
-		);
+		foreach ( $value as $key => $item ) {
+			$value[ $key ] = $this->canonicalize( $item );
+		}
+		return $value;
 	}
 
-	/**
-	 * Record denied approvals; accepted approvals use their job receipt.
-	 *
-	 * @param object $action   Pending action value object.
-	 * @param object $decision Approval decision value object.
-	 * @param string $resolver Resolver principal.
-	 */
+	private function stale_error(): \WP_Error {
+		return new \WP_Error( 'booking_marketing_binding_stale', __( 'The booking, event, content, assets, or marketing policy changed after approval.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+
+	/** Record rejected approvals without storing their free-form reason. */
 	public static function on_pending_action_resolved( $action, $decision, string $resolver ): void {
 		unset( $resolver );
 		if ( ! is_object( $action ) || ! is_callable( array( $action, 'get_kind' ) ) || self::PENDING_KIND !== $action->get_kind() || ! is_object( $decision ) || ! is_callable( array( $decision, 'is_rejected' ) ) || ! $decision->is_rejected() ) {
@@ -684,26 +624,16 @@ class BookingMarketingService {
 		if ( ! is_array( $input ) ) {
 			return;
 		}
-		$service = new self();
-		$booking = $service->bookings->get( absint( $input['booking_id'] ?? 0 ) );
-		if ( ! is_array( $booking ) ) {
-			return;
-		}
-		$base = $service->base_key( $booking, sanitize_key( (string) ( $input['trigger_key'] ?? '' ) ), sanitize_key( (string) ( $input['channel_key'] ?? '' ) ) );
-		$service->activity->append(
+		( new BookingActivityRepository() )->append(
 			array(
-				'booking_id'      => $booking['id'],
-				'kind'            => 'marketing_channel_denied',
+				'booking_id'      => absint( $input['booking_id'] ?? 0 ),
+				'kind'            => 'marketing_operation_denied',
 				'actor_type'      => 'user',
 				'actor_id'        => get_current_user_id(),
 				'channel'         => sanitize_key( (string) ( $input['channel_key'] ?? '' ) ),
 				'external_id'     => $action->get_action_id(),
-				'idempotency_key' => $base . ':denied',
-				'payload'         => array(
-					'approval_id' => $action->get_action_id(),
-					'trigger'     => $input['trigger_key'] ?? '',
-					'channel'     => $input['channel_key'] ?? '',
-				),
+				'idempotency_key' => 'marketing-denied:' . hash( 'sha256', $action->get_action_id() ),
+				'payload'         => array( 'approval_id' => $action->get_action_id() ),
 			)
 		);
 	}

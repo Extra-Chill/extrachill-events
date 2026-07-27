@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns and verifies the site-scoped private booking schema. */
 class BookingSchema {
 
-	public const SCHEMA_VERSION = '8';
+	public const SCHEMA_VERSION = '12';
 	public const VERSION_OPTION = 'extrachill_events_booking_schema_version';
 	public const FAILURE_OPTION = 'extrachill_events_booking_schema_error';
 
@@ -44,6 +44,12 @@ class BookingSchema {
 	public static function attachments_table(): string {
 		global $wpdb;
 		return $wpdb->prefix . 'ec_booking_attachments';
+	}
+
+	/** Get the private attachment delivery correlation table for the current site. */
+	public static function attachment_deliveries_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_attachment_deliveries';
 	}
 
 	/** Get the venue membership table for the current site. */
@@ -76,6 +82,18 @@ class BookingSchema {
 		return $wpdb->prefix . 'ec_booking_holds';
 	}
 
+	/** Get the append-only booking sales reports table. */
+	public static function sales_reports_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_sales_reports';
+	}
+
+	/** Get the frozen booking settlements table. */
+	public static function settlements_table(): string {
+		global $wpdb;
+		return $wpdb->prefix . 'ec_booking_settlements';
+	}
+
 	/** Create or repair all tables, stamping the version only after verification. */
 	public static function install() {
 		global $wpdb;
@@ -84,11 +102,14 @@ class BookingSchema {
 		$activity            = self::activity_table();
 		$communication_state = self::communication_state_table();
 		$attachments         = self::attachments_table();
+		$deliveries          = self::attachment_deliveries_table();
 		$members             = self::memberships_table();
 		$claims              = self::claims_table();
 		$invites             = self::invitations_table();
 		$audit               = self::onboarding_audit_table();
 		$holds               = self::holds_table();
+		$sales_reports       = self::sales_reports_table();
+		$settlements         = self::settlements_table();
 		$charset             = $wpdb->get_charset_collate();
 
 		$bookings_sql = "CREATE TABLE {$bookings} (
@@ -104,6 +125,7 @@ class BookingSchema {
 			contact_phone VARCHAR(64) NULL,
 			inquiry_idempotency_key VARCHAR(191) NULL,
 			inquiry_request_hash CHAR(64) NULL,
+			admission_owner_token CHAR(36) NULL,
 			requested_space_key VARCHAR(64) NULL,
 			space_key VARCHAR(64) NULL,
 			status VARCHAR(32) NOT NULL DEFAULT 'submitted',
@@ -201,6 +223,28 @@ class BookingSchema {
 			KEY artist_term_purpose (artist_term_id, purpose),
 			KEY artist_profile_purpose (artist_profile_id, purpose),
 			KEY state_retired (state, retired_at)
+		) ENGINE=InnoDB {$charset};";
+
+		$deliveries_sql = "CREATE TABLE {$deliveries} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			correlation_id CHAR(36) NOT NULL,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			attachment_id BIGINT UNSIGNED NOT NULL,
+			actor_id BIGINT UNSIGNED NOT NULL,
+			expected_bytes BIGINT UNSIGNED NOT NULL,
+			state VARCHAR(16) NOT NULL DEFAULT 'issued',
+			outcome VARCHAR(16) NULL,
+			bytes_sent BIGINT UNSIGNED NULL,
+			issued_at DATETIME NOT NULL,
+			consumed_at DATETIME NULL,
+			terminal_at DATETIME NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY correlation_id (correlation_id),
+			KEY booking_issued (booking_id, issued_at, id),
+			KEY attachment_actor (attachment_id, actor_id),
+			KEY state_updated (state, updated_at),
+			KEY terminal_retention (state, terminal_at)
 		) ENGINE=InnoDB {$charset};";
 
 		$members_sql = "CREATE TABLE {$members} (
@@ -309,6 +353,72 @@ class BookingSchema {
 			KEY status_expiration (status, expires_at)
 		) ENGINE=InnoDB {$charset};";
 
+		$sales_reports_sql = "CREATE TABLE {$sales_reports} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			event_id BIGINT UNSIGNED NOT NULL,
+			venue_term_id BIGINT UNSIGNED NOT NULL,
+			provider VARCHAR(64) NOT NULL,
+			external_report_id VARCHAR(191) NOT NULL,
+			source_type VARCHAR(32) NOT NULL,
+			period_start DATETIME NOT NULL,
+			period_end DATETIME NOT NULL,
+			tickets_sold BIGINT NOT NULL,
+			tickets_refunded BIGINT NOT NULL,
+			gross_minor BIGINT NOT NULL,
+			fees_minor BIGINT NOT NULL,
+			tax_minor BIGINT NOT NULL,
+			refunds_minor BIGINT NOT NULL,
+			net_minor BIGINT NOT NULL,
+			currency CHAR(3) NOT NULL,
+			corrects_report_id BIGINT UNSIGNED NULL,
+			source_payload LONGTEXT NOT NULL,
+			request_hash CHAR(64) NOT NULL,
+			created_by_user_id BIGINT UNSIGNED NOT NULL,
+			created_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY provider_external_report (provider, external_report_id),
+			KEY booking_created (booking_id, created_at, id),
+			KEY booking_currency_id (booking_id, currency, id),
+			KEY event_provider_period (event_id, provider, period_start, period_end),
+			KEY corrects_report (corrects_report_id)
+		) ENGINE=InnoDB {$charset};";
+
+		$settlements_sql = "CREATE TABLE {$settlements} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			booking_id BIGINT UNSIGNED NOT NULL,
+			event_id BIGINT UNSIGNED NOT NULL,
+			venue_term_id BIGINT UNSIGNED NOT NULL,
+			status VARCHAR(16) NOT NULL DEFAULT 'finalized',
+			version BIGINT UNSIGNED NOT NULL DEFAULT '1',
+			booking_version BIGINT UNSIGNED NOT NULL,
+			basis VARCHAR(32) NOT NULL,
+			basis_points BIGINT UNSIGNED NOT NULL,
+			currency CHAR(3) NOT NULL,
+			formula_version BIGINT UNSIGNED NOT NULL,
+			included_report_ids LONGTEXT NOT NULL,
+			evidence_hash CHAR(64) NOT NULL,
+			integrity_hash CHAR(64) NOT NULL,
+			basis_amount_minor BIGINT NOT NULL,
+			adjustment_minor BIGINT NOT NULL,
+			amount_due_minor BIGINT NOT NULL,
+			finalized_by_user_id BIGINT UNSIGNED NOT NULL,
+			finalized_at DATETIME NOT NULL,
+			paid_by_user_id BIGINT UNSIGNED NULL,
+			paid_at DATETIME NULL,
+			payment_reference VARCHAR(191) NULL,
+			voided_by_user_id BIGINT UNSIGNED NULL,
+			voided_at DATETIME NULL,
+			void_reason VARCHAR(1000) NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (id),
+			UNIQUE KEY booking_id (booking_id),
+			KEY venue_status_finalized (venue_term_id, status, finalized_at),
+			KEY event_id (event_id),
+			KEY status_updated (status, updated_at)
+		) ENGINE=InnoDB {$charset};";
+
 		$repair = self::drop_conflicting_indexes();
 		if ( is_wp_error( $repair ) ) {
 			self::record_failure( $repair );
@@ -324,6 +434,8 @@ class BookingSchema {
 		$communication_state_error = (string) $wpdb->last_error;
 		dbDelta( $attachments_sql );
 		$attachments_error = (string) $wpdb->last_error;
+		dbDelta( $deliveries_sql );
+		$deliveries_error = (string) $wpdb->last_error;
 		dbDelta( $members_sql );
 		$members_error = (string) $wpdb->last_error;
 		dbDelta( $claims_sql );
@@ -334,7 +446,11 @@ class BookingSchema {
 		$audit_error = (string) $wpdb->last_error;
 		dbDelta( $holds_sql );
 		$holds_error = (string) $wpdb->last_error;
-		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $attachments_error || '' !== $members_error || '' !== $claims_error || '' !== $invites_error || '' !== $audit_error || '' !== $holds_error ) {
+		dbDelta( $sales_reports_sql );
+		$sales_reports_error = (string) $wpdb->last_error;
+		dbDelta( $settlements_sql );
+		$settlements_error = (string) $wpdb->last_error;
+		if ( '' !== $bookings_error || '' !== $activity_error || '' !== $communication_state_error || '' !== $attachments_error || '' !== $deliveries_error || '' !== $members_error || '' !== $claims_error || '' !== $invites_error || '' !== $audit_error || '' !== $holds_error || '' !== $sales_reports_error || '' !== $settlements_error ) {
 			$error = new \WP_Error(
 				'booking_schema_dbdelta_failed',
 				__( 'The booking schema could not be reconciled.', 'extrachill-events' ),
@@ -343,11 +459,14 @@ class BookingSchema {
 					'activity_error'            => $activity_error,
 					'communication_state_error' => $communication_state_error,
 					'attachments_error'         => $attachments_error,
+					'deliveries_error'          => $deliveries_error,
 					'members_error'             => $members_error,
 					'claims_error'              => $claims_error,
 					'invites_error'             => $invites_error,
 					'audit_error'               => $audit_error,
 					'holds_error'               => $holds_error,
+					'sales_reports_error'       => $sales_reports_error,
+					'settlements_error'         => $settlements_error,
 				)
 			);
 			self::record_failure( $error );
@@ -622,7 +741,7 @@ class BookingSchema {
 			);
 		};
 		return array(
-			self::bookings_table()            => array(
+			self::bookings_table()              => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -637,6 +756,7 @@ class BookingSchema {
 					'contact_phone'           => $required( 'varchar(64)', true ),
 					'inquiry_idempotency_key' => $required( 'varchar(191)', true ),
 					'inquiry_request_hash'    => $required( 'char(64)', true ),
+					'admission_owner_token'   => $required( 'char(36)', true ),
 					'requested_space_key'     => $required( 'varchar(64)', true ),
 					'space_key'               => $required( 'varchar(64)', true ),
 					'status'                  => $required( 'varchar(32)', false, array( 'default' => 'submitted' ) ),
@@ -701,7 +821,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::activity_table()            => array(
+			self::activity_table()              => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                      => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -750,7 +870,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::communication_state_table() => array(
+			self::communication_state_table()   => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'intent_id'           => $required( 'bigint unsigned', false ),
@@ -773,7 +893,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::attachments_table()         => array(
+			self::attachments_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                     => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -834,7 +954,51 @@ class BookingSchema {
 					),
 				),
 			),
-			self::memberships_table()         => array(
+			self::attachment_deliveries_table() => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'id'             => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'correlation_id' => $required( 'char(36)', false ),
+					'booking_id'     => $required( 'bigint unsigned', false ),
+					'attachment_id'  => $required( 'bigint unsigned', false ),
+					'actor_id'       => $required( 'bigint unsigned', false ),
+					'expected_bytes' => $required( 'bigint unsigned', false ),
+					'state'          => $required( 'varchar(16)', false, array( 'default' => 'issued' ) ),
+					'outcome'        => $required( 'varchar(16)', true ),
+					'bytes_sent'     => $required( 'bigint unsigned', true ),
+					'issued_at'      => $required( 'datetime', false ),
+					'consumed_at'    => $required( 'datetime', true ),
+					'terminal_at'    => $required( 'datetime', true ),
+					'updated_at'     => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'            => array(
+						'unique'  => true,
+						'columns' => array( 'id' ),
+					),
+					'correlation_id'     => array(
+						'unique'  => true,
+						'columns' => array( 'correlation_id' ),
+					),
+					'booking_issued'     => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'issued_at', 'id' ),
+					),
+					'attachment_actor'   => array(
+						'unique'  => false,
+						'columns' => array( 'attachment_id', 'actor_id' ),
+					),
+					'state_updated'      => array(
+						'unique'  => false,
+						'columns' => array( 'state', 'updated_at' ),
+					),
+					'terminal_retention' => array(
+						'unique'  => false,
+						'columns' => array( 'state', 'terminal_at' ),
+					),
+				),
+			),
+			self::memberships_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -867,7 +1031,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::claims_table()              => array(
+			self::claims_table()                => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                  => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -908,7 +1072,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::invitations_table()         => array(
+			self::invitations_table()           => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -962,7 +1126,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::onboarding_audit_table()    => array(
+			self::onboarding_audit_table()      => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'              => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -994,7 +1158,7 @@ class BookingSchema {
 					),
 				),
 			),
-			self::holds_table()               => array(
+			self::holds_table()                 => array(
 				'engine'  => 'innodb',
 				'columns' => array(
 					'id'                   => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
@@ -1032,6 +1196,113 @@ class BookingSchema {
 					'status_expiration'   => array(
 						'unique'  => false,
 						'columns' => array( 'status', 'expires_at' ),
+					),
+				),
+			),
+			self::sales_reports_table()         => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'id'                 => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'booking_id'         => $required( 'bigint unsigned', false ),
+					'event_id'           => $required( 'bigint unsigned', false ),
+					'venue_term_id'      => $required( 'bigint unsigned', false ),
+					'provider'           => $required( 'varchar(64)', false ),
+					'external_report_id' => $required( 'varchar(191)', false ),
+					'source_type'        => $required( 'varchar(32)', false ),
+					'period_start'       => $required( 'datetime', false ),
+					'period_end'         => $required( 'datetime', false ),
+					'tickets_sold'       => $required( 'bigint', false ),
+					'tickets_refunded'   => $required( 'bigint', false ),
+					'gross_minor'        => $required( 'bigint', false ),
+					'fees_minor'         => $required( 'bigint', false ),
+					'tax_minor'          => $required( 'bigint', false ),
+					'refunds_minor'      => $required( 'bigint', false ),
+					'net_minor'          => $required( 'bigint', false ),
+					'currency'           => $required( 'char(3)', false ),
+					'corrects_report_id' => $required( 'bigint unsigned', true ),
+					'source_payload'     => $required( 'longtext', false ),
+					'request_hash'       => $required( 'char(64)', false ),
+					'created_by_user_id' => $required( 'bigint unsigned', false ),
+					'created_at'         => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'                  => array(
+						'unique'  => true,
+						'columns' => array( 'id' ),
+					),
+					'provider_external_report' => array(
+						'unique'  => true,
+						'columns' => array( 'provider', 'external_report_id' ),
+					),
+					'booking_created'          => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'created_at', 'id' ),
+					),
+					'booking_currency_id'      => array(
+						'unique'  => false,
+						'columns' => array( 'booking_id', 'currency', 'id' ),
+					),
+					'event_provider_period'    => array(
+						'unique'  => false,
+						'columns' => array( 'event_id', 'provider', 'period_start', 'period_end' ),
+					),
+					'corrects_report'          => array(
+						'unique'  => false,
+						'columns' => array( 'corrects_report_id' ),
+					),
+				),
+			),
+			self::settlements_table()           => array(
+				'engine'  => 'innodb',
+				'columns' => array(
+					'id'                   => $required( 'bigint unsigned', false, array( 'extra' => 'auto_increment' ) ),
+					'booking_id'           => $required( 'bigint unsigned', false ),
+					'event_id'             => $required( 'bigint unsigned', false ),
+					'venue_term_id'        => $required( 'bigint unsigned', false ),
+					'status'               => $required( 'varchar(16)', false, array( 'default' => 'finalized' ) ),
+					'version'              => $required( 'bigint unsigned', false, array( 'default' => '1' ) ),
+					'booking_version'      => $required( 'bigint unsigned', false ),
+					'basis'                => $required( 'varchar(32)', false ),
+					'basis_points'         => $required( 'bigint unsigned', false ),
+					'currency'             => $required( 'char(3)', false ),
+					'formula_version'      => $required( 'bigint unsigned', false ),
+					'included_report_ids'  => $required( 'longtext', false ),
+					'evidence_hash'        => $required( 'char(64)', false ),
+					'integrity_hash'       => $required( 'char(64)', false ),
+					'basis_amount_minor'   => $required( 'bigint', false ),
+					'adjustment_minor'     => $required( 'bigint', false ),
+					'amount_due_minor'     => $required( 'bigint', false ),
+					'finalized_by_user_id' => $required( 'bigint unsigned', false ),
+					'finalized_at'         => $required( 'datetime', false ),
+					'paid_by_user_id'      => $required( 'bigint unsigned', true ),
+					'paid_at'              => $required( 'datetime', true ),
+					'payment_reference'    => $required( 'varchar(191)', true ),
+					'voided_by_user_id'    => $required( 'bigint unsigned', true ),
+					'voided_at'            => $required( 'datetime', true ),
+					'void_reason'          => $required( 'varchar(1000)', true ),
+					'created_at'           => $required( 'datetime', false ),
+					'updated_at'           => $required( 'datetime', false ),
+				),
+				'indexes' => array(
+					'PRIMARY'                => array(
+						'unique'  => true,
+						'columns' => array( 'id' ),
+					),
+					'booking_id'             => array(
+						'unique'  => true,
+						'columns' => array( 'booking_id' ),
+					),
+					'venue_status_finalized' => array(
+						'unique'  => false,
+						'columns' => array( 'venue_term_id', 'status', 'finalized_at' ),
+					),
+					'event_id'               => array(
+						'unique'  => false,
+						'columns' => array( 'event_id' ),
+					),
+					'status_updated'         => array(
+						'unique'  => false,
+						'columns' => array( 'status', 'updated_at' ),
 					),
 				),
 			),

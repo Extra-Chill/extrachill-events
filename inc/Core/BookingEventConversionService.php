@@ -68,7 +68,8 @@ class BookingEventConversionService {
 		if ( is_wp_error( $verified ) ) {
 			return $verified;
 		}
-		$verified['attempt'] = $preflight['attempt'];
+		$verified['attempt']   = $preflight['attempt'];
+		$verified['authority'] = BookingEventSyncService::authority_from_event( $preflight['input']['event'], (int) $preflight['booking']['venue_term_id'] );
 
 		$result = $this->finalize( $booking_id, $expected_version, $actor_id, $verified );
 		if ( is_array( $result ) ) {
@@ -232,6 +233,7 @@ class BookingEventConversionService {
 					'source_identity' => $upstream['source']['identity'],
 					'upstream_action' => $action,
 					'version'         => $expected_version + 1,
+					'authority'       => $upstream['authority'],
 				),
 			)
 		);
@@ -309,6 +311,7 @@ class BookingEventConversionService {
 		if ( is_wp_error( $committed ) ) {
 			return $this->failure_finalize_error( $upstream, $attempt, $committed );
 		}
+		BookingNotificationService::emit( BookingNotificationService::TYPE_EVENT_HANDOFF_FAILED, (int) $failed['id'] );
 		return $this->upstream_error( $upstream, $attempt, $booking['version'] );
 	}
 

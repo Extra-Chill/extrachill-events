@@ -3,7 +3,7 @@
  * Plugin Name: Extra Chill Events
  * Plugin URI: https://extrachill.com
  * Description: Calendar integration with template overrides, data-machine-events badge/button styling, breadcrumb system, and related events for events.extrachill.com.
- * Version: 0.50.2
+ * Version: 0.51.0
  * Author: Chris Huber
  * Author URI: https://chubes.net
  * Requires Plugins: data-machine, data-machine-events
@@ -23,7 +23,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'EXTRACHILL_EVENTS_VERSION', '0.50.2' );
+define( 'EXTRACHILL_EVENTS_VERSION', '0.51.0' );
 define( 'EXTRACHILL_EVENTS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EXTRACHILL_EVENTS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'EXTRACHILL_EVENTS_PLUGIN_FILE', __FILE__ );
@@ -116,11 +116,13 @@ add_action(
 			return;
 		}
 		require_once __DIR__ . '/inc/Steps/QualifyDigest/QualifyDigestSystemTask.php';
+		require_once __DIR__ . '/inc/Steps/LocalSceneDigest/LocalSceneDigestSystemTask.php';
 
 		add_filter(
 			'datamachine_tasks',
 			function ( array $tasks ): array {
-				$tasks[ \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::TASK_TYPE ] = \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::class;
+				$tasks[ \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::TASK_TYPE ]       = \ExtraChillEvents\Steps\QualifyDigest\QualifyDigestSystemTask::class;
+				$tasks[ \ExtraChillEvents\Steps\LocalSceneDigest\LocalSceneDigestSystemTask::TASK_TYPE ] = \ExtraChillEvents\Steps\LocalSceneDigest\LocalSceneDigestSystemTask::class;
 				return $tasks;
 			}
 		);
@@ -128,6 +130,23 @@ add_action(
 		add_filter(
 			'datamachine_recurring_schedules',
 			function ( array $schedules ): array {
+				$schedules['extrachill_local_scene_digest'] = apply_filters(
+					'extrachill_local_scene_digest_schedule',
+					array(
+						'task_type'          => \ExtraChillEvents\Steps\LocalSceneDigest\LocalSceneDigestSystemTask::TASK_TYPE,
+						'interval'           => 'weekly',
+						'enabled_setting'    => 'extrachill_local_scene_digest_enabled',
+						'default_enabled'    => false,
+						'label'              => 'Weekly Local Scene Digest — Thursdays 15:00 UTC',
+						'first_run_callback' => 'strtotime',
+						'first_run_arg'      => 'next thursday 15:00 UTC',
+						'task_params'        => array(
+							'days'    => 7,
+							'limit'   => 8,
+							'dry_run' => false,
+						),
+					)
+				);
 				/**
 				 * Filter the qualify digest schedule definition. Allows
 				 * operators to flip interval, change the first-run anchor,
@@ -237,6 +256,7 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdictsTable.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyVerdictResolver.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/PlatformDetector.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/QualifyFingerprinter.php';
 
 		// Artist URL Import subsystem (migrated from data-machine-events in #200).
 		// Moderation-queue table + REST controller/routes. The abilities load in
@@ -253,9 +273,11 @@ class ExtraChillEvents {
 		\ExtraChillEvents\Core\VenueInvitationDeliveryWorker::register();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingActivityRepository.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingNotificationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingCommunicationService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingHoldRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMutationService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventSyncService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingEventConversionService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingMarketingService.php';
 		\ExtraChillEvents\Core\BookingMarketingService::register();
@@ -265,12 +287,16 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingPrivateFileProviders.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingAttachmentPolicy.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingAttachmentRepository.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingAttachmentDeliveryRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingAttachmentService.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/BookingInquiryAdmissionService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueBookingConfig.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/TicketSettlementService.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueProfile.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/CanonicalEventPublicationGuard.php';
 		\ExtraChillEvents\Core\BookingHoldRepository::register();
 		\ExtraChillEvents\Core\BookingCommunicationService::register();
+		\ExtraChillEvents\Core\BookingNotificationService::register();
 		new \ExtraChillEvents\Core\CanonicalEventPublicationGuard();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Api/Controllers/ArtistUrlImport.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Api/ArtistUrlImportRoutes.php';
@@ -289,6 +315,8 @@ class ExtraChillEvents {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/artist-map.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/location-seo.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/account-market.php';
+		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/local-scene-digest.php';
+		extrachill_events_init_local_scene_digest();
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/near-me.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/discovery-pages.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/core/router-pages.php';
@@ -386,6 +414,9 @@ class ExtraChillEvents {
 
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/VenueBookingMarketingAbilities.php';
 			new \ExtraChillEvents\Abilities\VenueBookingMarketingAbilities();
+
+			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/TicketSettlementAbilities.php';
+			new \ExtraChillEvents\Abilities\TicketSettlementAbilities();
 		}
 
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Abilities/PriorityVenueAbilities.php';

@@ -82,7 +82,7 @@ class VenueBookingConfigAbilities {
 							'type'    => 'integer',
 							'minimum' => 0,
 						),
-						'config'            => $this->config_schema( false ),
+						'config'            => $this->config_schema( false, true ),
 					),
 					'required'             => array( 'venue_term_id', 'expected_revision', 'config' ),
 					'additionalProperties' => false,
@@ -96,6 +96,53 @@ class VenueBookingConfigAbilities {
 						'readonly'    => false,
 						'idempotent'  => false,
 						'destructive' => true,
+					),
+				),
+			)
+		);
+
+		wp_register_ability(
+			'extrachill/preview-booking-correspondence-template',
+			array(
+				'label'               => __( 'Preview Booking Correspondence Template', 'extrachill-events' ),
+				'description'         => __( 'Render one authorized venue template with allowlisted plain-text variables.', 'extrachill-events' ),
+				'category'            => 'extrachill-events',
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'venue_term_id'             => $venue_property,
+						'template'                  => array(
+							'type' => 'string',
+							'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES,
+						),
+						'expected_template_version' => array(
+							'type'    => 'integer',
+							'minimum' => 1,
+						),
+						'variables'                 => array(
+							'type'                 => 'object',
+							'properties'           => array_fill_keys(
+								array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ),
+								array(
+									'type'      => 'string',
+									'maxLength' => 10000,
+								)
+							),
+							'additionalProperties' => false,
+						),
+					),
+					'required'             => array( 'venue_term_id', 'template', 'expected_template_version', 'variables' ),
+					'additionalProperties' => false,
+				),
+				'output_schema'       => $this->preview_schema(),
+				'execute_callback'    => array( $this, 'preview_template' ),
+				'permission_callback' => array( $this, 'can_access_venue' ),
+				'meta'                => array(
+					'show_in_rest' => true,
+					'annotations'  => array(
+						'readonly'    => true,
+						'idempotent'  => true,
+						'destructive' => false,
 					),
 				),
 			)
@@ -124,8 +171,18 @@ class VenueBookingConfigAbilities {
 		);
 	}
 
+	/** Render one authorized correspondence preview. */
+	public function preview_template( array $input ) {
+		return $this->config->preview(
+			absint( $input['venue_term_id'] ?? 0 ),
+			(string) ( $input['template'] ?? '' ),
+			(int) ( $input['expected_template_version'] ?? 0 ),
+			(array) ( $input['variables'] ?? array() )
+		);
+	}
+
 	/** Return the complete settings schema, optionally with read metadata. */
-	private function config_schema( bool $include_metadata ): array {
+	private function config_schema( bool $include_metadata, bool $accept_legacy = false ): array {
 		$field_schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
@@ -252,8 +309,9 @@ class VenueBookingConfigAbilities {
 				'minimum' => 5,
 				'maximum' => 10080,
 			),
+			'correspondence'            => $this->correspondence_schema(),
 		);
-		$required     = array( 'version', 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'marketing_triggers', 'hold_ttl_minutes' );
+		$required     = array( 'version', 'enabled', 'intake', 'spaces', 'default_deal', 'ticket_provider_reference', 'marketing_channels', 'marketing_triggers', 'hold_ttl_minutes', 'correspondence' );
 		if ( $include_metadata ) {
 			$properties['revision']           = array(
 				'type'    => 'integer',
@@ -269,10 +327,146 @@ class VenueBookingConfigAbilities {
 			$required[]                       = 'updated_at';
 		}
 
-		return array(
+		$schema = array(
 			'type'                 => 'object',
 			'properties'           => $properties,
 			'required'             => $required,
+			'additionalProperties' => false,
+		);
+		if ( ! $accept_legacy ) {
+			return $schema;
+		}
+		$legacy                                  = $schema;
+		$legacy['properties']['version']['enum'] = array( VenueBookingConfig::LEGACY_VERSION );
+		$legacy['required']                      = array_values( array_diff( $legacy['required'], array( 'correspondence' ) ) );
+		return array( 'oneOf' => array( $legacy, $schema ) );
+	}
+
+	/** Return the strict correspondence configuration schema. */
+	private function correspondence_schema(): array {
+		$template = array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'version' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'subject' => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 200,
+				),
+				'body'    => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 10000,
+				),
+			),
+			'required'             => array( 'version', 'subject', 'body' ),
+			'additionalProperties' => false,
+		);
+		$policy   = array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'version'           => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'enabled'           => array( 'type' => 'boolean' ),
+				'delay_minutes'     => array(
+					'type'    => 'integer',
+					'minimum' => 5,
+					'maximum' => 10080,
+				),
+				'expected_statuses' => array(
+					'type'        => 'array',
+					'uniqueItems' => true,
+					'items'       => array(
+						'type' => 'string',
+						'enum' => \ExtraChillEvents\Core\BookingRepository::STATUSES,
+					),
+				),
+			),
+			'required'             => array( 'version', 'enabled', 'delay_minutes', 'expected_statuses' ),
+			'additionalProperties' => false,
+		);
+		return array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'version'           => array(
+					'type' => 'integer',
+					'enum' => array( VenueBookingConfig::CORRESPONDENCE_VERSION ),
+				),
+				'booking_address'   => array(
+					'type'   => array( 'string', 'null' ),
+					'format' => 'email',
+				),
+				'variables'         => array(
+					'type'     => 'array',
+					'maxItems' => 5,
+					'items'    => array(
+						'type'                 => 'object',
+						'properties'           => array(
+							'key'        => array(
+								'type' => 'string',
+								'enum' => array_merge( VenueBookingConfig::CORRESPONDENCE_VARIABLES, array( 'message' ) ),
+							),
+							'type'       => array(
+								'type' => 'string',
+								'enum' => array( 'string', 'text' ),
+							),
+							'max_length' => array(
+								'type'    => 'integer',
+								'minimum' => 1,
+								'maximum' => 10000,
+							),
+						),
+						'required'             => array( 'key', 'type', 'max_length' ),
+						'additionalProperties' => false,
+					),
+				),
+				'templates'         => array(
+					'type'                 => 'object',
+					'properties'           => array_fill_keys( VenueBookingConfig::CORRESPONDENCE_TEMPLATES, $template ),
+					'required'             => VenueBookingConfig::CORRESPONDENCE_TEMPLATES,
+					'additionalProperties' => false,
+				),
+				'reminder_policies' => array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'follow_up'     => $policy,
+						'hold_expiring' => $policy,
+					),
+					'required'             => array( 'follow_up', 'hold_expiring' ),
+					'additionalProperties' => false,
+				),
+			),
+			'required'             => array( 'version', 'booking_address', 'variables', 'templates', 'reminder_policies' ),
+			'additionalProperties' => false,
+		);
+	}
+
+	/** Return the allowlisted preview response schema. */
+	private function preview_schema(): array {
+		return array(
+			'type'                 => 'object',
+			'properties'           => array(
+				'template'         => array(
+					'type' => 'string',
+					'enum' => VenueBookingConfig::CORRESPONDENCE_TEMPLATES,
+				),
+				'template_version' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'config_revision'  => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
+				'subject'          => array( 'type' => 'string' ),
+				'body'             => array( 'type' => 'string' ),
+			),
+			'required'             => array( 'template', 'template_version', 'config_revision', 'subject', 'body' ),
 			'additionalProperties' => false,
 		);
 	}
@@ -305,14 +499,12 @@ class VenueBookingConfigAbilities {
 									'minLength' => 1,
 									'maxLength' => 32,
 								),
-								'task_type'     => array(
-									'type'      => 'string',
-									'minLength' => 1,
-									'maxLength' => 100,
-								),
-								'agent_id'      => array(
-									'type'    => 'integer',
-									'minimum' => 1,
+								'action'        => array(
+									'type' => 'string',
+									'enum' => array(
+										VenueBookingConfig::SOCIAL_MARKETING_ACTION,
+										VenueBookingConfig::NEWSLETTER_MARKETING_ACTION,
+									),
 								),
 								'approval'      => array(
 									'type' => 'string',
@@ -323,31 +515,52 @@ class VenueBookingConfigAbilities {
 									'minimum' => 0,
 									'maximum' => 31536000,
 								),
-								'params'        => array(
-									'type'                 => 'object',
-									'additionalProperties' => true,
-								),
-								'image'         => array(
-									'type'       => array( 'object', 'null' ),
-									'properties' => array(
-										'template_id' => array(
-											'type'      => 'string',
-											'minLength' => 1,
-											'maxLength' => 100,
+								'social'        => array(
+									'type'                 => array( 'object', 'null' ),
+									'properties'           => array(
+										'channels'   => array(
+											'type'        => 'array',
+											'maxItems'    => 6,
+											'uniqueItems' => true,
+											'items'       => array(
+												'type' => 'string',
+												'enum' => array( 'bluesky', 'facebook', 'instagram', 'pinterest', 'threads', 'twitter' ),
+											),
 										),
-										'preset'      => array(
+										'caption'    => array(
 											'type'      => 'string',
-											'maxLength' => 100,
+											'maxLength' => 2200,
 										),
-										'format'      => array(
+										'media_kind' => array(
 											'type' => 'string',
-											'enum' => array( 'png', 'jpeg' ),
+											'enum' => array( 'image', 'carousel', 'reel', 'story' ),
+										),
+										'asset_refs' => array(
+											'type'        => 'array',
+											'maxItems'    => 11,
+											'uniqueItems' => true,
+											'items'       => array(
+												'type'    => 'integer',
+												'minimum' => 1,
+											),
 										),
 									),
-									'required'   => array( 'template_id', 'preset', 'format' ),
+									'required'             => array( 'channels', 'caption', 'media_kind', 'asset_refs' ),
+									'additionalProperties' => false,
+								),
+								'newsletter'    => array(
+									'type'                 => array( 'object', 'null' ),
+									'properties'           => array(
+										'policy' => array(
+											'type' => 'string',
+											'enum' => array( 'canonical-post-draft' ),
+										),
+									),
+									'required'             => array( 'policy' ),
+									'additionalProperties' => false,
 								),
 							),
-							'required'             => array( 'key', 'task_type', 'agent_id', 'approval', 'delay_seconds', 'params', 'image' ),
+							'required'             => array( 'key', 'action', 'approval', 'delay_seconds', 'social', 'newsletter' ),
 							'additionalProperties' => false,
 						),
 					),

@@ -109,6 +109,11 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertTrue( BookingSchema::health() );
 		$this->assertArrayHasKey( 'is_owner', $GLOBALS['wpdb']->schemas['wp_7_ec_venue_members']['columns'] );
 		$this->assertArrayNotHasKey( 'role', $GLOBALS['wpdb']->schemas['wp_7_ec_venue_members']['columns'] );
+		$deliveries = BookingSchema::attachment_deliveries_table();
+		$this->assertSame( 'wp_7_ec_booking_attachment_deliveries', $deliveries );
+		$this->assertSame( 'InnoDB', $GLOBALS['wpdb']->engines[ $deliveries ] );
+		$this->assertTrue( $GLOBALS['wpdb']->schemas[ $deliveries ]['indexes']['correlation_id']['unique'] );
+		$this->assertSame( array( 'state', 'terminal_at' ), $GLOBALS['wpdb']->schemas[ $deliveries ]['indexes']['terminal_retention']['columns'] );
 
 		$columns                   =& $GLOBALS['wpdb']->schemas['wp_7_ec_bookings']['columns'];
 		$columns['status']['Type'] = 'text';
@@ -279,6 +284,31 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertTrue( BookingSchema::maybe_install() );
 		$this->assertSame( 0, $GLOBALS['wpdb']->schema_queries );
 		$this->assertSame( array(), $GLOBALS['ec_artist_test']['dbdelta'] );
+	}
+
+	public function test_stamped_v11_install_adds_settlement_tables_without_disturbing_existing_contracts(): void {
+		$this->assertTrue( BookingSchema::install() );
+		$wpdb        = $GLOBALS['wpdb'];
+		$sales       = BookingSchema::sales_reports_table();
+		$settlements = BookingSchema::settlements_table();
+		unset( $wpdb->schemas[ $sales ], $wpdb->schemas[ $settlements ], $wpdb->engines[ $sales ], $wpdb->engines[ $settlements ], $wpdb->rows[ $sales ], $wpdb->rows[ $settlements ] );
+
+		$bookings = BookingSchema::bookings_table();
+		$wpdb->rows[ $bookings ][999] = array( 'id' => 999, 'marker' => 'existing-v11-booking' );
+		$existing_schemas              = $wpdb->schemas;
+		$existing_engines              = $wpdb->engines;
+		$GLOBALS['ec_artist_test']['options'][ BookingSchema::VERSION_OPTION ] = '11';
+
+		$this->assertTrue( BookingSchema::maybe_install() );
+		$this->assertSame( '12', get_option( BookingSchema::VERSION_OPTION ) );
+		$this->assertArrayHasKey( $sales, $wpdb->schemas );
+		$this->assertArrayHasKey( $settlements, $wpdb->schemas );
+		$this->assertSame( 'INNODB', strtoupper( $wpdb->engines[ $sales ] ) );
+		$this->assertSame( 'INNODB', strtoupper( $wpdb->engines[ $settlements ] ) );
+		$this->assertSame( $existing_schemas, array_intersect_key( $wpdb->schemas, $existing_schemas ) );
+		$this->assertSame( $existing_engines, array_intersect_key( $wpdb->engines, $existing_engines ) );
+		$this->assertSame( 'existing-v11-booking', $wpdb->rows[ $bookings ][999]['marker'] );
+		$this->assertTrue( BookingSchema::health() );
 	}
 
 	public function test_membership_table_engine_is_repaired_before_version_stamp(): void {
@@ -557,9 +587,13 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertIsArray( $config );
 		$this->assertSame( $config, $service->normalize( $config ) );
 		$this->assertSame( 'invalid_booking_config_venue', $service->get( 56 )->get_error_code() );
-		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 2 ) )->get_error_code() );
+		$migrated = $service->normalize( array( 'version' => 1, 'enabled' => true ) );
+		$this->assertSame( 2, $migrated['version'] );
+		$this->assertArrayHasKey( 'correspondence', $migrated );
+		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => 3 ) )->get_error_code() );
 		$this->assertSame( 'booking_config_version_unsupported', $service->normalize( array( 'version' => '1junk' ) )->get_error_code() );
 		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'intake' => array( 'version' => 2 ) ) )->get_error_code() );
+		$this->assertSame( 'booking_config_section_version_unsupported', $service->normalize( array( 'correspondence' => array( 'version' => 2 ) ) )->get_error_code() );
 		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = array( 'version' => 99 );
 		$this->assertSame( 'booking_config_version_unsupported', $service->get( 55 )->get_error_code() );
 	}
@@ -602,6 +636,48 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( 'invalid_booking_marketing_channels', $service->normalize( array( 'marketing_channels' => array_fill( 0, 21, 'email' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_marketing_channel', $service->normalize( array( 'marketing_channels' => array( $prefix . 'x', $prefix . 'y' ) ) )->get_error_code() );
 		$this->assertSame( 'invalid_booking_currency', $service->normalize( array( 'default_deal' => array( 'currency' => 'US1' ) ) )->get_error_code() );
+	}
+
+	public function test_correspondence_config_validates_templates_policies_and_safe_preview(): void {
+		$service = new VenueBookingConfig();
+		$config  = $service->defaults();
+		$config['correspondence']['booking_address'] = 'booking@example.com';
+		$config['correspondence']['templates']['follow_up']['version'] = 3;
+		$config['correspondence']['templates']['follow_up']['subject'] = 'Re: {{artist_name}} at {{venue_name}}';
+		$config['correspondence']['templates']['follow_up']['body']    = "Hello {{contact_name}},\n\n{{message}}";
+		$config['correspondence']['reminder_policies']['follow_up']['enabled'] = true;
+		$normalized = $service->normalize( $config );
+
+		$this->assertSame( 'booking@example.com', $normalized['correspondence']['booking_address'] );
+		$this->assertSame( 3, $normalized['correspondence']['templates']['follow_up']['version'] );
+		$this->assertTrue( $normalized['correspondence']['reminder_policies']['follow_up']['enabled'] );
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = $normalized;
+
+		$preview = $service->preview(
+			55,
+			'follow_up',
+			3,
+			array(
+				'artist_name' => '<b>Test Band</b>',
+				'venue_name'  => 'The Room',
+				'contact_name' => "Agent\r\nBcc: attacker@example.com",
+				'message'     => '{{venue_name}} stays literal after one pass.',
+			)
+		);
+		$this->assertSame( 'Re: Test Band at The Room', $preview['subject'] );
+		$this->assertStringNotContainsString( "\nBcc:", $preview['body'] );
+		$this->assertStringContainsString( '{{venue_name}} stays literal', $preview['body'] );
+		$this->assertSame( 'booking_correspondence_template_version_conflict', $service->preview( 55, 'follow_up', 2, array() )->get_error_code() );
+
+		$config['correspondence']['templates']['follow_up']['subject'] = "Unsafe\nBcc: attacker@example.com";
+		$this->assertSame( 'invalid_booking_correspondence_template', $service->normalize( $config )->get_error_code() );
+		$config['correspondence']['templates']['follow_up']['subject'] = '{{unsupported}}';
+		$this->assertSame( 'invalid_booking_correspondence_variable', $service->normalize( $config )->get_error_code() );
+		$config['correspondence']['templates']['follow_up']['subject'] = '{{bad-variable}}';
+		$this->assertSame( 'invalid_booking_correspondence_variable', $service->normalize( $config )->get_error_code() );
+		$config = $service->defaults();
+		$config['correspondence']['reminder_policies']['follow_up']['expected_statuses'] = array( 'not_a_status' );
+		$this->assertSame( 'invalid_booking_reminder_policy', $service->normalize( $config )->get_error_code() );
 	}
 
 	public function test_repository_rejects_invalid_ids_dates_filters_and_normalizes_updates(): void {
@@ -825,14 +901,14 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( 'booking_idempotency_conflict', $conflict->get_error_code() );
 		$this->assertSame( array( 'status' => 409 ), $conflict->get_error_data() );
 		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
-		$this->assertCount( 1, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 
 		$GLOBALS['wpdb']->race_booking_insert = true;
 		$race                                 = $lifecycle->create_inquiry( array_merge( $input, array( 'idempotency_key' => 'request-race' ) ) );
 		$this->assertIsArray( $race );
 		$this->assertSame( 0, $GLOBALS['wpdb']->natural_key_reads_in_transaction, 'The loser must resolve its winner only after rollback.' );
 		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ] );
-		$this->assertCount( 2, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
+		$this->assertCount( 4, $GLOBALS['wpdb']->rows[ BookingSchema::activity_table() ] );
 		$this->assertSame(
 			'booking_idempotency_conflict',
 			$lifecycle->create_inquiry(
@@ -1065,6 +1141,10 @@ final class BookingFoundationTest extends TestCase {
 		}
 		$this->assertSame( BookingLifecycle::STATUSES, $registered['extrachill/transition-venue-booking']['input_schema']['properties']['to_status']['enum'] );
 		$this->assertSame( array( 'idempotency_key', 'venue_term_id', 'intake' ), $registered['extrachill/create-booking-inquiry']['input_schema']['required'] );
+		$attachment_schema = $registered['extrachill/create-booking-inquiry']['input_schema']['properties']['attachments'];
+		$this->assertSame( 5, $attachment_schema['maxItems'] );
+		$this->assertSame( array( 'name', 'tmp_name', 'error', 'size', 'purpose' ), $attachment_schema['items']['required'] );
+		$this->assertFalse( $attachment_schema['items']['additionalProperties'] );
 		$this->assertSame( array( 'venue_term_id' ), $registered['extrachill/list-venue-bookings']['input_schema']['required'] );
 		$this->assertSame( array( 'booking_id', 'to_status', 'expected_version' ), $registered['extrachill/transition-venue-booking']['input_schema']['required'] );
 		$this->assertSame( array( 'booking_id', 'expected_version' ), $registered['extrachill/bind-venue-booking-artist']['input_schema']['required'] );

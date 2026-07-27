@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [0.52.3] - 2026-07-27
+
+### Fixed
+- accept MariaDB integer display widths
+
+## [0.52.2] - 2026-07-27
+
+### Changed
+- prove internal booking-to-calendar alpha
+
+## [0.52.1] - 2026-07-27
+
+### Fixed
+- register Events recurring task settings
+- harden booking event synchronization
+
+## [0.52.0] - 2026-07-27
+
+### Added
+- add weekly Local Scene digest
+- synchronize converted booking events
+
+### Changed
+- isolate qualify suite globals and fixtures
+
+### Fixed
+- preload booking schema after WordPress test setup
+- install booking schema on switched multisite blogs
+- clear managed PHPUnit baseline
+
 ## [0.51.0] - 2026-07-26
 
 ### Added

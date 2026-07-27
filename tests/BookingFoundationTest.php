@@ -219,6 +219,15 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( '', get_option( BookingSchema::VERSION_OPTION, '' ) );
 	}
 
+	public function test_mariadb_integer_display_widths_are_ignored(): void {
+		$this->assertTrue( BookingSchema::install() );
+		$table = BookingSchema::sales_reports_table();
+		$GLOBALS['wpdb']->schemas[ $table ]['columns']['id']['Type']           = 'bigint(20) unsigned';
+		$GLOBALS['wpdb']->schemas[ $table ]['columns']['tickets_sold']['Type'] = 'bigint(20)';
+
+		$this->assertTrue( BookingSchema::health() );
+	}
+
 	public function test_partial_schema_is_not_stamped_and_repeat_install_repairs_it(): void {
 		$GLOBALS['wpdb']->schema_omit['wp_7_ec_bookings']['columns'] = array( 'event_id' );
 		$result = BookingSchema::install();
@@ -1167,6 +1176,19 @@ final class BookingFoundationTest extends TestCase {
 		$this->assertSame( $receipt, call_user_func( $registered['extrachill/create-booking-inquiry']['execute_callback'], $receipt_input ) );
 
 		$booking = $this->create_booking();
+		$presented = $abilities->present(
+			array_merge(
+				$booking,
+				array(
+					'inquiry_idempotency_key' => 'private-key',
+					'inquiry_request_hash'    => str_repeat( 'a', 64 ),
+					'admission_owner_token'   => wp_generate_uuid4(),
+				)
+			)
+		);
+		$this->assertArrayNotHasKey( 'inquiry_idempotency_key', $presented );
+		$this->assertArrayNotHasKey( 'inquiry_request_hash', $presented );
+		$this->assertArrayNotHasKey( 'admission_owner_token', $presented );
 		$this->assertTrue( $abilities->can_access_booking( array( 'booking_id' => $booking['id'] ) ) );
 		$this->assertSame( array( array( 12, 55, VenueAuthorization::ACTION_ACCESS_VENUE ) ), $authorization->calls );
 		$this->assertSame( 'venue_action_forbidden', $abilities->can_access_booking( array( 'booking_id' => 999 ) )->get_error_code() );

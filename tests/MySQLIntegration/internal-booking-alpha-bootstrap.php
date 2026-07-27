@@ -21,6 +21,10 @@ try {
 	}
 	DataMachineEvents\Core\EventDatesTable::create_table();
 	( new DataMachine\Core\Database\PostIdentityIndex\PostIdentityIndex() )->create_table();
+	if ( class_exists( 'ActionScheduler_StoreSchema' ) && class_exists( 'ActionScheduler_LoggerSchema' ) ) {
+		( new ActionScheduler_StoreSchema() )->register_tables();
+		( new ActionScheduler_LoggerSchema() )->register_tables();
+	}
 } finally {
 	restore_current_blog();
 }

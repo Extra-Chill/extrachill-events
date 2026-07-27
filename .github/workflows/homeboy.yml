@@ -62,6 +62,20 @@ jobs:
         working-directory: .ci/data-machine
         run: composer install --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative
 
+      - name: Install test dependencies
+        if: ${{ matrix.command == 'review test' }}
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Run isolated unit tests
+        if: ${{ matrix.command == 'review test' }}
+        run: |
+          vendor/bin/phpunit --configuration phpunit-artist-unit.xml.dist
+          vendor/bin/phpunit --configuration phpunit-venue-unit.xml.dist
+
+      - name: Select managed WordPress suite
+        if: ${{ matrix.command == 'review test' }}
+        run: cp phpunit-managed.xml.dist phpunit.xml.dist
+
       - name: Run Homeboy ${{ matrix.command }}
         env:
           HOMEBOY_SETTINGS_JSON: >-

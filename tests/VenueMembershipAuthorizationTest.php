@@ -851,8 +851,6 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
  */
 final class VenueMembershipAuthorizationTest extends TestCase {
 	private $original_wpdb;
-	private $switched_blog = false;
-	private $schema_option_callback;
 
 	private function set_current_user( int $user_id ): void {
 		if ( function_exists( 'wp_set_current_user' ) ) {
@@ -861,10 +859,6 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 	}
 
 	protected function setUp(): void {
-		if ( function_exists( 'get_current_blog_id' ) && function_exists( 'switch_to_blog' ) && 7 !== get_current_blog_id() ) {
-			switch_to_blog( 7 );
-			$this->switched_blog = true;
-		}
 		$this->original_wpdb = $GLOBALS['wpdb'] ?? null;
 		if ( $this->original_wpdb ) {
 			$user_emails = array(
@@ -901,9 +895,6 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 					array( 'ID' => $user_id )
 				);
 				clean_user_cache( $user_id );
-				if ( $user_id > 1 ) {
-					( new WP_User( $user_id ) )->add_cap( VenueAuthorization::ACCESS_CAPABILITY );
-				}
 			}
 
 			register_taxonomy( 'venue', 'data_machine_events' );
@@ -1025,24 +1016,12 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 				return new WP_Error( 'unexpected_dme_update' );
 			},
 		);
-		$this->schema_option_callback = static function ( $value, string $option ) {
-			if ( BookingSchema::VERSION_OPTION !== $option ) {
-				return $value;
-			}
-			return $GLOBALS['venue_membership_test']['options'][ BookingSchema::VERSION_OPTION ] ?? null;
-		};
-		add_filter( 'pre_option', $this->schema_option_callback, PHP_INT_MAX, 2 );
 		$GLOBALS['wpdb']                  = new VenueMembershipWpdb( $this->original_wpdb );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
-		remove_filter( 'pre_option', $this->schema_option_callback, PHP_INT_MAX );
 		$this->set_current_user( 0 );
-		if ( $this->switched_blog ) {
-			restore_current_blog();
-			$this->switched_blog = false;
-		}
 		parent::tearDown();
 	}
 

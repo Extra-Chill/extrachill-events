@@ -143,7 +143,6 @@ final class EventsByArtistAbilityTest extends TestCase {
 	private int $starting_blog_id = 4;
 
 	protected function setUp(): void {
-		$this->starting_blog_id = get_current_blog_id();
 		$GLOBALS['ec_artist_test'] = array(
 			'blog_id' => 4,
 			'stack'   => array(),
@@ -154,6 +153,7 @@ final class EventsByArtistAbilityTest extends TestCase {
 			'fail_updates' => array(),
 			'registered'   => array(),
 		);
+		$this->starting_blog_id = get_current_blog_id();
 		$GLOBALS['ec_artist_test']['ability'] = new class() {
 			public function execute( array $input ): array {
 				$GLOBALS['ec_artist_test']['delegated'] = $input;

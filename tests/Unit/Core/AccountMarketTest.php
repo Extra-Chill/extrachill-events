@@ -1087,7 +1087,8 @@ final class AccountMarketTest extends TestCase {
 		extrachill_events_render_account_market_context();
 		$output = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'Showing events for Charlestonalert(1)', $output );
+		$this->assertStringContainsString( 'Showing events for Charleston', $output );
+		$this->assertStringNotContainsString( 'alert(1)', $output );
 		$this->assertStringNotContainsString( '<script', $output );
 		$this->assertStringNotContainsString( '</script>', $output );
 		$this->assertStringContainsString( '/settings/#tab-account-details', $output );

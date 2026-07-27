@@ -29,6 +29,7 @@ on:
       - tests/MySQLIntegration/BookingEventSyncMySQLIntegrationTest.php
       - tests/MySQLIntegration/BookingAdmissionConcurrencyMySQLProof.php
       - tests/MySQLIntegration/booking-attachment-mysql-bootstrap.php
+      - tests/MySQLIntegration/booking-schema-multisite-bootstrap.php
       - tests/MySQLIntegration/host-wordpress-bootstrap.php
       - tests/MySQLIntegration/wp-tests-config.php
 

@@ -56,7 +56,6 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		$this->contender = $this->connect_second_session();
 		$this->contender->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
 		( new VenueBookingEventAbilities() )->register();
-		\DataMachineEvents\Core\EventDatesTable::create_table();
 	}
 
 	public function tear_down(): void {
@@ -98,9 +97,24 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 				'space_key'            => 'main-room',
 				'performance_start_at' => '2030-03-10 00:00:00',
 				'performance_end_at'   => '2030-03-10 03:00:00',
-				'confirmed_deal'       => array( 'version' => 1, 'type' => 'guarantee', 'currency' => 'USD', 'ticket_url' => 'https://tickets.example/mysql' ),
+				'confirmed_deal'       => array(
+					'version'                    => 1,
+					'type'                       => 'guarantee',
+					'guarantee_cents'            => 10000,
+					'revenue_share_basis_points' => 0,
+					'revenue_share_basis'        => 'gross_ticket_sales',
+					'currency'                   => 'USD',
+					'capacity'                   => 100,
+					'advance_ticket_price_cents' => 2000,
+					'door_ticket_price_cents'    => 2500,
+					'ticket_fee_cents'           => 0,
+					'tickets_on_sale_at'         => null,
+					'ticket_url'                 => 'https://tickets.example/mysql',
+					'additional_terms'           => null,
+				),
 			)
 		);
+		$this->assertIsArray( $booking, is_wp_error( $booking ) ? $booking->get_error_code() . ': ' . wp_json_encode( $booking->get_error_data() ) : '' );
 		$wpdb->update( BookingSchema::bookings_table(), array( 'public_id' => $source_id, 'status' => 'confirmed', 'event_id' => $event_id ), array( 'id' => $booking['id'] ) );
 		$booking = ( new BookingRepository() )->get( $booking['id'] );
 		$wpdb->insert(

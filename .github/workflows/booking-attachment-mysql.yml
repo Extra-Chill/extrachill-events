@@ -139,7 +139,7 @@ jobs:
               wp_codebox_phpunit_preload_files: [$schema_preload, $preload],
               validation_dependencies: [$data_machine_source, $data_machine_events_source]
             }')
-          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs --filter=BookingAttachmentMySQLIntegrationTest
+          node .ci/homeboy-extensions/wordpress/scripts/test/wp-codebox-phpunit-adapter.mjs
 
       - name: Install native WordPress test runtime
         run: |

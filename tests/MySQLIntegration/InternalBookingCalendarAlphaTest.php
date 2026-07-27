@@ -294,6 +294,7 @@ final class InternalBookingCalendarAlphaTest extends WP_UnitTestCase {
 		unset( $config['revision'], $config['updated_by_user_id'], $config['updated_at'] );
 		$config['enabled'] = true;
 		$config['spaces']  = array();
+		$config['correspondence']['reminder_policies']['hold_expiring']['version']          += 1;
 		$config['correspondence']['reminder_policies']['hold_expiring']['enabled']           = true;
 		$config['correspondence']['reminder_policies']['hold_expiring']['delay_minutes']     = 60;
 		$config['correspondence']['reminder_policies']['hold_expiring']['expected_statuses'] = array( 'confirmed' );

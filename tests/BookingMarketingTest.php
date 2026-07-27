@@ -37,6 +37,7 @@ final class BookingMarketingDelegatedBackendFake {
 	public $next       = array();
 	public $user_id    = 12;
 	public $on_submit;
+	public int $owner_operation_creations = 0;
 
 	public function execute( string $verb, array $input ): array {
 		$this->calls[] = array( $verb, $input, $this->user_id );
@@ -50,6 +51,7 @@ final class BookingMarketingDelegatedBackendFake {
 				);
 			}
 			if ( ! isset( $this->operations[ $key ] ) ) {
+				++$this->owner_operation_creations;
 				$this->operations[ $key ] = array(
 					'fingerprint'   => $fingerprint,
 					'operation_ref' => 'dop_' . hash( 'sha256', $key ),
@@ -124,6 +126,19 @@ final class BookingMarketingDelegatedAbilityFake {
 	}
 	public function execute( array $input ): array {
 		return $this->backend->execute( $this->verb, $input );
+	}
+}
+
+final class BookingMarketingActivityRepositoryFake extends BookingActivityRepository {
+	public string $fail_kind = '';
+	public int $failures_remaining = 0;
+
+	public function append( array $data ) {
+		if ( $this->failures_remaining > 0 && $this->fail_kind === ( $data['kind'] ?? '' ) ) {
+			--$this->failures_remaining;
+			return new WP_Error( 'booking_activity_write_failed', 'simulated write failure' );
+		}
+		return parent::append( $data );
 	}
 }
 
@@ -349,8 +364,21 @@ final class BookingMarketingTest extends TestCase {
 		);
 	}
 
-	private function service( ?BookingTestAuthorization $authorization = null ): BookingMarketingService {
-		return new BookingMarketingService( null, null, null, $authorization ?: new BookingTestAuthorization() );
+	private function service( ?BookingTestAuthorization $authorization = null, ?BookingActivityRepository $activity = null ): BookingMarketingService {
+		return new BookingMarketingService( null, $activity, null, $authorization ?: new BookingTestAuthorization() );
+	}
+
+	private function accept_pending( string $approval_id ): void {
+		$pending = BookingMarketingPendingStoreFake::$rows[ $approval_id ];
+		BookingMarketingPendingStoreFake::$rows[ $approval_id ] = BookingMarketingPendingActionFake::from_array(
+			array(
+				'action_id'   => $approval_id,
+				'apply_input' => $pending->get_apply_input(),
+				'kind'        => $pending->get_kind(),
+				'status'      => 'accepted',
+				'preview'     => $pending->get_preview(),
+			)
+		);
 	}
 
 	public function test_submit_uses_exact_public_ability_and_owner_input_with_delay(): void {
@@ -376,6 +404,18 @@ final class BookingMarketingTest extends TestCase {
 		$this->configure( array( $this->social() ) );
 		$authorized = null;
 		$this->backend->on_submit = static function ( array $request, array $operation ) use ( &$authorized ): void {
+			$submit_context = array(
+				'phase'         => 'submit',
+				'action'        => BookingMarketingService::SOCIAL_ACTION,
+				'operation_id'  => $request['operation_id'],
+				'operation_ref' => $operation['operation_ref'],
+				'actor'         => array( 'user_id' => 12 ),
+				'input'         => $request['input'],
+			);
+			$authorized = BookingMarketingService::authorize_social_operation( false, $submit_context );
+			if ( true !== $authorized ) {
+				return;
+			}
 			$authorized = BookingMarketingService::authorize_social_operation(
 				false,
 				array(
@@ -399,6 +439,18 @@ final class BookingMarketingTest extends TestCase {
 		$this->configure( array( $this->newsletter( 'newsletter', 'direct' ) ) );
 		$authorized = null;
 		$this->backend->on_submit = static function ( array $request, array $operation ) use ( &$authorized ): void {
+			$submit_context = array(
+				'phase'         => 'submit',
+				'action'        => BookingMarketingService::NEWSLETTER_ACTION,
+				'operation_id'  => $request['operation_id'],
+				'operation_ref' => $operation['operation_ref'],
+				'actor'         => array( 'user_id' => 12 ),
+				'input'         => $request['input'],
+			);
+			$authorized = BookingMarketingService::authorize_newsletter_operation( false, $request['input']['source'], $submit_context );
+			if ( true !== $authorized ) {
+				return;
+			}
 			$authorized = BookingMarketingService::authorize_newsletter_operation(
 				false,
 				$request['input']['source'],
@@ -415,6 +467,79 @@ final class BookingMarketingTest extends TestCase {
 		$this->service()->trigger( $booking['id'], 12 );
 
 		$this->assertTrue( $authorized );
+	}
+
+	public function test_identical_pre_receipt_channels_bind_distinct_trusted_operation_refs(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure(
+			array(
+				$this->social( 'first', 'required' ),
+				$this->social( 'second', 'required' ),
+			)
+		);
+		$pending = $this->service()->trigger( $booking['id'], 12 )['channels'];
+		$bindings = array();
+		foreach ( array( 'first', 'second' ) as $key ) {
+			$action                = BookingMarketingPendingStoreFake::$rows[ $pending[ $key ]['approval_id'] ];
+			$bindings[ $key ]      = $action->get_preview();
+			$bindings[ $key ]['approval_id'] = $pending[ $key ]['approval_id'];
+			( new BookingActivityRepository() )->append(
+				array(
+					'booking_id'      => $booking['id'],
+					'kind'            => 'marketing_operation_frozen',
+					'actor_type'      => 'user',
+					'actor_id'        => 12,
+					'channel'         => $key,
+					'external_id'     => $pending[ $key ]['approval_id'],
+					'idempotency_key' => $bindings[ $key ]['operation_id'] . ':frozen',
+					'payload'         => $bindings[ $key ],
+				)
+			);
+		}
+		$input = array(
+			'post_id'      => 901,
+			'source_url'   => 'https://events.example/show',
+			'caption'      => 'Approved event caption',
+			'content_hash' => hash( 'sha256', 'Approved event caption' ),
+			'channels'     => array( 'instagram', 'twitter' ),
+			'media_kind'   => 'image',
+			'asset_refs'   => array( array( 'attachment_id' => 301, 'role' => 'image' ) ),
+		);
+		$refs = array(
+			'first'  => 'dop_' . hash( 'sha256', 'first-operation' ),
+			'second' => 'dop_' . hash( 'sha256', 'second-operation' ),
+		);
+		$this->assertNotSame( $bindings['first']['operation_id'], $bindings['second']['operation_id'] );
+		foreach ( array( 'first', 'second' ) as $key ) {
+			$submit_context = array(
+				'phase'         => 'submit',
+				'action'        => BookingMarketingService::SOCIAL_ACTION,
+				'operation_id'  => $bindings[ $key ]['operation_id'],
+				'operation_ref' => $refs[ $key ],
+				'actor'         => array( 'user_id' => 12 ),
+				'input'         => $input,
+			);
+			$this->assertTrue( BookingMarketingService::authorize_social_operation( false, $submit_context ) );
+			unset( $submit_context['operation_id'] );
+			$submit_context['phase'] = 'effect';
+			$this->assertNull( ( new BookingActivityRepository() )->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $refs[ $key ] ) );
+			$this->assertTrue( BookingMarketingService::authorize_social_operation( false, $submit_context ) );
+		}
+
+		$substituted = array(
+			'phase'         => 'submit',
+			'action'        => BookingMarketingService::SOCIAL_ACTION,
+			'operation_id'  => $bindings['second']['operation_id'],
+			'operation_ref' => $refs['first'],
+			'actor'         => array( 'user_id' => 12 ),
+			'input'         => $input,
+		);
+		$this->assertSame( 'booking_marketing_owner_forbidden', BookingMarketingService::authorize_social_operation( false, $substituted )->get_error_code() );
+		$substituted['phase']         = 'effect';
+		$substituted['operation_ref'] = 'dop_' . hash( 'sha256', 'unknown-operation' );
+		unset( $substituted['operation_id'] );
+		$this->assertSame( 'booking_marketing_binding_missing', BookingMarketingService::authorize_social_operation( false, $substituted )->get_error_code() );
 	}
 
 	public function test_generated_inputs_compose_with_concrete_owner_normalizers(): void {
@@ -512,6 +637,78 @@ final class BookingMarketingTest extends TestCase {
 		);
 		$this->assertArrayNotHasKey( 'recipients', $request['input'] );
 		$this->assertArrayNotHasKey( 'content', $request['input'] );
+	}
+
+	public function test_retryable_approved_apply_recovers_one_created_operation_without_a_duplicate_approval(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$service  = $this->service();
+		$pending  = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$this->backend->next['submit'] = array(
+			'success'    => false,
+			'error_code' => 'delegated_enqueue_failed',
+			'retryable'  => true,
+		);
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertTrue( $first['retryable'] );
+		$this->assertArrayNotHasKey( 'operation_ref', $first );
+		$this->assertCount( 1, $this->backend->operations );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$replayed  = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertSame( $recovered['operation_ref'], $replayed['operation_ref'] );
+		$this->assertCount( 1, BookingMarketingPendingStoreFake::$rows );
+		$this->assertCount( 1, $this->backend->operations );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+	}
+
+	public function test_approved_apply_recovers_after_created_operation_receipt_persistence_failure(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->social( 'social', 'required' ) ) );
+		$activity                    = new BookingMarketingActivityRepositoryFake();
+		$activity->fail_kind         = 'marketing_operation_submitted';
+		$activity->failures_remaining = 1;
+		$service                     = $this->service( null, $activity );
+		$pending                     = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$approval                    = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+
+		$first = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'recovery-pending', $first['status'] );
+		$this->assertCount( 1, $this->backend->operations );
+		$this->assertNull( $activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', reset( $this->backend->operations )['operation_ref'] ) );
+
+		$this->accept_pending( $pending['approval_id'] );
+		$recovered = $service->trigger( $booking['id'], 12 )['channels']['social'];
+		$this->assertSame( 'submitted', $recovered['status'] );
+		$this->assertCount( 1, $this->backend->operations );
+		$this->assertSame( 1, $this->backend->owner_operation_creations );
+		$this->assertIsArray( $activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $recovered['operation_ref'] ) );
+	}
+
+	public function test_permanent_approved_apply_failure_blocks_restaging_and_resubmission(): void {
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter() ) );
+		$service  = $this->service();
+		$pending  = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$approval = BookingMarketingPendingStoreFake::$rows[ $pending['approval_id'] ];
+		$this->backend->next['submit'] = array(
+			'success'    => false,
+			'error_code' => 'delegated_operation_conflict',
+		);
+
+		$failed = $service->apply( $approval->get_apply_input(), 12 );
+		$this->assertSame( 'delegated_operation_conflict', $failed->get_error_code() );
+		$this->assertFalse( $failed->get_error_data()['retryable'] );
+		$again = $service->trigger( $booking['id'], 12 )['channels']['newsletter'];
+		$this->assertSame( 'delegated_operation_conflict', $again->get_error_code() );
+		$this->assertFalse( $again->get_error_data()['retryable'] );
+		$this->assertCount( 1, $this->backend->calls );
+		$this->assertCount( 1, $this->backend->operations );
 	}
 
 	public function test_duplicate_submission_is_cross_user_stable_and_changed_request_conflicts(): void {
@@ -716,6 +913,19 @@ final class BookingMarketingTest extends TestCase {
 		$this->configure( array( $this->social() ) );
 		$submitted              = $this->service()->trigger( $booking['id'], 12 )['channels']['social'];
 		$request                = $this->backend->calls[0][1];
+		$this->assertTrue(
+			BookingMarketingService::authorize_social_operation(
+				false,
+				array(
+					'phase'         => 'submit',
+					'action'        => BookingMarketingService::SOCIAL_ACTION,
+					'operation_id'  => $request['operation_id'],
+					'operation_ref' => $submitted['operation_ref'],
+					'actor'         => array( 'user_id' => 12 ),
+					'input'         => $request['input'],
+				)
+			)
+		);
 		$normalized_owner_input = array_merge(
 			$request['input'],
 			array(

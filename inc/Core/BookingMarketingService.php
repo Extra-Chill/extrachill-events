@@ -131,7 +131,35 @@ class BookingMarketingService {
 		if ( ! is_string( $input['binding_hash'] ?? null ) || ! hash_equals( $operation['binding_hash'], $input['binding_hash'] ) ) {
 			return $this->stale_error();
 		}
-		return $this->submit( $context, $operation, $actor_id, sanitize_text_field( (string) ( $input['approval_id'] ?? '' ) ) );
+		$result = $this->submit( $context, $operation, $actor_id, sanitize_text_field( (string) ( $input['approval_id'] ?? '' ) ) );
+		if ( ! is_wp_error( $result ) ) {
+			return $result;
+		}
+		$data = $result->get_error_data();
+		if ( is_array( $data ) && ! empty( $data['retryable'] ) ) {
+			return array(
+				'status'       => 'recovery-pending',
+				'operation_id' => $operation['operation_id'],
+				'retryable'    => true,
+			);
+		}
+		$failure = $this->activity->append(
+			array(
+				'booking_id'      => $context['booking']['id'],
+				'kind'            => 'marketing_operation_approval_failed',
+				'actor_type'      => 'user',
+				'actor_id'        => $actor_id,
+				'channel'         => $operation['channel_key'],
+				'external_id'     => sanitize_text_field( (string) ( $input['approval_id'] ?? '' ) ),
+				'idempotency_key' => $operation['operation_id'] . ':approval-failed',
+				'payload'         => array(
+					'operation_id' => $operation['operation_id'],
+					'action'       => $operation['action'],
+					'error_code'   => sanitize_key( $result->get_error_code() ),
+				),
+			)
+		);
+		return is_wp_error( $failure ) ? new \WP_Error( 'booking_marketing_approval_failure_persist_failed' ) : $result;
 	}
 
 	/** Reconcile, retry, or cancel one previously submitted bounded operation. */
@@ -176,6 +204,20 @@ class BookingMarketingService {
 			if ( ! hash_equals( $prior, $operation['binding_hash'] ) ) {
 				return new \WP_Error( 'booking_marketing_operation_conflict', __( 'This marketing operation was already approved with different content or policy.', 'extrachill-events' ), array( 'status' => 409 ) );
 			}
+		}
+		$failed = $this->activity->find_by_idempotency( $context['booking']['id'], $operation['operation_id'] . ':approval-failed' );
+		if ( is_wp_error( $failed ) ) {
+			return $failed;
+		}
+		if ( is_array( $failed ) ) {
+			return new \WP_Error(
+				sanitize_key( (string) ( $failed['payload']['data']['error_code'] ?? 'booking_marketing_approval_failed' ) ),
+				__( 'The approved marketing operation failed permanently.', 'extrachill-events' ),
+				array(
+					'status'    => 409,
+					'retryable' => false,
+				)
+			);
 		}
 		$store = apply_filters( 'wp_agent_pending_action_store', null, array( 'kind' => self::PENDING_KIND ) );
 		if ( ! is_object( $store ) || ! is_callable( array( $store, 'get' ) ) || ! is_callable( array( $store, 'store' ) ) || ! class_exists( '\AgentsAPI\AI\Approvals\WP_Agent_Pending_Action' ) ) {
@@ -365,7 +407,17 @@ class BookingMarketingService {
 				),
 			)
 		);
-		return is_wp_error( $receipt ) ? $receipt : array(
+		if ( is_wp_error( $receipt ) ) {
+			return new \WP_Error(
+				'booking_marketing_receipt_persist_failed',
+				__( 'The delegated marketing receipt could not be persisted.', 'extrachill-events' ),
+				array(
+					'status'    => 503,
+					'retryable' => true,
+				)
+			);
+		}
+		return array(
 			'status'        => $status,
 			'operation_ref' => $operation_ref,
 			'activity_id'   => $receipt['id'],
@@ -486,17 +538,23 @@ class BookingMarketingService {
 		if ( ! is_array( $booking ) || $actor_id < 1 || true !== $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE ) ) {
 			return new \WP_Error( 'booking_marketing_owner_forbidden' );
 		}
-		$phase        = (string) ( $owner_context['phase'] ?? '' );
-		$frozen       = null;
-		$receipt      = null;
-		$operation_id = is_string( $owner_context['operation_id'] ?? null ) ? $owner_context['operation_id'] : '';
+		$phase         = (string) ( $owner_context['phase'] ?? '' );
+		$frozen        = null;
+		$receipt       = null;
+		$authorization = null;
+		$operation_id  = is_string( $owner_context['operation_id'] ?? null ) ? $owner_context['operation_id'] : '';
+		$operation_ref = is_string( $owner_context['operation_ref'] ?? null ) ? $owner_context['operation_ref'] : '';
 		if ( '' !== $operation_id ) {
 			$frozen = $this->frozen_activity( $booking['id'], $operation_id );
 		}
-		if ( is_string( $owner_context['operation_ref'] ?? null ) ) {
-			$receipt = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $owner_context['operation_ref'] );
+		if ( '' !== $operation_ref ) {
+			$authorization = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_authorized', $operation_ref );
+			$receipt       = $this->activity->find_by_external_id( $booking['id'], 'marketing_operation_submitted', $operation_ref );
 			if ( '' === $operation_id && ! is_array( $frozen ) && is_array( $receipt ) ) {
 				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
+			}
+			if ( '' === $operation_id && ! is_array( $frozen ) && is_array( $authorization ) ) {
+				$frozen = $this->activity->find_by_idempotency( $booking['id'], (string) ( $authorization['payload']['data']['operation_id'] ?? '' ) . ':frozen' );
 			}
 		}
 		$receipt_operation_id = is_array( $receipt ) ? (string) ( $receipt['payload']['data']['operation_id'] ?? '' ) : '';
@@ -518,13 +576,6 @@ class BookingMarketingService {
 				return $this->stale_error();
 			}
 			$current = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
-		} elseif ( in_array( $phase, array( 'effect', 'execute' ), true ) ) {
-			$matched = $this->effect_operation( $context, $action, $owner_context['input'] );
-			if ( is_wp_error( $matched ) ) {
-				return $matched;
-			}
-			$current = $matched['operation'];
-			$frozen  = $matched['frozen'];
 		} else {
 			return new \WP_Error( 'booking_marketing_binding_missing' );
 		}
@@ -539,38 +590,39 @@ class BookingMarketingService {
 		if ( $action !== $current['action'] || $current['input'] !== $owner_input || ! hash_equals( (string) ( $data['binding_hash'] ?? '' ), $current['binding_hash'] ) ) {
 			return $this->stale_error();
 		}
-		return true;
-	}
-
-	/** Match one effect-only owner input to an exact frozen configured operation. */
-	private function effect_operation( array $context, string $action, array $owner_input ) {
-		$matches = array();
-		foreach ( $context['config']['marketing_triggers'] as $trigger ) {
-			if ( self::TRIGGER !== $trigger['event'] ) {
-				continue;
+		if ( 'submit' === $phase ) {
+			if ( ! preg_match( '/^dop_[a-f0-9]{64}$/', $operation_ref ) || ! hash_equals( $current['operation_id'], $operation_id ) ) {
+				return new \WP_Error( 'booking_marketing_owner_forbidden' );
 			}
-			foreach ( $trigger['channels'] as $channel ) {
-				if ( $action !== $channel['action'] ) {
-					continue;
-				}
-				$operation = $this->operation( $context, $trigger, $channel );
-				if ( is_wp_error( $operation ) ) {
-					continue;
-				}
-				$comparable = self::SOCIAL_ACTION === $action ? array_intersect_key( $owner_input, $operation['input'] ) : $owner_input;
-				if ( $operation['input'] !== $comparable ) {
-					continue;
-				}
-				$frozen = $this->frozen_activity( $context['booking']['id'], $operation['operation_id'] );
-				if ( is_array( $frozen ) ) {
-					$matches[] = array(
-						'operation' => $operation,
-						'frozen'    => $frozen,
-					);
-				}
+			$authorization = $this->activity->append(
+				array(
+					'booking_id'      => $booking['id'],
+					'kind'            => 'marketing_operation_authorized',
+					'actor_type'      => 'user',
+					'actor_id'        => $actor_id,
+					'channel'         => $current['channel_key'],
+					'external_id'     => $operation_ref,
+					'idempotency_key' => $operation_id . ':authorized',
+					'payload'         => $this->binding_receipt( $current ),
+				)
+			);
+			if ( is_wp_error( $authorization ) ) {
+				return new \WP_Error( 'booking_marketing_authorization_persist_failed' );
+			}
+			return is_array( $authorization )
+				&& hash_equals( $operation_ref, (string) ( $authorization['external_id'] ?? '' ) )
+				&& hash_equals( $operation_id, (string) ( $authorization['payload']['data']['operation_id'] ?? '' ) )
+				&& hash_equals( $current['binding_hash'], (string) ( $authorization['payload']['data']['binding_hash'] ?? '' ) )
+				? true
+				: new \WP_Error( 'booking_marketing_owner_forbidden' );
+		}
+		if ( in_array( $phase, array( 'effect', 'execute', 'retry' ), true ) ) {
+			$authorized_operation_id = is_array( $authorization ) ? (string) ( $authorization['payload']['data']['operation_id'] ?? '' ) : '';
+			if ( ! is_array( $authorization ) || ! hash_equals( $data['operation_id'], $authorized_operation_id ) || ! hash_equals( (string) $authorization['external_id'], $operation_ref ) ) {
+				return new \WP_Error( 'booking_marketing_owner_forbidden' );
 			}
 		}
-		return 1 === count( $matches ) ? $matches[0] : new \WP_Error( 'booking_marketing_binding_missing' );
+		return true;
 	}
 
 	/** Resolve and authorize canonical booking, event, and venue policy. */

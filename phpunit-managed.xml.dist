@@ -9,6 +9,8 @@
 	<testsuites>
 		<testsuite name="managed-wordpress">
 			<directory>tests/Unit/Core</directory>
+			<exclude>tests/Unit/Core/LocalSceneDigestSystemTaskTest.php</exclude>
+			<exclude>tests/Unit/Core/LocalSceneDigestTest.php</exclude>
 			<file>tests/Unit/Abilities/VenueQualificationTicketmasterPrecheckTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalLocationsAbilityTest.php</file>
 			<file>tests/Unit/Abilities/EventsByTermTaxonomyContextTest.php</file>

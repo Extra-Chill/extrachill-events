@@ -78,6 +78,7 @@ jobs:
         run: |
           vendor/bin/phpunit --configuration phpunit-artist-unit.xml.dist
           vendor/bin/phpunit --configuration phpunit-venue-unit.xml.dist
+          vendor/bin/phpunit --configuration phpunit-local-scene-unit.xml.dist
 
       - name: Select managed WordPress suite
         if: ${{ matrix.command == 'review test' }}

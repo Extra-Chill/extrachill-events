@@ -393,6 +393,30 @@ final class BookingMarketingTest extends TestCase {
 		$this->assertTrue( $authorized );
 	}
 
+	public function test_newsletter_execute_authorization_uses_frozen_binding_before_submit_receipt_lands(): void {
+		BookingSchema::install();
+		$booking = $this->booking();
+		$this->configure( array( $this->newsletter( 'newsletter', 'direct' ) ) );
+		$authorized = null;
+		$this->backend->on_submit = static function ( array $request, array $operation ) use ( &$authorized ): void {
+			$authorized = BookingMarketingService::authorize_newsletter_operation(
+				false,
+				$request['input']['source'],
+				array(
+					'phase'         => 'execute',
+					'action'        => BookingMarketingService::NEWSLETTER_ACTION,
+					'operation_ref' => $operation['operation_ref'],
+					'actor'         => array( 'user_id' => 12 ),
+					'input'         => $request['input'],
+				)
+			);
+		};
+
+		$this->service()->trigger( $booking['id'], 12 );
+
+		$this->assertTrue( $authorized );
+	}
+
 	public function test_generated_inputs_compose_with_concrete_owner_normalizers(): void {
 		$booking = $this->booking();
 		$this->configure( array( $this->social() ) );

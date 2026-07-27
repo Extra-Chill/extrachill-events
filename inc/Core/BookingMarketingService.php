@@ -518,7 +518,7 @@ class BookingMarketingService {
 				return $this->stale_error();
 			}
 			$current = $this->operation( $context, $resolved['trigger'], $resolved['channel'] );
-		} elseif ( 'effect' === $phase ) {
+		} elseif ( in_array( $phase, array( 'effect', 'execute' ), true ) ) {
 			$matched = $this->effect_operation( $context, $action, $owner_context['input'] );
 			if ( is_wp_error( $matched ) ) {
 				return $matched;

@@ -204,7 +204,17 @@ final class EventsByArtistAbilityTest extends TestCase {
 							'term_id'  => array( 'type' => 'integer' ),
 						),
 					),
-					'output_schema'       => array( 'type' => 'object' ),
+					'output_schema'       => array(
+						'type'       => 'object',
+						'properties' => array(
+							'taxonomy'  => array( 'type' => 'string' ),
+							'term_id'   => array( 'type' => 'integer' ),
+							'term_slug' => array( 'type' => 'string' ),
+							'found'     => array( 'type' => 'boolean' ),
+							'upcoming'  => array( 'type' => 'array' ),
+							'past'      => array( 'type' => 'array' ),
+						),
+					),
 					'execute_callback'    => static function ( array $input ): array {
 						$GLOBALS['ec_artist_test']['delegated'] = $input;
 						$term = get_term( $input['term_id'], 'artist' );
@@ -282,8 +292,24 @@ final class EventsByArtistAbilityTest extends TestCase {
 	private function setMeta( int $canonical_id, string $key, int $value ): void {
 		$GLOBALS['ec_artist_test']['meta'][1][ $canonical_id ][ $key ] = $value;
 		if ( class_exists( 'WP_UnitTestCase' ) ) {
+			global $wpdb;
 			switch_to_blog( 1 );
-			update_term_meta( $canonical_id, $key, $value );
+			$wpdb->delete(
+				$wpdb->termmeta,
+				array(
+					'term_id'  => $canonical_id,
+					'meta_key' => $key,
+				)
+			);
+			$wpdb->insert(
+				$wpdb->termmeta,
+				array(
+					'term_id'    => $canonical_id,
+					'meta_key'   => $key,
+					'meta_value' => $value,
+				)
+			);
+			wp_cache_delete( $canonical_id, 'term_meta' );
 			restore_current_blog();
 		}
 	}

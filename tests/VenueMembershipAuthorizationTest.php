@@ -852,6 +852,7 @@ require_once dirname( __DIR__ ) . '/inc/Abilities/VenueProfileAbilities.php';
 final class VenueMembershipAuthorizationTest extends TestCase {
 	private $original_wpdb;
 	private $switched_blog = false;
+	private $schema_option_callback;
 
 	private function set_current_user( int $user_id ): void {
 		if ( function_exists( 'wp_set_current_user' ) ) {
@@ -1024,14 +1025,16 @@ final class VenueMembershipAuthorizationTest extends TestCase {
 				return new WP_Error( 'unexpected_dme_update' );
 			},
 		);
-		if ( function_exists( 'update_option' ) ) {
-			update_option( BookingSchema::VERSION_OPTION, BookingSchema::SCHEMA_VERSION );
-		}
+		$this->schema_option_callback = static function () {
+			return $GLOBALS['venue_membership_test']['options'][ BookingSchema::VERSION_OPTION ] ?? false;
+		};
+		add_filter( 'pre_option_' . BookingSchema::VERSION_OPTION, $this->schema_option_callback );
 		$GLOBALS['wpdb']                  = new VenueMembershipWpdb( $this->original_wpdb );
 	}
 
 	protected function tearDown(): void {
 		$GLOBALS['wpdb'] = $this->original_wpdb;
+		remove_filter( 'pre_option_' . BookingSchema::VERSION_OPTION, $this->schema_option_callback );
 		$this->set_current_user( 0 );
 		if ( $this->switched_blog ) {
 			restore_current_blog();

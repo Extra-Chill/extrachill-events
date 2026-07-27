@@ -22,11 +22,16 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 	private int $actor_id;
 	private int $old_venue_id;
 	private int $new_venue_id;
+	private bool $switched_to_events = false;
 
 	public function set_up(): void {
 		parent::set_up();
 		if ( ! extension_loaded( 'mysqli' ) || ':memory:' === DB_NAME || false !== stripos( (string) DB_HOST, 'sqlite' ) ) {
 			$this->markTestSkipped( 'A real MySQL WordPress test runtime is required.' );
+		}
+		if ( 7 !== get_current_blog_id() ) {
+			switch_to_blog( 7 );
+			$this->switched_to_events = true;
 		}
 		if ( ! taxonomy_exists( 'venue' ) ) {
 			register_taxonomy( 'venue', 'data_machine_events', array( 'public' => false ) );
@@ -55,7 +60,7 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		}
 		$this->contender = $this->connect_second_session();
 		$this->contender->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
-		( new VenueBookingEventAbilities() )->register();
+		$this->register_booking_event_abilities();
 	}
 
 	public function tear_down(): void {
@@ -71,6 +76,10 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}datamachine_event_dates" );
 		delete_option( BookingSchema::VERSION_OPTION );
 		delete_option( BookingSchema::FAILURE_OPTION );
+		if ( $this->switched_to_events ) {
+			restore_current_blog();
+			$this->switched_to_events = false;
+		}
 		parent::tear_down();
 	}
 
@@ -156,9 +165,28 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		if ( is_multisite() ) {
 			$other_blog = self::factory()->blog->create();
 			switch_to_blog( $other_blog );
+			$this->setExpectedIncorrectUsage( 'WP_Ability::execute' );
 			$wrong_site = $ability->execute( array( 'booking_id' => $booking['id'], 'expected_version' => 1, 'changes' => array() ) );
 			restore_current_blog();
 			$this->assertWPError( $wrong_site );
+		}
+	}
+
+	/** Register only the booking event definitions under Core's required action. */
+	private function register_booking_event_abilities(): void {
+		foreach ( array( 'extrachill/convert-booking-to-event', 'extrachill/reconcile-booking-event' ) as $name ) {
+			if ( wp_has_ability( $name ) ) {
+				wp_unregister_ability( $name );
+			}
+		}
+		$registrar = new VenueBookingEventAbilities();
+		$previous  = isset( $GLOBALS['wp_filter']['wp_abilities_api_init'] ) ? clone $GLOBALS['wp_filter']['wp_abilities_api_init'] : null;
+		remove_all_actions( 'wp_abilities_api_init' );
+		add_action( 'wp_abilities_api_init', array( $registrar, 'register' ) );
+		do_action( 'wp_abilities_api_init' );
+		remove_all_actions( 'wp_abilities_api_init' );
+		if ( null !== $previous ) {
+			$GLOBALS['wp_filter']['wp_abilities_api_init'] = $previous;
 		}
 	}
 

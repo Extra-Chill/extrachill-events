@@ -215,7 +215,7 @@ jobs:
           jq -e '
             any(.context.managedRuntimeServices[]; .kind == "mysql" and .readiness == "ready")
             and any(.context.recipe.workflow.steps[].args[]; . == "database-type=mysql")
-            and any(.context.recipe.workflow.steps[].args[]; . == "multisite=true")
+            and any(.context.recipe.workflow.steps[].args[]; . == "multisite=1")
           ' "$metadata" >/dev/null
 
       - name: Upload managed proof evidence

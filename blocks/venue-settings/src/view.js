@@ -24,6 +24,7 @@ import {
  */
 import { errorDetails, runAbility } from './api';
 import PublicBookingDetails from './intake-public';
+import { BookingConsole } from './booking-console';
 import {
 	editableConfig,
 	normalizeKey,
@@ -1022,7 +1023,7 @@ function ClaimPanel( { venues, membership } ) {
 
 export function VenueSettingsApp( { context } ) {
 	const selected = context.selected_venue;
-	const [ activeTab, setActiveTab ] = useState( 'profile' );
+	const [ activeTab, setActiveTab ] = useState( 'calendar' );
 	const [ loading, setLoading ] = useState( Boolean( context.can_access ) );
 	const [ loadErrors, setLoadErrors ] = useState( {} );
 	const [ profile, setProfile ] = useState( null );
@@ -1118,7 +1119,9 @@ export function VenueSettingsApp( { context } ) {
 		try {
 			const result = await runAbility(
 				'extrachill/get-venue-booking-config',
-				{ venue_term_id: selected.id }
+				{
+					venue_term_id: selected.id,
+				}
 			);
 			if ( currentRequest !== configRequestId.current ) {
 				return;
@@ -1252,6 +1255,8 @@ export function VenueSettingsApp( { context } ) {
 	};
 
 	const tabs = [
+		{ id: 'calendar', label: 'Calendar' },
+		{ id: 'bookings', label: 'Bookings' },
 		{ id: 'profile', label: 'Profile' },
 		{ id: 'booking', label: 'Booking' },
 		{ id: 'intake', label: 'Intake' },
@@ -1261,6 +1266,16 @@ export function VenueSettingsApp( { context } ) {
 			: [] ),
 	];
 	const renderPanel = ( tab ) => {
+		if ( tab === 'calendar' || tab === 'bookings' ) {
+			return (
+				<BookingConsole
+					key={ `${ selected.id }-${ tab }` }
+					context={ context }
+					members={ members }
+					view={ tab }
+				/>
+			);
+		}
 		if ( tab === 'profile' ) {
 			if ( loadErrors.profile ) {
 				return (
@@ -1426,8 +1441,8 @@ export function VenueSettingsApp( { context } ) {
 	return (
 		<BlockShell className="ec-venue-settings__shell">
 			<BlockShellHeader
-				title="Venue settings"
-				description="Profile, booking defaults, access, and onboarding in one venue-scoped workspace."
+				title="Manage venue"
+				description="Calendar, booking operations, profile, defaults, access, and onboarding in one venue-scoped workspace."
 			/>
 			<BlockShellInner>
 				{ context.venues.length > 0 && (

@@ -10,7 +10,23 @@
 
 define( 'ABSPATH', __DIR__ . '/' );
 
-final class WP_Error {}
+final class WP_Error {
+	private string $code;
+	private string $message;
+
+	public function __construct( $code = '', $message = '' ) {
+		$this->code    = (string) $code;
+		$this->message = (string) $message;
+	}
+
+	public function get_error_code(): string {
+		return $this->code;
+	}
+
+	public function get_error_message(): string {
+		return $this->message;
+	}
+}
 
 final class WP_Term {
 	public int $term_id = 1524;
@@ -23,10 +39,23 @@ $GLOBALS['ec_network_block_test'] = array(
 	'blog_id'    => 1,
 	'stack'      => array(),
 	'registered' => array(),
+	'network_plugins' => array(
+		'extrachill-network/extrachill-network.php',
+		'extrachill-api/extrachill-api.php',
+	),
 );
 
 function add_action( $hook, $callback ): void {
 	$GLOBALS['ec_network_block_test']['actions'][ $hook ][] = $callback;
+}
+
+function register_activation_hook( $file, $callback ): void {
+	unset( $file );
+	$GLOBALS['ec_network_block_test']['activation_callback'] = $callback;
+}
+
+function is_plugin_active_for_network( $plugin ): bool {
+	return in_array( $plugin, $GLOBALS['ec_network_block_test']['network_plugins'], true );
 }
 
 function register_block_type( $path ) {
@@ -48,6 +77,10 @@ function get_current_blog_id(): int {
 
 function is_multisite(): bool {
 	return true;
+}
+
+function ec_is_events_site(): bool {
+	return 7 === get_current_blog_id();
 }
 
 function get_site( $blog_id ) {
@@ -146,6 +179,10 @@ function is_user_logged_in(): bool {
 	return false;
 }
 
+function nocache_headers(): void {
+	$GLOBALS['ec_network_block_test']['nocache_headers'] = ( $GLOBALS['ec_network_block_test']['nocache_headers'] ?? 0 ) + 1;
+}
+
 function ec_enqueue_turnstile_script(): void {
 	$GLOBALS['ec_network_block_test']['turnstile_enqueued'] = true;
 }
@@ -172,4 +209,17 @@ function wp_kses_post( $value ): string {
 
 function esc_html_e( $value ): void {
 	echo htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' );
+}
+
+function esc_html( $value ): string {
+	return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' );
+}
+
+function esc_html__( $value ): string {
+	return esc_html( $value );
+}
+
+function wp_die( $message, $title = '', $args = array() ): void {
+	unset( $title, $args );
+	throw new RuntimeException( (string) $message );
 }

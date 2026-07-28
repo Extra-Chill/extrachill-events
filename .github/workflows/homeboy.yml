@@ -98,6 +98,19 @@ jobs:
         if: ${{ matrix.command == 'review test' }}
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      - name: Set up Node.js
+        if: ${{ matrix.command == 'review test' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build block assets for tests
+        if: ${{ matrix.command == 'review test' }}
+        run: |
+          npm ci
+          npm run build
+
       - name: Run isolated unit tests
         if: ${{ matrix.command == 'review test' }}
         run: |

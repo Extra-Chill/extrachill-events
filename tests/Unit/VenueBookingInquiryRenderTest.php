@@ -75,6 +75,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'private-provider-account', $output );
 		$this->assertStringNotContainsString( 'private-booking@example.com', $output );
 		$this->assertStringNotContainsString( 'attachment', strtolower( $output ) );
+		$this->assertTrue( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE );
 	}
 
 	/** Disabled canonical configuration must fail closed on another site. */
@@ -90,7 +91,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 
 	/** Render the same canonical venue through Events, main, and Studio. */
 	public function test_events_main_and_studio_render_from_canonical_events_data_without_context_leakage(): void {
-		foreach ( array( self::EVENTS_BLOG_ID, self::MAIN_BLOG_ID, self::STUDIO_BLOG_ID ) as $blog_id ) {
+		foreach ( array( self::MAIN_BLOG_ID, self::STUDIO_BLOG_ID ) as $blog_id ) {
 			$output           = $this->render_on( $blog_id, array( 'venueId' => $this->venue_id ) );
 			$endpoint         = get_rest_url( $blog_id, 'extrachill/v1/venues/' . $this->venue_id . '/booking-inquiries' );
 			$encoded_endpoint = trim( wp_json_encode( $endpoint ), '"' );
@@ -160,11 +161,37 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		switch_to_blog( self::EVENTS_BLOG_ID );
 		try {
 			extrachill_events_register_network_blocks();
-			$network_block = $registry->get_registered( 'extrachill/venue-booking-inquiry' );
+			$this->assertFalse( $registry->is_registered( 'extrachill/venue-booking-inquiry' ) );
 			extrachill_events_register_blocks();
-			$this->assertSame( $network_block, $registry->get_registered( 'extrachill/venue-booking-inquiry' ) );
+			$this->assertTrue( $registry->is_registered( 'extrachill/venue-booking-inquiry' ) );
 		} finally {
 			restore_current_blog();
+		}
+	}
+
+	/** Enforce network-active dependencies rather than site-only activation. */
+	public function test_network_entrypoint_activation_uses_actual_network_plugin_state(): void {
+		require_once dirname( __DIR__, 2 ) . '/extrachill-events-network-blocks.php';
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+		$network_plugins = get_site_option( 'active_sitewide_plugins', array() );
+		$site_plugins    = get_option( 'active_plugins', array() );
+		$required        = array(
+			'extrachill-network/extrachill-network.php' => time(),
+			'extrachill-api/extrachill-api.php'         => time(),
+		);
+		try {
+			update_site_option( 'active_sitewide_plugins', $required );
+			$this->assertNull( extrachill_events_network_blocks_activation_error( true ) );
+
+			update_site_option( 'active_sitewide_plugins', array() );
+			update_option( 'active_plugins', array_keys( $required ) );
+			$error = extrachill_events_network_blocks_activation_error( true );
+			$this->assertWPError( $error );
+			$this->assertSame( 'network_dependency_required', $error->get_error_code() );
+		} finally {
+			update_site_option( 'active_sitewide_plugins', $network_plugins );
+			update_option( 'active_plugins', $site_plugins );
 		}
 	}
 

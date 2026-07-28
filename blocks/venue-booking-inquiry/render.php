@@ -80,12 +80,10 @@ if ( ! is_array( $canonical ) ) {
 $booking_config = $canonical['booking_config'];
 $instance       = function_exists( 'wp_unique_id' ) ? wp_unique_id( 'ec-booking-' ) : 'ec-booking-' . $venue_id;
 $logged_in      = is_user_logged_in();
-if ( $logged_in ) {
-	if ( ! defined( 'DONOTCACHEPAGE' ) ) {
-		define( 'DONOTCACHEPAGE', true );
-	}
-	nocache_headers();
+if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+	define( 'DONOTCACHEPAGE', true );
 }
+nocache_headers();
 if ( function_exists( 'ec_enqueue_turnstile_script' ) ) {
 	ec_enqueue_turnstile_script();
 }

@@ -153,7 +153,7 @@ class BookingActivityRepository {
 			return new \WP_Error( 'invalid_booking_activity_kinds', __( 'At least one valid activity kind is required.', 'extrachill-events' ) );
 		}
 		foreach ( $kinds as $kind ) {
-			if ( ! is_string( $kind ) || '' === $kind || $kind !== sanitize_key( $kind ) || strlen( $kind ) > 64 ) {
+			if ( ! is_string( $kind ) || '' === $kind || sanitize_key( $kind ) !== $kind || strlen( $kind ) > 64 ) {
 				return new \WP_Error( 'invalid_booking_activity_kinds', __( 'Activity kinds must be canonical keys.', 'extrachill-events' ) );
 			}
 		}
@@ -163,7 +163,7 @@ class BookingActivityRepository {
 		$offset       = max( 0, $offset );
 		$placeholders = implode( ', ', array_fill( 0, count( $kinds ), '%s' ) );
 		$values       = array_merge( array( $booking_id ), $kinds, array( $limit, $offset ) );
-		$rows         = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND kind IN ({$placeholders}) ORDER BY occurred_at DESC, id DESC LIMIT %d OFFSET %d", $values ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Table and placeholder count are internal; every value is prepared.
+		$rows         = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE booking_id = %d AND kind IN ({$placeholders}) ORDER BY occurred_at DESC, id DESC LIMIT %d OFFSET %d", $values ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Table and placeholder count are internal; every value is prepared.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'booking_activity_list_failed', __( 'Booking activity could not be listed.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
 		}

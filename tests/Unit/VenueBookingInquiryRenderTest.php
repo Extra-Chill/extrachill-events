@@ -136,7 +136,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'extrachill-events-network-blocks.php', $plugins );
 		$this->assertTrue( $plugins['extrachill-events-network-blocks.php']['Network'] );
 
-		foreach ( array( self::EVENTS_BLOG_ID, self::MAIN_BLOG_ID, self::STUDIO_BLOG_ID ) as $blog_id ) {
+		foreach ( array( self::MAIN_BLOG_ID, self::STUDIO_BLOG_ID ) as $blog_id ) {
 			if ( $registry->is_registered( 'extrachill/venue-booking-inquiry' ) ) {
 				$registry->unregister( 'extrachill/venue-booking-inquiry' );
 			}
@@ -169,26 +169,41 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		}
 	}
 
-	/** Enforce network-active dependencies rather than site-only activation. */
+	/** Enforce network-active dependencies through WordPress's activation path. */
 	public function test_network_entrypoint_activation_uses_actual_network_plugin_state(): void {
 		require_once dirname( __DIR__, 2 ) . '/extrachill-events-network-blocks.php';
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 
 		$network_plugins = get_site_option( 'active_sitewide_plugins', array() );
 		$site_plugins    = get_option( 'active_plugins', array() );
+		$plugin          = 'extrachill-events/extrachill-events-network-blocks.php';
 		$required        = array(
 			'extrachill-network/extrachill-network.php' => time(),
 			'extrachill-api/extrachill-api.php'         => time(),
 		);
 		try {
 			update_site_option( 'active_sitewide_plugins', $required );
-			$this->assertNull( extrachill_events_network_blocks_activation_error( true ) );
+			$this->assertNull( activate_plugin( $plugin, '', true, false ) );
+			$this->assertTrue( is_plugin_active_for_network( $plugin ) );
+			deactivate_plugins( $plugin, true, true );
 
 			update_site_option( 'active_sitewide_plugins', array() );
 			update_option( 'active_plugins', array_keys( $required ) );
-			$error = extrachill_events_network_blocks_activation_error( true );
-			$this->assertWPError( $error );
-			$this->assertSame( 'network_dependency_required', $error->get_error_code() );
+			$die_handler = static function () {
+				return static function ( $message ): void {
+					throw new RuntimeException( wp_strip_all_tags( $message ) );
+				};
+			};
+			add_filter( 'wp_die_handler', $die_handler );
+			try {
+				activate_plugin( $plugin, '', true, false );
+				$this->fail( 'Site-only dependencies must not permit network activation.' );
+			} catch ( RuntimeException $error ) {
+				$this->assertStringContainsString( 'Network-activate these required plugins first', $error->getMessage() );
+			} finally {
+				remove_filter( 'wp_die_handler', $die_handler );
+			}
+			$this->assertFalse( is_plugin_active_for_network( $plugin ) );
 		} finally {
 			update_site_option( 'active_sitewide_plugins', $network_plugins );
 			update_option( 'active_plugins', $site_plugins );

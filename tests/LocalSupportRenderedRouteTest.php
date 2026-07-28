@@ -116,6 +116,35 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 		$this->assertSame( 'manager@example.com', $organizer_model['interests'][0]['contact']['email'] );
 	}
 
+	/** Prove a valid request-A form cannot grant consent to a request-B interest row. */
+	public function test_consent_grant_requires_exact_rendered_interest_id(): void {
+		$request_a  = $this->open_request( 900, 'open-request-a' );
+		$interest_a = $this->service->express_interest( $request_a['id'], 202, 'interest-request-a', 20 );
+		$request_b  = $this->repository->create_request( array( 'event_id' => 901, 'venue_term_id' => 56, 'organizer_type' => 'venue', 'organizer_id' => 56, 'actor_id' => 12 ) );
+		$interest_b = $this->repository->create_interest( $request_b['id'], 202, 20 );
+		$declined_b = $this->repository->update_interest( $interest_b['id'], 1, array( 'status' => 'declined' ) );
+		$workspace  = $this->workspace( true );
+
+		$this->authorization->organizer_allowed = false;
+		$model = $workspace->read( $request_a['id'], 202, 20 );
+		$html  = $this->render( 'extrachill_events_render_local_support_artist', $model );
+		$grant = array_merge(
+			$this->form_values( $html, 'Share selected contact' ),
+			array(
+				'interest_id'  => $interest_b['id'],
+				'expected_version' => $declined_b['version'],
+				'fields'       => array( 'email' ),
+				'contact_email' => 'must-not-share@example.com',
+			)
+		);
+		$this->assertSame( 'nonce-extrachill_events_local_support', $grant['_wpnonce'] );
+
+		$denied = extrachill_events_process_local_support_action( $grant, 20, $workspace );
+		$this->assertSame( 'local_support_forbidden', $denied->get_error_code() );
+		$this->assertNull( $this->repository->get_interest( $interest_a['id'] )['contact'] );
+		$this->assertNull( $this->repository->get_interest( $interest_b['id'] )['contact'] );
+	}
+
 	/**
 	 * Prove existing ownership preserves revoke access after eligibility changes.
 	 *
@@ -170,8 +199,8 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 		$this->assertStringContainsString( 'role="status"', $conflict );
 	}
 
-	private function open_request(): array {
-		return $this->service->open_request( array( 'event_id' => 900, 'organizer_type' => 'venue', 'organizer_id' => 55, 'idempotency_key' => 'open-render' ), 12 );
+	private function open_request( int $event_id = 900, string $key = 'open-render' ): array {
+		return $this->service->open_request( array( 'event_id' => $event_id, 'organizer_type' => 'venue', 'organizer_id' => 55, 'idempotency_key' => $key ), 12 );
 	}
 
 	private function workspace( bool $eligible ): LocalSupportWorkspace {

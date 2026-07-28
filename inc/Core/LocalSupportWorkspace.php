@@ -157,10 +157,11 @@ class LocalSupportWorkspace {
 			case 'interest_status':
 				return $this->service->transition_interest( absint( $input['interest_id'] ?? 0 ), sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id );
 			case 'consent':
+				$submitted_interest_id = absint( $input['interest_id'] ?? 0 );
 				if ( ! empty( $input['granted'] ) ) {
 					$workspace = $this->read( $request_id, $artist_id, $user_id );
 					$interest  = is_array( $workspace ) ? ( $workspace['interest'] ?? null ) : null;
-					if ( ! is_array( $workspace ) || empty( $workspace['eligible'] ) || ! is_array( $interest ) || ! in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true ) ) {
+					if ( ! is_array( $workspace ) || empty( $workspace['eligible'] ) || ! is_array( $interest ) || (int) $interest['id'] !== $submitted_interest_id || ! in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true ) ) {
 						return $this->denied();
 					}
 				}
@@ -170,7 +171,7 @@ class LocalSupportWorkspace {
 					'email' => sanitize_email( (string) ( $input['contact_email'] ?? '' ) ),
 					'phone' => sanitize_text_field( (string) ( $input['contact_phone'] ?? '' ) ),
 				);
-				return $this->service->set_contact_consent( absint( $input['interest_id'] ?? 0 ), ! empty( $input['granted'] ), $contact, $fields, absint( $input['expected_version'] ?? 0 ), $key, $user_id );
+				return $this->service->set_contact_consent( $submitted_interest_id, ! empty( $input['granted'] ), $contact, $fields, absint( $input['expected_version'] ?? 0 ), $key, $user_id );
 		}
 		return new \WP_Error( 'local_support_action_invalid', __( 'That local support action is not available.', 'extrachill-events' ), array( 'status' => 400 ) );
 	}

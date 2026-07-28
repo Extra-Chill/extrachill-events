@@ -291,7 +291,33 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$this->assertTrue( $both_blocked, 'A service contender bypassed the held booking lock.' );
 		$this->assertTrue( $released, 'The fixture booking lock could not be released.' );
 		$this->assertSame( array( true, true ), $statuses, 'A service contender did not exit cleanly.' );
+		$this->contender = $this->connect_race_owner_session();
 		return $results;
+	}
+
+	/** Replace the fixture session closed by forked mysqli shutdown. */
+	private function connect_race_owner_session(): mysqli {
+		$host = (string) ( getenv( 'DB_HOST' ) ?: DB_HOST );
+		$port = (int) getenv( 'DB_PORT' );
+		if ( 0 === $port && 1 === preg_match( '/^(.+):(\d+)$/', $host, $match ) ) {
+			$host = $match[1];
+			$port = (int) $match[2];
+		}
+		$connection = mysqli_init();
+		$this->assertTrue(
+			mysqli_real_connect(
+				$connection,
+				$host,
+				(string) ( getenv( 'DB_USER' ) ?: DB_USER ),
+				(string) ( getenv( 'DB_PASSWORD' ) ?: DB_PASSWORD ),
+				(string) ( getenv( 'DB_NAME' ) ?: DB_NAME ),
+				$port > 0 ? $port : 3306
+			),
+			(string) mysqli_connect_error()
+		);
+		$connection->set_charset( 'utf8mb4' );
+		$connection->query( 'SET SESSION innodb_lock_wait_timeout = 1' );
+		return $connection;
 	}
 
 	/** Fork one independent WordPress service process and persist its bounded result. */

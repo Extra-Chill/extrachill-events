@@ -1417,6 +1417,7 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 			setSelected( null );
 			setCommunications( [] );
 			setOperations( null );
+			setDetailLoading( false );
 			return;
 		}
 		setDetailLoading( true );
@@ -1488,6 +1489,7 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 		++detailRequestId.current;
 		setSelectedId( 0 );
 		setSelected( null );
+		setDetailLoading( false );
 		const url = new URL( window.location.href );
 		url.searchParams.delete( 'booking_id' );
 		window.history.replaceState( {}, '', url );
@@ -1597,6 +1599,15 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 			{ detailLoading && (
 				<Panel>
 					<p aria-live="polite">Loading booking detail...</p>
+					{ selectedId > 0 && (
+						<button
+							type="button"
+							className="button-2"
+							onClick={ closeDetail }
+						>
+							Close detail
+						</button>
+					) }
 				</Panel>
 			) }
 			{ selected && operations && ! detailLoading && (

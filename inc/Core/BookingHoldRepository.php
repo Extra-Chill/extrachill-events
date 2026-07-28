@@ -166,10 +166,11 @@ class BookingHoldRepository {
 	/**
 	 * Read booking activity and event state while exact venue authority is locked.
 	 *
-	 * @param int $booking_id Booking ID.
-	 * @param int $actor_id   Acting user ID.
+	 * @param int   $booking_id     Booking ID.
+	 * @param int   $actor_id       Acting user ID.
+	 * @param array $activity_kinds Activity kinds allowed in the result.
 	 */
-	public function get_booking_activity_authorized( int $booking_id, int $actor_id ) {
+	public function get_booking_activity_authorized( int $booking_id, int $actor_id, array $activity_kinds ) {
 		$booking = $this->bookings->get( $booking_id );
 		if ( ! is_array( $booking ) ) {
 			return is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) );
@@ -190,7 +191,7 @@ class BookingHoldRepository {
 			return $this->rollback( new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to perform this venue action.', 'extrachill-events' ), array( 'status' => 403 ) ) );
 		}
 
-		$activity   = $this->activity->list_for_booking( $booking_id, 200 );
+		$activity   = $this->activity->list_for_booking_kinds( $booking_id, $activity_kinds, 200 );
 		$conversion = $this->activity->event_conversion_state( $booking_id, $current['public_id'] );
 		$sync       = $this->activity->event_sync_state( $booking_id );
 		foreach ( array( $activity, $conversion, $sync ) as $result ) {

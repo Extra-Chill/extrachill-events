@@ -864,6 +864,57 @@ describe( 'venue settings authorization-facing states', () => {
 		await act( async () => root.unmount() );
 	} );
 
+	it( 'clears detail loading when an in-flight booking is closed', async () => {
+		const pending = deferred();
+		const first = { ...booking( 23 ), artist_name: 'Loaded Artist' };
+		const second = { ...booking( 24 ), artist_name: 'Pending Artist' };
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return input.booking_id === 23
+					? Promise.resolve( first )
+					: pending.promise;
+			}
+			if ( request.path.includes( 'list-venue-bookings' ) ) {
+				return Promise.resolve( [ first, second ] );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp( context() );
+		await act( async () =>
+			buttonContaining( container, 'Loaded Artist' ).click()
+		);
+		expect( container.textContent ).toContain( 'Booking #23' );
+		await act( async () =>
+			buttonContaining( container, 'Pending Artist' ).click()
+		);
+		expect( container.textContent ).toContain(
+			'Loading booking detail...'
+		);
+		await act( async () =>
+			buttonByText( container, 'Close detail' ).click()
+		);
+		expect( container.textContent ).not.toContain(
+			'Loading booking detail...'
+		);
+		expect( container.textContent ).not.toContain( 'Booking #23' );
+		await act( async () => {
+			pending.resolve( second );
+			await pending.promise;
+		} );
+		expect( container.textContent ).not.toContain( 'Booking #24' );
+		await act( async () => root.unmount() );
+	} );
+
 	it( 'refreshes the current selection after an earlier booking mutation resolves', async () => {
 		const mutation = deferred();
 		const detailIds = [];

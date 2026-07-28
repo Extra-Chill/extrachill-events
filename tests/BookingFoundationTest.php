@@ -1225,6 +1225,15 @@ final class BookingFoundationTest extends BookingTestCase {
 				'external_id' => 'excluded-private-reference',
 			)
 		);
+		for ( $excluded = 0; $excluded < 205; ++$excluded ) {
+			( new BookingActivityRepository() )->append(
+				array(
+					'booking_id' => $booking['id'],
+					'kind'       => 'settlement_finalized',
+					'external_id' => 'excluded-settlement-' . $excluded,
+				)
+			);
+		}
 		$activity = call_user_func( $registered['extrachill/get-venue-booking-activity']['execute_callback'], array( 'booking_id' => $booking['id'] ) );
 		$this->assertCount( 1, $activity['activity'] );
 		$this->assertSame( 'inquiry_submitted', $activity['activity'][0]['kind'] );

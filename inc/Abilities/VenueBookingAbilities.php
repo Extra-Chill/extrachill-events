@@ -376,14 +376,13 @@ class VenueBookingAbilities {
 	 * @param array $input Ability input.
 	 */
 	public function get_booking_activity( array $input ) {
-		$state = $this->holds->get_booking_activity_authorized( absint( $input['booking_id'] ?? 0 ), get_current_user_id() );
+		$state = $this->holds->get_booking_activity_authorized( absint( $input['booking_id'] ?? 0 ), get_current_user_id(), self::CORE_ACTIVITY_KINDS );
 		if ( ! is_array( $state ) ) {
 			return $state;
 		}
-		$activity = array_values( array_filter( $state['activity'], static fn( array $item ): bool => in_array( $item['kind'], self::CORE_ACTIVITY_KINDS, true ) ) );
 
 		return array(
-			'activity'   => array_map( array( $this, 'present_activity' ), $activity ),
+			'activity'   => array_map( array( $this, 'present_activity' ), $state['activity'] ),
 			'conversion' => array(
 				'status'       => $state['conversion']['status'],
 				'attempt'      => (int) $state['conversion']['attempt'],

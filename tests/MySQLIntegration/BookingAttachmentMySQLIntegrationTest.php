@@ -203,7 +203,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	 *
 	 * @var mysqli
 	 */
-	private $contender;
+	protected $contender;
 	/** Probe provider injected into the production service.
 	 *
 	 * @var BookingAttachmentMySQLProbeProvider
@@ -360,7 +360,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	}
 
 	/** Prove concurrent installers serialize on the exact site-scoped schema lock. */
-	public function test_concurrent_booking_schema_installer_waits_and_converges(): void {
+	protected function prove_concurrent_booking_schema_installer_waits_and_converges(): void {
 		global $wpdb;
 		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The installer concurrency proof requires pcntl_fork().' );
 		$lock_name = 'ec_booking_schema_' . substr( hash( 'sha256', (string) DB_NAME . "\0" . $wpdb->prefix ), 0, 40 );
@@ -463,7 +463,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	}
 
 	/** Prove a resolution racing finalization cannot alter the frozen snapshot. */
-	public function test_resolution_and_finalization_race_freezes_one_consistent_winner(): void {
+	protected function prove_resolution_and_finalization_race_freezes_one_consistent_winner(): void {
 		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The resolution race proof requires pcntl_fork().' );
 		$event_id       = self::factory()->post->create(
 			array(
@@ -571,7 +571,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 
 	/** Prove a lost mid-import commit acknowledgement replays without duplicates. */
 	public function test_csv_mid_loop_commit_uncertain_replay_converges_exactly(): void {
-		global $wpdb, $table_prefix;
+		global $wpdb;
 		$event_id           = self::factory()->post->create(
 			array(
 				'post_type'   => defined( 'DATA_MACHINE_EVENTS_POST_TYPE' ) ? DATA_MACHINE_EVENTS_POST_TYPE : 'data_machine_events',
@@ -621,7 +621,8 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 		$service   = new TicketSettlementCSVReplayProbeService( $bookings, $activity, null, null, $reconciliation );
 		$original  = $wpdb;
 		$uncertain = new BookingCommitUncertainWpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
-		$uncertain->set_prefix( $table_prefix );
+		$uncertain->set_prefix( $original->base_prefix );
+		$uncertain->set_blog_id( $original->blogid, $original->siteid );
 		$wpdb = $uncertain;
 		try {
 			$input   = array(
@@ -916,7 +917,7 @@ class BookingAttachmentMySQLIntegrationTest extends WP_UnitTestCase {
 	}
 
 	/** Build valid immutable evidence for an ability execution. */
-	private function settlement_report_input( int $booking_id, string $external_id, int $source_id ): array {
+	protected function settlement_report_input( int $booking_id, string $external_id, int $source_id ): array {
 		return array(
 			'booking_id'         => $booking_id,
 			'ticket_source_id'   => $source_id,

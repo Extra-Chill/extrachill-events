@@ -168,8 +168,8 @@ jobs:
           WP_TESTS_PHPUNIT_POLYFILLS_PATH: ${{ github.workspace }}/vendor/yoast/phpunit-polyfills
         run: |
           set -euo pipefail
-          vendor/bin/phpunit -c phpunit-booking-concurrency.xml.dist --filter test_concurrent_exact_inquiry_retry_reuses_one_complete_winner | tee "$RUNNER_TEMP/booking-admission-concurrency.txt"
-          grep -E 'OK \(1 test, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/booking-admission-concurrency.txt"
+          vendor/bin/phpunit -c phpunit-booking-concurrency.xml.dist --filter 'test_concurrent_booking_schema_installer_waits_and_converges|test_resolution_and_finalization_race_freezes_one_consistent_winner|test_concurrent_exact_inquiry_retry_reuses_one_complete_winner' | tee "$RUNNER_TEMP/booking-admission-concurrency.txt"
+          grep -E 'OK \(3 tests, [1-9][0-9]* assertions?\)' "$RUNNER_TEMP/booking-admission-concurrency.txt"
           if grep -Eiq 'skip|no tests executed|OK, but' "$RUNNER_TEMP/booking-admission-concurrency.txt"; then
             exit 1
           fi
@@ -191,7 +191,7 @@ jobs:
             | ($runs | length) == 1
               and $runs[0].exitCode == 0
               and $runs[0].result.status == "ok"
-              and ($runs[0].stdout | test("OK \\(9 tests, [1-9][0-9]* assertions?\\)"))
+              and ($runs[0].stdout | test("OK \\(7 tests, [1-9][0-9]* assertions?\\)"))
               and (($runs[0].stdout | test("skip|no tests executed|OK, but"; "i")) | not)
           ' "$commands" >/dev/null
           jq -e '
@@ -200,7 +200,7 @@ jobs:
           ' "$metadata" >/dev/null
           jq -rs '[.[] | select(.command == "wordpress.phpunit")][0].stdout' "$commands" > "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
           printf '%s\n' "Verified application-level MySQL proof:"
-          grep -E 'OK \(9 tests, [1-9][0-9]* assertions?\)' "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
+          grep -E 'OK \(7 tests, [1-9][0-9]* assertions?\)' "$ARTIFACTS_DIR/booking-attachment-mysql-phpunit.txt"
 
       - name: Upload WP Codebox evidence
         if: always()

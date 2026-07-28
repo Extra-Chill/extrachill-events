@@ -171,8 +171,11 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 
 	/** Enforce network-active dependencies through WordPress's activation path. */
 	public function test_network_entrypoint_activation_uses_actual_network_plugin_state(): void {
-		require_once dirname( __DIR__, 2 ) . '/extrachill-events-network-blocks.php';
+		$plugin_file = dirname( __DIR__, 2 ) . '/extrachill-events-network-blocks.php';
+		require_once $plugin_file;
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		// WP_UnitTestCase resets hooks between tests after require_once has loaded the entrypoint.
+		register_activation_hook( $plugin_file, 'extrachill_events_activate_network_blocks' );
 
 		$network_plugins = get_site_option( 'active_sitewide_plugins', array() );
 		$site_plugins    = get_option( 'active_plugins', array() );

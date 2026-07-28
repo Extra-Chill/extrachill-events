@@ -38,16 +38,25 @@ class LocalSupportWorkspace {
 	private $service;
 
 	/**
+	 * Optional candidate resolver used by deterministic integration tests.
+	 *
+	 * @var callable|null
+	 */
+	private $candidate_resolver;
+
+	/**
 	 * Construct the private workspace adapter.
 	 *
 	 * @param LocalSupportRepository|null    $repository Persistence implementation.
 	 * @param LocalSupportAuthorization|null $authorization Authorization policy.
 	 * @param LocalSupportService|null       $service Domain service.
+	 * @param callable|null                  $candidate_resolver Candidate resolver override.
 	 */
-	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null, ?LocalSupportService $service = null ) {
-		$this->repository    = $repository ? $repository : new LocalSupportRepository();
-		$this->authorization = $authorization ? $authorization : new LocalSupportAuthorization();
-		$this->service       = $service ? $service : new LocalSupportService( $this->repository, $this->authorization );
+	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null, ?LocalSupportService $service = null, ?callable $candidate_resolver = null ) {
+		$this->repository         = $repository ? $repository : new LocalSupportRepository();
+		$this->authorization      = $authorization ? $authorization : new LocalSupportAuthorization();
+		$this->service            = $service ? $service : new LocalSupportService( $this->repository, $this->authorization );
+		$this->candidate_resolver = $candidate_resolver;
 	}
 
 	/**
@@ -93,13 +102,18 @@ class LocalSupportWorkspace {
 		if ( true !== $this->authorization->authorize_artist( $artist_term_id, $user_id ) ) {
 			return $this->denied();
 		}
-		$candidate = $this->eligible_candidate( $request, $artist_term_id, $user_id );
-		if ( is_wp_error( $candidate ) ) {
-			return $candidate;
-		}
 		$interest = $this->repository->get_interest_for_artist( $request_id, $artist_term_id );
 		if ( is_wp_error( $interest ) ) {
 			return $interest;
+		}
+		$candidate = $this->eligible_candidate( $request, $artist_term_id, $user_id );
+		$eligible  = ! is_wp_error( $candidate );
+		if ( ! $eligible && ! is_array( $interest ) ) {
+			return $candidate;
+		}
+		if ( ! $eligible ) {
+			$candidate                   = $this->interest_card( $interest )['artist'];
+			$candidate['artist_term_id'] = $artist_term_id;
 		}
 		return array(
 			'role'      => 'artist',
@@ -107,6 +121,7 @@ class LocalSupportWorkspace {
 			'event'     => $this->event_card( $request ),
 			'artist'    => $candidate,
 			'interest'  => $interest,
+			'eligible'  => $eligible,
 			'interests' => array(),
 		);
 	}
@@ -142,6 +157,13 @@ class LocalSupportWorkspace {
 			case 'interest_status':
 				return $this->service->transition_interest( absint( $input['interest_id'] ?? 0 ), sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id );
 			case 'consent':
+				if ( ! empty( $input['granted'] ) ) {
+					$workspace = $this->read( $request_id, $artist_id, $user_id );
+					$interest  = is_array( $workspace ) ? ( $workspace['interest'] ?? null ) : null;
+					if ( ! is_array( $workspace ) || empty( $workspace['eligible'] ) || ! is_array( $interest ) || ! in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true ) ) {
+						return $this->denied();
+					}
+				}
 				$fields  = array_values( array_intersect( array( 'name', 'email', 'phone' ), array_map( 'sanitize_key', (array) ( $input['fields'] ?? array() ) ) ) );
 				$contact = array(
 					'name'  => sanitize_text_field( (string) ( $input['contact_name'] ?? '' ) ),
@@ -200,6 +222,10 @@ class LocalSupportWorkspace {
 	 * @return array Public candidate cards.
 	 */
 	private function eligible_candidates( array $request, int $user_id ): array {
+		if ( $this->candidate_resolver ) {
+			$candidates = call_user_func( $this->candidate_resolver, $request, $user_id );
+			return is_array( $candidates ) ? $candidates : array();
+		}
 		$locations = wp_get_object_terms( (int) $request['event_id'], 'location', array( 'fields' => 'ids' ) );
 		$location  = 1 === count( (array) $locations ) ? get_term( (int) reset( $locations ), 'location' ) : null;
 		$ability   = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'extrachill/artist-query-local-support-candidates' ) : null;

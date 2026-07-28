@@ -25,7 +25,9 @@ function extrachill_events_local_support_workspace_url( $url, array $request, in
 	unset( $url, $recipient_id );
 	return get_home_url( (int) ec_get_blog_id( 'events' ), '/local-support/' . absint( $request['id'] ) . '/' );
 }
-add_filter( 'extrachill_events_local_support_workspace_url', 'extrachill_events_local_support_workspace_url', 10, 3 );
+if ( ! defined( 'EXTRACHILL_EVENTS_LOCAL_SUPPORT_SKIP_HOOKS' ) ) {
+	add_filter( 'extrachill_events_local_support_workspace_url', 'extrachill_events_local_support_workspace_url', 10, 3 );
+}
 
 /** Process nonce-protected forms before any template output. */
 function extrachill_events_handle_local_support_action(): void {
@@ -41,8 +43,7 @@ function extrachill_events_handle_local_support_action(): void {
 		wp_die( esc_html__( 'This local support action expired. Refresh and try again.', 'extrachill-events' ), 403 );
 	}
 	$input  = map_deep( wp_unslash( $_POST ), 'sanitize_text_field' );
-	$action = sanitize_key( (string) ( $input['local_support_action'] ?? '' ) );
-	$result = ( new LocalSupportWorkspace() )->act( $action, $input, get_current_user_id() );
+	$result = extrachill_events_process_local_support_action( $input, get_current_user_id() );
 	$id     = is_array( $result ) ? absint( $result['request_id'] ?? $result['id'] ?? $input['request_id'] ?? 0 ) : absint( $input['request_id'] ?? 0 );
 	$query  = array( 'notice' => is_wp_error( $result ) ? ( 'local_support_version_conflict' === $result->get_error_code() ? 'conflict' : 'error' ) : 'updated' );
 	if ( ! empty( $input['artist_term_id'] ) ) {
@@ -52,6 +53,20 @@ function extrachill_events_handle_local_support_action(): void {
 	exit;
 }
 add_action( 'template_redirect', 'extrachill_events_handle_local_support_action', 1 );
+
+/**
+ * Process sanitized workspace input through the canonical domain adapter.
+ *
+ * @param array                      $input Sanitized form input.
+ * @param int                        $user_id Acting user ID.
+ * @param LocalSupportWorkspace|null $workspace Optional deterministic test adapter.
+ * @return array|WP_Error Updated record or error.
+ */
+function extrachill_events_process_local_support_action( array $input, int $user_id, ?LocalSupportWorkspace $workspace = null ) {
+	$action    = sanitize_key( (string) ( $input['local_support_action'] ?? '' ) );
+	$workspace = $workspace ? $workspace : new LocalSupportWorkspace();
+	return $workspace->act( $action, $input, $user_id );
+}
 
 /**
  * Add an organizer-only contextual action without exposing request state.
@@ -132,7 +147,7 @@ function extrachill_events_render_local_support_workspace(): void {
 	$model = ( new LocalSupportWorkspace() )->read( $request_id, $artist_id, get_current_user_id() );
 	if ( is_wp_error( $model ) ) {
 		status_header( in_array( $model->get_error_code(), array( 'local_support_forbidden', 'local_support_not_found' ), true ) ? 404 : 503 );
-		echo '<section class="ec-local-support ec-block-shell" role="alert"><h1>' . esc_html__( 'Workspace unavailable', 'extrachill-events' ) . '</h1><p>' . esc_html__( 'This request is unavailable or you no longer have access.', 'extrachill-events' ) . '</p></section>';
+		extrachill_events_render_local_support_unavailable();
 		return;
 	}
 	?>
@@ -150,6 +165,11 @@ function extrachill_events_render_local_support_workspace(): void {
 		?>
 	</section>
 	<?php
+}
+
+/** Render the shared non-enumerating unauthorized/not-found state. */
+function extrachill_events_render_local_support_unavailable(): void {
+	echo '<section class="ec-local-support ec-block-shell" role="alert"><h1>' . esc_html__( 'Workspace unavailable', 'extrachill-events' ) . '</h1><p>' . esc_html__( 'This request is unavailable or you no longer have access.', 'extrachill-events' ) . '</p></section>';
 }
 
 /**
@@ -277,6 +297,7 @@ function extrachill_events_render_local_support_artist( array $model ): void {
 	$request  = $model['request'];
 	$interest = $model['interest'];
 	$user     = wp_get_current_user();
+	$active   = $interest && in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true );
 	?>
 	<div class="ec-local-support__section"><h2><?php echo esc_html( $model['artist']['name'] ); ?></h2>
 		<?php
@@ -292,13 +313,13 @@ function extrachill_events_render_local_support_artist( array $model ): void {
 			?>
 			<p><?php /* translators: %s is the artist's interest status. */ printf( esc_html__( 'Your response is currently %s.', 'extrachill-events' ), esc_html( $interest['status'] ) ); ?></p>
 			<?php
-			if ( in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true ) ) {
-						extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'withdrawn', __( 'Withdraw interest', 'extrachill-events' ), (int) $model['artist']['artist_term_id'] ); }
+			if ( ! empty( $model['eligible'] ) && $active ) {
+				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'withdrawn', __( 'Withdraw interest', 'extrachill-events' ), (int) $model['artist']['artist_term_id'] ); }
 			?>
 <?php endif; ?>
 	</div>
 	<?php
-	if ( $interest && in_array( $interest['status'], array( 'interested', 'shortlisted', 'selected' ), true ) ) :
+	if ( $interest && ( is_array( $interest['contact'] ?? null ) || ( ! empty( $model['eligible'] ) && $active ) ) ) :
 		?>
 		<div class="ec-local-support__section"><h2><?php esc_html_e( 'Contact sharing', 'extrachill-events' ); ?></h2><p><?php esc_html_e( "Contact sharing is separate from interest. Preview and choose the exact fields this request's organizer may see. You can revoke access at any time.", 'extrachill-events' ); ?></p>
 		<?php

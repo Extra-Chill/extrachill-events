@@ -1159,6 +1159,7 @@ final class BookingFoundationTest extends BookingTestCase {
 				'extrachill/create-booking-inquiry',
 				'extrachill/list-venue-bookings',
 				'extrachill/get-venue-booking',
+				'extrachill/get-venue-booking-activity',
 				'extrachill/assign-venue-booking',
 				'extrachill/transition-venue-booking',
 				'extrachill/bind-venue-booking-artist',
@@ -1172,6 +1173,7 @@ final class BookingFoundationTest extends BookingTestCase {
 			$this->assertTrue( $registered[ $reconciling_ability ]['meta']['annotations']['idempotent'] );
 			$this->assertFalse( $registered[ $reconciling_ability ]['meta']['annotations']['destructive'] );
 		}
+		$this->assertTrue( $registered['extrachill/get-venue-booking-activity']['meta']['annotations']['readonly'] );
 		foreach ( $registered as $definition ) {
 			$this->assertFalse( $definition['input_schema']['additionalProperties'] );
 			$this->assertFalse( $definition['output_schema']['additionalProperties'] ?? false );
@@ -1203,7 +1205,18 @@ final class BookingFoundationTest extends BookingTestCase {
 		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $stored['id'] ]['contact_email'] = 'changed@example.com';
 		$this->assertSame( $receipt, call_user_func( $registered['extrachill/create-booking-inquiry']['execute_callback'], $receipt_input ) );
 
-		$booking = $this->create_booking();
+		$booking  = $this->create_booking();
+		( new BookingActivityRepository() )->append(
+			array(
+				'booking_id' => $booking['id'],
+				'kind'       => 'booking_submitted',
+			)
+		);
+		$activity = call_user_func( $registered['extrachill/get-venue-booking-activity']['execute_callback'], array( 'booking_id' => $booking['id'] ) );
+		$this->assertSame( 'booking_submitted', $activity['activity'][0]['kind'] );
+		$this->assertArrayNotHasKey( 'payload', $activity['activity'][0] );
+		$this->assertSame( 'none', $activity['conversion']['status'] );
+		$this->assertSame( 'none', $activity['sync']['status'] );
 		$presented = $abilities->present(
 			array_merge(
 				$booking,

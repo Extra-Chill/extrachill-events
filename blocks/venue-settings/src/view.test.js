@@ -129,6 +129,28 @@ const booking = ( id, venueId = 44 ) => ( {
 	created_at: '2026-07-20 12:00:00',
 	updated_at: '2026-07-20 12:00:00',
 } );
+const bookingActivity = ( overrides = {} ) => ( {
+	activity: [
+		{
+			id: 31,
+			kind: 'booking_submitted',
+			actor_type: 'user',
+			actor_id: 7,
+			direction: null,
+			channel: null,
+			external_id: null,
+			occurred_at: '2026-07-20 12:00:00',
+		},
+	],
+	conversion: {
+		status: 'none',
+		attempt: 0,
+		failure_code: null,
+		retryable: false,
+	},
+	sync: { status: 'none', code: null, retryable: false },
+	...overrides,
+} );
 const context = ( overrides = {} ) => ( {
 	user: { id: 7, name: 'Operator', is_admin: false },
 	venues: [ { id: 44, name: 'Venue 44', status: 'active', is_owner: false } ],
@@ -161,6 +183,9 @@ const installApi = () =>
 		}
 		if ( request.path.includes( 'get-venue-booking-config' ) ) {
 			return Promise.resolve( config( input.venue_term_id ) );
+		}
+		if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+			return Promise.resolve( bookingActivity() );
 		}
 		if (
 			request.path.includes( 'list-venue-memberships' ) ||
@@ -199,6 +224,16 @@ const setInput = async ( input, value ) => {
 			'value'
 		).set.call( input, value );
 		input.dispatchEvent( new Event( 'input', { bubbles: true } ) );
+	} );
+};
+
+const setControl = async ( control, value ) => {
+	await act( async () => {
+		Object.getOwnPropertyDescriptor(
+			control.constructor.prototype,
+			'value'
+		).set.call( control, value );
+		control.dispatchEvent( new Event( 'input', { bubbles: true } ) );
 	} );
 };
 
@@ -489,6 +524,9 @@ describe( 'venue settings authorization-facing states', () => {
 			if ( request.path.includes( 'get-venue-booking-config' ) ) {
 				return Promise.resolve( config( input.venue_term_id ) );
 			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
 			if ( request.path.includes( 'get-venue-booking' ) ) {
 				return Promise.resolve( booking( input.booking_id ) );
 			}
@@ -505,6 +543,7 @@ describe( 'venue settings authorization-facing states', () => {
 			context( { booking_id: 9 } )
 		);
 		expect( container.textContent ).toContain( 'Booking #9' );
+		expect( container.textContent ).toContain( 'Booking Submitted' );
 		await act( async () => {
 			const select = container.querySelector( '#booking-assignee' );
 			select.value = '7';
@@ -524,6 +563,161 @@ describe( 'venue settings authorization-facing states', () => {
 					request.data.input.assignee_user_id === 7
 			)
 		).toBe( true );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'sends complete canonical deal and production documents at the expected version', async () => {
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return Promise.resolve( {
+					...booking( input.booking_id ),
+					status: 'negotiating',
+				} );
+			}
+			if (
+				request.path.includes( 'update-venue-booking-deal' ) ||
+				request.path.includes( 'update-venue-booking-production' )
+			) {
+				return Promise.resolve( {
+					...booking( input.booking_id ),
+					version: 5,
+				} );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( { booking_id: 12 } )
+		);
+		await setControl(
+			container.querySelector( '#booking-deal-guarantee' ),
+			'125000'
+		);
+		await act( async () => {
+			buttonByText( container, 'Save deal terms' ).click();
+			await Promise.resolve();
+			await Promise.resolve();
+		} );
+		await setControl(
+			container.querySelector( '#booking-production-notes' ),
+			'House provides backline.'
+		);
+		await act( async () => {
+			buttonByText( container, 'Save production details' ).click();
+			await Promise.resolve();
+			await Promise.resolve();
+		} );
+		const dealRequest = apiFetch.mock.calls.find( ( [ request ] ) =>
+			request.path.includes( 'update-venue-booking-deal' )
+		)[ 0 ];
+		const productionRequest = apiFetch.mock.calls.find( ( [ request ] ) =>
+			request.path.includes( 'update-venue-booking-production' )
+		)[ 0 ];
+		expect( dealRequest.data.input ).toMatchObject( {
+			booking_id: 12,
+			expected_version: 4,
+			deal: { version: 1, guarantee_cents: 125000 },
+		} );
+		expect( Object.keys( dealRequest.data.input.deal ) ).toHaveLength( 13 );
+		expect( productionRequest.data.input ).toEqual( {
+			booking_id: 12,
+			expected_version: 4,
+			production: {
+				version: 1,
+				support_requirements: [],
+				support_offers: [],
+				production_notes: 'House provides backline.',
+			},
+		} );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'reloads the booking and reports a stale deal conflict', async () => {
+		let detailReads = 0;
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				detailReads += 1;
+				return Promise.resolve( {
+					...booking( input.booking_id ),
+					status: 'negotiating',
+				} );
+			}
+			if ( request.path.includes( 'update-venue-booking-deal' ) ) {
+				return Promise.reject( {
+					code: 'booking_version_conflict',
+					message: 'The booking changed since it was read.',
+					data: { status: 409 },
+				} );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( { booking_id: 14 } )
+		);
+		await act( async () => {
+			buttonByText( container, 'Save deal terms' ).click();
+			await Promise.resolve();
+			await Promise.resolve();
+		} );
+		expect( container.textContent ).toContain(
+			'The latest booking has been reloaded.'
+		);
+		expect( detailReads ).toBeGreaterThan( 1 );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'renders conversion failure and retry state from authoritative activity', async () => {
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve(
+					bookingActivity( {
+						conversion: {
+							status: 'failed',
+							attempt: 2,
+							failure_code: 'upstream_timeout',
+							retryable: true,
+						},
+					} )
+				);
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return Promise.resolve( booking( input.booking_id ) );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( { booking_id: 13 } )
+		);
+		expect( container.textContent ).toContain(
+			'Conversion attempt 2 failed (upstream_timeout). Retry is available.'
+		);
+		expect( container.textContent ).toContain( 'Retry event conversion' );
 		await act( async () => root.unmount() );
 	} );
 } );

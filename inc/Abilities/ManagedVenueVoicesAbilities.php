@@ -45,6 +45,7 @@ class ManagedVenueVoicesAbilities {
 					'type'                 => 'object',
 					'properties'           => array(),
 					'additionalProperties' => false,
+					'default'              => array(),
 				),
 				'output_schema'       => array(
 					'type'                 => 'object',

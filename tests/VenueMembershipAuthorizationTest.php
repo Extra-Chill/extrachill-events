@@ -1960,6 +1960,7 @@ final class VenueMembershipAuthorizationTest extends BookingTestCase {
 		$this->assertTrue( $ability['meta']['show_in_rest'] );
 		$this->assertTrue( $ability['meta']['annotations']['readonly'] );
 		$this->assertFalse( $ability['input_schema']['additionalProperties'] );
+		$this->assertSame( array(), $ability['input_schema']['default'] );
 		$this->assertSame(
 			array(
 				'reference'   => 'venue:55',

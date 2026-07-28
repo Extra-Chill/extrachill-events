@@ -65,8 +65,10 @@ Non-zero door gross requires at least one active booking attachment admitted as
 attachment under the same existing private policy. The service uses the existing
 opaque download handoff, streams and hashes every byte, checks exact byte size,
 and binds attachment public ID, request hash, content hash, size, MIME, and
-purpose. It authenticates bytes before draft calculation, finalization, and
-payment, then rechecks the exact metadata under the financial transaction lock.
+purpose. Exact booking and actor authorization always precede private stream
+issuance or delivery audit. The service authenticates bytes before draft
+calculation, finalization, and payment, then rechecks the exact metadata under
+the financial transaction lock.
 
 Historical reads compare the frozen metadata rather than rerunning current MIME
 or filename admission policy, so later policy changes do not invalidate valid
@@ -77,18 +79,37 @@ data, bank or tax identity, payment secrets, or database diagnostics.
 
 ## Authorization And Concurrency
 
-Every ability and every service method requires the existing
-`manage_finances` action. That action already combines the booking finance
-capability/feature gate with active owner membership for the exact venue. There
-is no administrator bypass and no speculative artist or venue role matrix.
-Cross-venue reads and writes fail closed.
+Every venue operation requires the existing `manage_finances` action. That
+action already combines the booking finance capability/feature gate with active
+owner membership for the exact venue. Direct counterparty acknowledgement is
+the sole exception and uses the existing canonical artist-manager authority.
+There is no administrator bypass. Cross-venue reads and writes fail closed.
 
 Transactions use the existing lock order: exact venue membership, booking,
-revision, then lifecycle rows. Exact retries return the prior authenticated
+commission, revision, then lifecycle rows. The exact commission row, integrity
+hash, currency, and non-void status are reloaded under that transaction and on
+every revision verification. Exact retries return the prior authenticated
 result. Reusing an idempotency key with changed input conflicts. Concurrent
-finalize, revise, dispute, correction, payment, and void transitions serialize
-through row locks plus unique revision/version keys. Payment additionally
-revalidates the booking as `completed` while its row is locked.
+commission void versus revision creation, finalization, or payment and all show
+lifecycle transitions serialize through row locks plus unique revision/version
+keys. Payment additionally revalidates the booking as `completed` while its row
+is locked.
+
+## Acknowledgement Attribution
+
+An `acknowledged` action never treats a venue operator's statement as direct
+counterparty assent. `counterparty_verified` is accepted only from a currently
+authorized manager of the canonical artist term/profile bound to the booking;
+the server records that authenticated user and canonical artist IDs in the
+immutable action. `venue_recorded` remains a venue-finance operation and
+requires authenticated immutable private evidence of the acknowledgement. It
+records the same canonical counterparty IDs but leaves the attesting user null.
+
+Clients cannot submit names, email addresses, account details, tax identity, or
+arbitrary counterparty IDs. Artist authority revocation blocks new direct
+attestations. Later disputes and correction revisions preserve the original
+attribution and evidence rather than rewriting it. Ability projections redact
+evidence hashes and storage metadata.
 
 ## Abilities
 

@@ -11,6 +11,7 @@ namespace ExtraChillEvents\Abilities;
 // phpcs:disable Generic.Commenting.DocComment.MissingShort,Squiz.Commenting.FunctionComment.Missing,Squiz.Commenting.VariableComment.Missing,WordPress.WP.I18n.NonSingularStringLiteralText
 
 use ExtraChillEvents\Core\BookingRepository;
+use ExtraChillEvents\Core\LocalSupportAuthorization;
 use ExtraChillEvents\Core\ShowSettlementService;
 use ExtraChillEvents\Core\VenueAuthorization;
 
@@ -27,11 +28,14 @@ class ShowSettlementAbilities {
 	private $bookings;
 	/** @var VenueAuthorization */
 	private $authorization;
+	/** @var LocalSupportAuthorization */
+	private $artist_authorization;
 
-	public function __construct( ?ShowSettlementService $service = null, ?BookingRepository $bookings = null, ?VenueAuthorization $authorization = null ) {
-		$this->bookings      = $bookings ? $bookings : new BookingRepository();
-		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
-		$this->service       = $service ? $service : new ShowSettlementService( $this->bookings, null, $this->authorization );
+	public function __construct( ?ShowSettlementService $service = null, ?BookingRepository $bookings = null, ?VenueAuthorization $authorization = null, ?LocalSupportAuthorization $artist_authorization = null ) {
+		$this->bookings             = $bookings ? $bookings : new BookingRepository();
+		$this->authorization        = $authorization ? $authorization : new VenueAuthorization();
+		$this->artist_authorization = $artist_authorization ? $artist_authorization : new LocalSupportAuthorization( $this->authorization );
+		$this->service              = $service ? $service : new ShowSettlementService( $this->bookings, null, $this->authorization, null, null, null, $this->artist_authorization );
 		if ( ! self::$registered ) {
 			add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
 			self::$registered = true;
@@ -44,14 +48,14 @@ class ShowSettlementAbilities {
 		$this->register_ability( 'extrachill/read-booking-show-settlement', 'Read Booking Show Settlement', $this->read_input(), 'read', true, true );
 		$this->register_ability( 'extrachill/revise-booking-show-settlement', 'Revise Booking Show Settlement', $this->revision_input( true ), 'revise', false, true );
 		$this->register_ability( 'extrachill/finalize-booking-show-settlement', 'Finalize Booking Show Settlement', $this->transition_input(), 'finalize', false, true );
-		$this->register_ability( 'extrachill/acknowledge-booking-show-settlement', 'Acknowledge Booking Show Settlement', $this->transition_input( 'note', false ), 'acknowledge', false, true );
+		$this->register_ability( 'extrachill/acknowledge-booking-show-settlement', 'Acknowledge Booking Show Settlement', $this->acknowledgement_input(), 'acknowledge', false, true, 'can_acknowledge' );
 		$this->register_ability( 'extrachill/dispute-booking-show-settlement', 'Dispute Booking Show Settlement', $this->transition_input( 'reason' ), 'dispute', false, true );
 		$this->register_ability( 'extrachill/correct-booking-show-settlement', 'Correct Booking Show Settlement', $this->revision_input( true, true ), 'correct', false, true );
 		$this->register_ability( 'extrachill/mark-booking-artist-payout-paid', 'Mark Booking Artist Payout Paid', $this->payment_input(), 'mark_paid', false, true );
 		$this->register_ability( 'extrachill/void-booking-show-settlement', 'Void Booking Show Settlement', $this->transition_input( 'reason' ), 'void_settlement', false, true );
 	}
 
-	private function register_ability( string $name, string $label, array $input, string $execute, bool $is_readonly, bool $idempotent ): void {
+	private function register_ability( string $name, string $label, array $input, string $execute, bool $is_readonly, bool $idempotent, string $permission = 'can_manage' ): void {
 		wp_register_ability(
 			$name,
 			array(
@@ -61,7 +65,7 @@ class ShowSettlementAbilities {
 				'input_schema'        => $input,
 				'output_schema'       => $this->output_schema(),
 				'execute_callback'    => array( $this, $execute ),
-				'permission_callback' => array( $this, 'can_manage' ),
+				'permission_callback' => array( $this, $permission ),
 				'meta'                => array(
 					'show_in_rest' => true,
 					'annotations'  => array(
@@ -115,6 +119,19 @@ class ShowSettlementAbilities {
 		return is_array( $booking )
 			? $this->authorization->authorize( get_current_user_id(), $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES )
 			: new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to manage this venue settlement.', 'extrachill-events' ), array( 'status' => 403 ) );
+	}
+
+	public function can_acknowledge( array $input ) {
+		$booking = $this->bookings->get( absint( $input['booking_id'] ?? 0 ) );
+		if ( ! is_array( $booking ) ) {
+			return new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to acknowledge this settlement.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
+		if ( 'counterparty_verified' === ( $input['acknowledgement_type'] ?? '' ) && null !== $booking['artist_term_id'] ) {
+			return $this->artist_authorization->authorize_artist( $booking['artist_term_id'], get_current_user_id() );
+		}
+		return 'venue_recorded' === ( $input['acknowledgement_type'] ?? '' )
+			? $this->authorization->authorize( get_current_user_id(), $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES )
+			: new \WP_Error( 'venue_action_forbidden', __( 'You are not authorized to acknowledge this settlement.', 'extrachill-events' ), array( 'status' => 403 ) );
 	}
 
 	private function revision_input( bool $replacement, bool $correction = false ): array {
@@ -232,6 +249,18 @@ class ShowSettlementAbilities {
 			'required'             => $required_fields,
 			'additionalProperties' => false,
 		);
+	}
+
+	private function acknowledgement_input(): array {
+		$schema                                       = $this->transition_input( 'note', false );
+		$schema['properties']['acknowledgement_type'] = array(
+			'type' => 'string',
+			'enum' => array( 'counterparty_verified', 'venue_recorded' ),
+		);
+		$schema['properties']['acknowledgement_evidence_attachment_ids'] = $this->ids( 20, false );
+		$schema['required'][] = 'acknowledgement_type';
+		$schema['required'][] = 'acknowledgement_evidence_attachment_ids';
+		return $schema;
 	}
 
 	private function payment_input(): array {

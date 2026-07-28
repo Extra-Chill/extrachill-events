@@ -24,9 +24,13 @@ require_once __DIR__ . '/Support/BookingTestHarness.php';
 /** Supplies authenticated in-memory bytes through the existing service contract. */
 final class ShowSettlementAttachmentService extends BookingAttachmentService {
 	/** @var array<int,string> */
-	public $bytes = array();
+	public $bytes       = array();
+	public $descriptors = 0;
+	public $streams     = 0;
+	public $deliveries  = 0;
 
 	public function download_descriptor( int $booking_id, int $attachment_id, ?int $actor_id = null ) {
+		++$this->descriptors;
 		unset( $booking_id, $actor_id );
 		return array(
 			'stream_token'   => 'stream-' . $attachment_id,
@@ -35,6 +39,7 @@ final class ShowSettlementAttachmentService extends BookingAttachmentService {
 	}
 
 	public function open_download_stream( int $booking_id, int $attachment_id, string $stream_token, int $actor_id, string $correlation_id ) {
+		++$this->streams;
 		unset( $booking_id, $stream_token, $actor_id, $correlation_id );
 		$stream = fopen( 'php://temp', 'w+b' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- In-memory test evidence stream.
 		fwrite( $stream, $this->bytes[ $attachment_id ] ?? '' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- In-memory test evidence stream.
@@ -43,8 +48,19 @@ final class ShowSettlementAttachmentService extends BookingAttachmentService {
 	}
 
 	public function record_delivery_outcome( int $booking_id, int $attachment_id, string $correlation_id, string $outcome, int $bytes_sent, int $actor_id ) {
+		++$this->deliveries;
 		unset( $booking_id, $attachment_id, $correlation_id, $outcome, $bytes_sent, $actor_id );
 		return true;
+	}
+}
+
+/** Simulate bounded booking lock read failures after successful preflight. */
+final class ShowSettlementLockFailureRepository extends BookingRepository {
+	public $lock_result;
+
+	public function get_for_update( int $id, bool $include_reservations = false ) {
+		unset( $id, $include_reservations );
+		return $this->lock_result;
 	}
 }
 
@@ -63,16 +79,23 @@ final class ShowSettlementTest extends BookingTestCase {
 	private $reconciliation;
 
 	protected function setUp(): void {
-		$GLOBALS['ec_artist_test'] = array(
-			'blog_id'       => 7,
-			'stack'         => array(),
-			'uuid'          => 0,
-			'options'       => array( BookingSchema::VERSION_OPTION => BookingSchema::SCHEMA_VERSION ),
-			'dbdelta'       => array(),
-			'abilities'     => array(),
-			'actions'       => array(),
-			'cache_deletes' => array(),
-			'terms'         => array(
+		$GLOBALS['ec_artist_test']                                      = array(
+			'blog_id'         => 7,
+			'stack'           => array(),
+			'uuid'            => 0,
+			'options'         => array( BookingSchema::VERSION_OPTION => BookingSchema::SCHEMA_VERSION ),
+			'dbdelta'         => array(),
+			'abilities'       => array(),
+			'actions'         => array(),
+			'cache_deletes'   => array(),
+			'terms'           => array(
+				1 => array(
+					77 => (object) array(
+						'term_id'  => 77,
+						'taxonomy' => 'artist',
+						'name'     => 'Settlement Artist',
+					),
+				),
 				7 => array(
 					55 => (object) array(
 						'term_id'  => 55,
@@ -81,8 +104,16 @@ final class ShowSettlementTest extends BookingTestCase {
 					),
 				),
 			),
-			'meta'          => array(),
-			'posts'         => array(
+			'meta'            => array(),
+			'posts'           => array(
+				4 => array(
+					444 => (object) array(
+						'ID'          => 444,
+						'post_type'   => 'artist_profile',
+						'post_status' => 'publish',
+						'post_title'  => 'Settlement Artist',
+					),
+				),
 				7 => array(
 					900 => (object) array(
 						'ID'          => 900,
@@ -91,16 +122,18 @@ final class ShowSettlementTest extends BookingTestCase {
 					),
 				),
 			),
-			'post_meta'     => array(),
+			'post_meta'       => array( 4 => array( 444 => array( '_artist_term_id' => 77 ) ) ),
+			'artist_managers' => array( 444 => array( 21 => true ) ),
 		);
-		$GLOBALS['wpdb']           = new BookingWpdb();
-		$this->bookings            = new BookingRepository();
-		$this->authorization       = new BookingTestAuthorization();
-		$activity                  = new BookingActivityRepository();
-		$this->reconciliation      = new TicketReconciliationService( $this->bookings, $activity, $this->authorization );
-		$this->commissions         = new TicketSettlementService( $this->bookings, $activity, $this->authorization, null, $this->reconciliation );
-		$this->files               = new ShowSettlementAttachmentService();
-		$this->service             = new ShowSettlementService( $this->bookings, $activity, $this->authorization, $this->commissions, new BookingAttachmentRepository(), $this->files );
+		$GLOBALS['ec_artist_test']['meta'][1][77]['_artist_profile_id'] = 444;
+		$GLOBALS['wpdb']      = new BookingWpdb();
+		$this->bookings       = new BookingRepository();
+		$this->authorization  = new BookingTestAuthorization();
+		$activity             = new BookingActivityRepository();
+		$this->reconciliation = new TicketReconciliationService( $this->bookings, $activity, $this->authorization );
+		$this->commissions    = new TicketSettlementService( $this->bookings, $activity, $this->authorization, null, $this->reconciliation );
+		$this->files          = new ShowSettlementAttachmentService();
+		$this->service        = new ShowSettlementService( $this->bookings, $activity, $this->authorization, $this->commissions, new BookingAttachmentRepository(), $this->files );
 	}
 
 	public function test_formula_separates_artist_payout_and_extra_chill_share(): void {
@@ -175,10 +208,16 @@ final class ShowSettlementTest extends BookingTestCase {
 		$finalized = $this->service->finalize( $this->transition( $booking['id'], $draft, 'finalize-one' ), 12 );
 		$this->assertSame( 'finalized', $finalized['status'] );
 		$this->assertSame( 2, $finalized['version'] );
-		$ack          = $this->transition( $booking['id'], $finalized, 'ack-one' );
-		$ack['note']  = 'Artist representative approved the statement.';
-		$acknowledged = $this->service->acknowledge( $ack, 12 );
+		$ack                         = $this->transition( $booking['id'], $finalized, 'ack-one' );
+		$ack['note']                 = 'Artist representative approved the statement.';
+		$ack['acknowledgement_type'] = 'venue_recorded';
+		$ack['acknowledgement_evidence_attachment_ids'] = array( $this->attachment( $booking['id'], 'signed acknowledgement' ) );
+		$acknowledged                                   = $this->service->acknowledge( $ack, 12 );
 		$this->assertSame( 'acknowledged', $acknowledged['status'] );
+		$this->assertSame( 'venue_recorded', $acknowledged['actions'][1]['payload']['acknowledgement_type'] );
+		$this->assertNull( $acknowledged['actions'][1]['payload']['attested_by_user_id'] );
+		$this->assertSame( 77, $acknowledged['actions'][1]['payload']['counterparty']['artist_term_id'] );
+		$this->assertArrayNotHasKey( 'content_hash', $acknowledged['actions'][1]['payload']['evidence'][0] );
 		$dispute           = $this->transition( $booking['id'], $acknowledged, 'dispute-one' );
 		$dispute['reason'] = 'Door count requires correction.';
 		$disputed          = $this->service->dispute( $dispute, 12 );
@@ -193,7 +232,10 @@ final class ShowSettlementTest extends BookingTestCase {
 		$corrected                                = $this->service->correct( $correction, 12 );
 		$this->assertSame( 2, $corrected['revision'] );
 		$this->assertSame( $draft['id'], $corrected['corrects_revision_id'] );
-		$this->assertSame( 'corrected', $this->service->get( $booking['id'], 12, 1 )['status'] );
+		$prior = $this->service->get( $booking['id'], 12, 1 );
+		$this->assertSame( 'corrected', $prior['status'] );
+		$this->assertSame( 'venue_recorded', $prior['actions'][1]['payload']['acknowledgement_type'], 'Dispute and correction preserve acknowledgement attribution.' );
+		$this->assertSame( 77, $prior['actions'][1]['payload']['counterparty']['artist_term_id'] );
 		$this->assertSame( 'draft', $corrected['status'] );
 		$this->assertSame( $draft['calculation']['extra_chill_share_minor'], $corrected['calculation']['extra_chill_share_minor'] );
 
@@ -236,6 +278,106 @@ final class ShowSettlementTest extends BookingTestCase {
 		$this->assertSame( 'venue_action_forbidden', $this->service->get( $booking['id'], 12 )->get_error_code() );
 	}
 
+	public function test_void_commission_blocks_revision_creation_finalization_and_payment(): void {
+		$create     = $this->booking_with_commission();
+		$commission = $this->commissions->get( $create['id'], 12 );
+		$this->void_commission( $create, $commission );
+		$this->assertSame( 'show_settlement_commission_invalid', $this->service->draft( $this->draft_input( $create['id'], $commission['id'], 'void-create-blocked' ), 12 )->get_error_code() );
+
+		$finalize   = $this->booking_with_commission();
+		$commission = $this->commissions->get( $finalize['id'], 12 );
+		$draft      = $this->service->draft( $this->draft_input( $finalize['id'], $commission['id'], 'void-finalize-draft' ), 12 );
+		$this->void_commission( $finalize, $commission );
+		$this->assertSame( 'show_settlement_commission_invalid', $this->service->finalize( $this->transition( $finalize['id'], $draft, 'void-finalize-blocked' ), 12 )->get_error_code() );
+
+		$payment                = $this->booking_with_commission();
+		$commission             = $this->commissions->get( $payment['id'], 12 );
+		$draft                  = $this->service->draft( $this->draft_input( $payment['id'], $commission['id'], 'void-payment-draft' ), 12 );
+		$finalized              = $this->service->finalize( $this->transition( $payment['id'], $draft, 'void-payment-finalize' ), 12 );
+		$booking_row            =& $GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $payment['id'] ];
+		$booking_row['status']  = 'completed';
+		$booking_row['version'] = $booking_row['version'] + 1;
+		$payment['version']     = $booking_row['version'];
+		$this->void_commission( $payment, $commission );
+		$input = array_merge(
+			$this->transition( $payment['id'], $finalized, 'void-payment-blocked' ),
+			array(
+				'payment_reference'              => 'blocked',
+				'payment_date'                   => '2026-07-28',
+				'payout_evidence_attachment_ids' => array( $this->attachment( $payment['id'], 'blocked payout' ) ),
+			)
+		);
+		$this->assertSame( 'show_settlement_commission_invalid', $this->service->mark_paid( $input, 12 )->get_error_code() );
+	}
+
+	public function test_acknowledgement_attribution_rejects_spoofing_and_revoked_authority(): void {
+		$booking    = $this->booking_with_commission();
+		$commission = $this->commissions->get( $booking['id'], 12 );
+		$draft      = $this->service->draft( $this->draft_input( $booking['id'], $commission['id'], 'attestation-draft' ), 12 );
+		$finalized  = $this->service->finalize( $this->transition( $booking['id'], $draft, 'attestation-finalize' ), 12 );
+		$verified   = array_merge(
+			$this->transition( $booking['id'], $finalized, 'attestation-verified' ),
+			array(
+				'acknowledgement_type'                    => 'counterparty_verified',
+				'acknowledgement_evidence_attachment_ids' => array(),
+				'note'                                    => 'Artist manager accepts the statement.',
+			)
+		);
+		$this->assertSame( 'local_support_forbidden', $this->service->acknowledge( $verified, 12 )->get_error_code(), 'A venue operator cannot spoof direct counterparty attestation.' );
+		$acknowledged = $this->service->acknowledge( $verified, 21 );
+		$this->assertSame( 'acknowledged', $acknowledged['status'] );
+		$this->assertSame( 21, $acknowledged['actions'][1]['payload']['attested_by_user_id'] );
+		$this->assertSame( 444, $acknowledged['actions'][1]['payload']['counterparty']['artist_profile_id'] );
+
+		$second     = $this->booking_with_commission();
+		$commission = $this->commissions->get( $second['id'], 12 );
+		$draft      = $this->service->draft( $this->draft_input( $second['id'], $commission['id'], 'revoked-draft' ), 12 );
+		$finalized  = $this->service->finalize( $this->transition( $second['id'], $draft, 'revoked-finalize' ), 12 );
+		unset( $GLOBALS['ec_artist_test']['artist_managers'][444][21] );
+		$revoked = array_merge(
+			$this->transition( $second['id'], $finalized, 'revoked-attestation' ),
+			array(
+				'acknowledgement_type'                    => 'counterparty_verified',
+				'acknowledgement_evidence_attachment_ids' => array(),
+			)
+		);
+		$this->assertSame( 'local_support_forbidden', $this->service->acknowledge( $revoked, 21 )->get_error_code() );
+	}
+
+	public function test_payment_denial_does_not_consume_private_evidence(): void {
+		$booking       = $this->booking_with_commission();
+		$commission    = $this->commissions->get( $booking['id'], 12 );
+		$draft         = $this->service->draft( $this->draft_input( $booking['id'], $commission['id'], 'denied-payment-draft' ), 12 );
+		$finalized     = $this->service->finalize( $this->transition( $booking['id'], $draft, 'denied-payment-finalize' ), 12 );
+		$payment       = array_merge(
+			$this->transition( $booking['id'], $finalized, 'denied-payment' ),
+			array(
+				'payment_reference'              => 'private',
+				'payment_date'                   => '2026-07-28',
+				'payout_evidence_attachment_ids' => array( $this->attachment( $booking['id'], 'private payout' ) ),
+			)
+		);
+		$before        = array( $this->files->descriptors, $this->files->streams, $this->files->deliveries );
+		$delivery_rows = count( $GLOBALS['wpdb']->rows[ BookingSchema::attachment_deliveries_table() ] ?? array() );
+		$this->assertSame( 'venue_action_forbidden', $this->service->mark_paid( $payment, 99 )->get_error_code() );
+		$this->assertSame( $before, array( $this->files->descriptors, $this->files->streams, $this->files->deliveries ) );
+		$this->assertCount( $delivery_rows, $GLOBALS['wpdb']->rows[ BookingSchema::attachment_deliveries_table() ] ?? array() );
+	}
+
+	public function test_action_booking_lock_failures_rollback_without_indexing_invalid_results(): void {
+		$booking                 = $this->booking_with_commission();
+		$commission              = $this->commissions->get( $booking['id'], 12 );
+		$draft                   = $this->service->draft( $this->draft_input( $booking['id'], $commission['id'], 'lock-failure-draft' ), 12 );
+		$repository              = new ShowSettlementLockFailureRepository();
+		$service                 = new ShowSettlementService( $repository, new BookingActivityRepository(), $this->authorization, $this->commissions, new BookingAttachmentRepository(), $this->files );
+		$repository->lock_result = new WP_Error( 'booking_read_failed' );
+		$error                   = $service->finalize( $this->transition( $booking['id'], $draft, 'lock-error' ), 12 );
+		$this->assertSame( 'show_settlement_booking_lock_failed', $error->get_error_code() );
+		$this->assertSame( array( 'status' => 503 ), $error->get_error_data() );
+		$repository->lock_result = null;
+		$this->assertSame( 'booking_not_found', $service->finalize( $this->transition( $booking['id'], $draft, 'lock-missing' ), 12 )->get_error_code() );
+	}
+
 	public function test_abilities_are_private_bounded_and_do_not_accept_account_identity(): void {
 		$abilities = new ShowSettlementAbilities( $this->service, $this->bookings, $this->authorization );
 		$abilities->register();
@@ -253,9 +395,11 @@ final class ShowSettlementTest extends BookingTestCase {
 	private function booking_with_commission(): array {
 		$booking = $this->bookings->create(
 			array(
-				'venue_term_id' => 55,
-				'artist_name'   => 'Settlement Artist',
-				'intake'        => array(),
+				'venue_term_id'     => 55,
+				'artist_term_id'    => 77,
+				'artist_profile_id' => 444,
+				'artist_name'       => 'Settlement Artist',
+				'intake'            => array(),
 			)
 		);
 		$booking = $this->bookings->claim_event( $booking['id'], 900, $booking['version'] );
@@ -312,6 +456,19 @@ final class ShowSettlementTest extends BookingTestCase {
 			12
 		);
 		return $booking;
+	}
+
+	private function void_commission( array $booking, array $commission ): void {
+		$result = $this->commissions->void(
+			array(
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $booking['version'],
+				'expected_version'         => $commission['version'],
+				'reason'                   => 'Commission voided for test.',
+			),
+			12
+		);
+		$this->assertSame( 'void', $result['status'] );
 	}
 
 	private function draft_input( int $booking_id, int $commission_id, string $key ): array {

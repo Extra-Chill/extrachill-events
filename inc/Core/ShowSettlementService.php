@@ -31,16 +31,19 @@ class ShowSettlementService {
 	private $attachments;
 	/** @var BookingAttachmentService */
 	private $attachment_service;
+	/** @var LocalSupportAuthorization */
+	private $artist_authorization;
 	/** @var bool */
 	private $transaction_active = false;
 
-	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueAuthorization $authorization = null, ?TicketSettlementService $commissions = null, ?BookingAttachmentRepository $attachments = null, ?BookingAttachmentService $attachment_service = null ) {
-		$this->bookings           = $bookings ? $bookings : new BookingRepository();
-		$this->activity           = $activity ? $activity : new BookingActivityRepository();
-		$this->authorization      = $authorization ? $authorization : new VenueAuthorization();
-		$this->commissions        = $commissions ? $commissions : new TicketSettlementService( $this->bookings, $this->activity, $this->authorization );
-		$this->attachments        = $attachments ? $attachments : new BookingAttachmentRepository();
-		$this->attachment_service = $attachment_service ? $attachment_service : new BookingAttachmentService( $this->attachments, $this->bookings, $this->activity, null, null, $this->authorization );
+	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueAuthorization $authorization = null, ?TicketSettlementService $commissions = null, ?BookingAttachmentRepository $attachments = null, ?BookingAttachmentService $attachment_service = null, ?LocalSupportAuthorization $artist_authorization = null ) {
+		$this->bookings             = $bookings ? $bookings : new BookingRepository();
+		$this->activity             = $activity ? $activity : new BookingActivityRepository();
+		$this->authorization        = $authorization ? $authorization : new VenueAuthorization();
+		$this->commissions          = $commissions ? $commissions : new TicketSettlementService( $this->bookings, $this->activity, $this->authorization );
+		$this->attachments          = $attachments ? $attachments : new BookingAttachmentRepository();
+		$this->attachment_service   = $attachment_service ? $attachment_service : new BookingAttachmentService( $this->attachments, $this->bookings, $this->activity, null, null, $this->authorization );
+		$this->artist_authorization = $artist_authorization ? $artist_authorization : new LocalSupportAuthorization( $this->authorization );
 	}
 
 	/** Calculate and append the first immutable draft revision. */
@@ -86,10 +89,51 @@ class ShowSettlementService {
 		return $this->action( $input, $actor_id, 'finalized', array(), array( 'draft' ), true );
 	}
 
-	/** Record counterparty acknowledgement without changing frozen terms. */
+	/** Record either direct counterparty attestation or venue-recorded evidence. */
 	public function acknowledge( array $input, int $actor_id ) {
-		$note = $this->optional_text( $input['note'] ?? null, 1000 );
-		return $this->action( $input, $actor_id, 'acknowledged', array( 'note' => $note ), array( 'finalized' ), false );
+		$booking = $this->booking( $input['booking_id'] ?? 0 );
+		if ( is_wp_error( $booking ) ) {
+			return $booking;
+		}
+		$type = sanitize_key( (string) ( $input['acknowledgement_type'] ?? '' ) );
+		if ( ! in_array( $type, array( 'counterparty_verified', 'venue_recorded' ), true ) || null === $booking['artist_term_id'] || null === $booking['artist_profile_id'] ) {
+			return new \WP_Error( 'show_settlement_acknowledgement_invalid', __( 'Acknowledgement requires a supported type and canonical booking counterparty.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$authority = 'counterparty_verified' === $type ? 'artist' : 'venue';
+		$allowed   = $this->authorize_action( $booking, $actor_id, $authority );
+		if ( true !== $allowed ) {
+			return $this->denied( $allowed );
+		}
+		$evidence = array();
+		if ( 'venue_recorded' === $type ) {
+			$evidence = $this->attachment_evidence( $booking, $input['acknowledgement_evidence_attachment_ids'] ?? null, $actor_id, true );
+			if ( is_wp_error( $evidence ) ) {
+				return $evidence;
+			}
+		} elseif ( ! empty( $input['acknowledgement_evidence_attachment_ids'] ) ) {
+			return new \WP_Error( 'show_settlement_acknowledgement_invalid', __( 'Direct counterparty acknowledgement must not claim venue-recorded evidence.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		return $this->action(
+			$input,
+			$actor_id,
+			'acknowledged',
+			array(
+				'acknowledgement_type' => $type,
+				'counterparty'         => array(
+					'type'              => 'artist',
+					'artist_term_id'    => $booking['artist_term_id'],
+					'artist_profile_id' => $booking['artist_profile_id'],
+				),
+				'attested_by_user_id'  => 'counterparty_verified' === $type ? $actor_id : null,
+				'evidence'             => $evidence,
+				'note'                 => $this->optional_text( $input['note'] ?? null, 1000 ),
+			),
+			array( 'finalized' ),
+			false,
+			null,
+			$authority,
+			$evidence
+		);
 	}
 
 	/** Record a bounded dispute against one frozen revision. */
@@ -108,6 +152,10 @@ class ShowSettlementService {
 		$booking = $this->booking( $input['booking_id'] ?? 0 );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
+		}
+		$allowed = $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES );
+		if ( true !== $allowed ) {
+			return $this->denied( $allowed );
 		}
 		$evidence = $this->attachment_evidence( $booking, $input['payout_evidence_attachment_ids'] ?? null, $actor_id, true );
 		if ( is_wp_error( $evidence ) ) {
@@ -232,49 +280,52 @@ class ShowSettlementService {
 		if ( is_wp_error( $terms ) ) {
 			return $terms;
 		}
-		$commission = $this->commissions->get( $booking['id'], $actor_id );
-		if ( is_wp_error( $commission ) || ! is_array( $commission ) || (int) $input['commission_settlement_id'] !== $commission['id'] || 'void' === $commission['status'] || $commission['currency'] !== $terms['currency'] ) {
-			return new \WP_Error( 'show_settlement_commission_invalid', __( 'The frozen Extra Chill commission is missing, void, mismatched, or unauthenticated.', 'extrachill-events' ), array( 'status' => 409 ) );
-		}
-		$ticket_gross = $this->ticket_gross( $booking, $commission, $actor_id );
-		if ( is_wp_error( $ticket_gross ) || $ticket_gross !== $terms['ticket_gross_minor'] ) {
-			return is_wp_error( $ticket_gross ) ? $ticket_gross : new \WP_Error(
-				'show_settlement_ticket_gross_conflict',
-				__( 'Ticket gross does not match the frozen reconciled ticket evidence.', 'extrachill-events' ),
-				array(
-					'status'                      => 409,
-					'expected_ticket_gross_minor' => $ticket_gross,
-				)
-			);
-		}
 		$evidence = $this->attachment_evidence( $booking, $input['door_report_attachment_ids'] ?? array(), $actor_id, 0 !== $terms['door_gross_minor'] );
 		if ( is_wp_error( $evidence ) ) {
 			return $evidence;
 		}
-		$calculation = self::calculate_amounts( $terms, $commission['amount_due_minor'] );
-		if ( is_wp_error( $calculation ) ) {
-			return $calculation;
-		}
-		$request      = array(
-			'booking_id'                => $booking['id'],
-			'commission_settlement_id'  => $commission['id'],
-			'commission_integrity_hash' => $commission['integrity_hash'],
-			'terms'                     => $terms,
-			'evidence'                  => $evidence,
-			'expected_revision_id'      => $expected,
-			'expected_version'          => $expected_action_version,
-			'correction_reason'         => $input['_correction_reason'] ?? null,
-		);
-		$request_hash = self::hash( $request );
-		$started      = $this->begin_authorized( $booking, $actor_id );
+		$started = $this->begin_authorized( $booking, $actor_id );
 		if ( is_wp_error( $started ) ) {
 			return $started;
 		}
-		$booking = $this->bookings->get_for_update( $booking['id'] );
-		if ( ! is_array( $booking ) ) {
-			return $this->rollback( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) ) );
+		$booking = $this->locked_booking( $booking['id'] );
+		if ( is_wp_error( $booking ) ) {
+			return $this->rollback( $booking );
 		}
-		$retry = $this->idempotent_revision( $booking['id'], $key, true );
+		$commission = $this->commission( $booking, $actor_id, (int) $input['commission_settlement_id'], null, $terms['currency'], true );
+		if ( is_wp_error( $commission ) ) {
+			return $this->rollback( $commission );
+		}
+		$ticket_gross = $this->ticket_gross( $booking, $commission, $actor_id, true );
+		if ( is_wp_error( $ticket_gross ) || $ticket_gross !== $terms['ticket_gross_minor'] ) {
+			return $this->rollback(
+				is_wp_error( $ticket_gross ) ? $ticket_gross : new \WP_Error(
+					'show_settlement_ticket_gross_conflict',
+					__( 'Ticket gross does not match the frozen reconciled ticket evidence.', 'extrachill-events' ),
+					array(
+						'status'                      => 409,
+						'expected_ticket_gross_minor' => $ticket_gross,
+					)
+				)
+			);
+		}
+		$calculation = self::calculate_amounts( $terms, $commission['amount_due_minor'] );
+		if ( is_wp_error( $calculation ) ) {
+			return $this->rollback( $calculation );
+		}
+		$request_hash = self::hash(
+			array(
+				'booking_id'                => $booking['id'],
+				'commission_settlement_id'  => $commission['id'],
+				'commission_integrity_hash' => $commission['integrity_hash'],
+				'terms'                     => $terms,
+				'evidence'                  => $evidence,
+				'expected_revision_id'      => $expected,
+				'expected_version'          => $expected_action_version,
+				'correction_reason'         => $input['_correction_reason'] ?? null,
+			)
+		);
+		$retry        = $this->idempotent_revision( $booking['id'], $key, true );
 		if ( is_wp_error( $retry ) ) {
 			return $this->rollback( $retry );
 		}
@@ -374,12 +425,12 @@ class ShowSettlementService {
 		return is_wp_error( $commit ) ? $commit : $this->present( $this->state( $created ) );
 	}
 
-	private function action( array $input, int $actor_id, string $action, array $payload, array $allowed_states, bool $authenticate_revision, ?array $authenticated_payout = null ) {
+	private function action( array $input, int $actor_id, string $action, array $payload, array $allowed_states, bool $authenticate_revision, ?array $authenticated_payout = null, string $authority = 'venue', ?array $authenticated_action_evidence = null ) {
 		$booking = $this->booking( $input['booking_id'] ?? 0 );
 		if ( is_wp_error( $booking ) ) {
 			return $booking;
 		}
-		$allowed = $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES );
+		$allowed = $this->authorize_action( $booking, $actor_id, $authority );
 		if ( true !== $allowed ) {
 			return $this->denied( $allowed );
 		}
@@ -409,12 +460,25 @@ class ShowSettlementService {
 				return $verified;
 			}
 		}
-		$started = $this->begin_authorized( $booking, $actor_id );
+		$started = $this->begin_authorized( $booking, $actor_id, $authority );
 		if ( is_wp_error( $started ) ) {
 			return $started;
 		}
-		$booking = $this->bookings->get_for_update( $booking['id'] );
-		$retry   = $this->idempotent_action( $booking['id'], $key, true );
+		$booking = $this->locked_booking( $booking['id'] );
+		if ( is_wp_error( $booking ) ) {
+			return $this->rollback( $booking );
+		}
+		if ( 'artist' === $authority ) {
+			$locked_allowed = $this->authorize_action( $booking, $actor_id, $authority );
+			if ( true !== $locked_allowed ) {
+				return $this->rollback( $this->denied( $locked_allowed ) );
+			}
+		}
+		$commission = $this->commission( $booking, $actor_id, $revision['commission_settlement_id'], $revision['commission_integrity_hash'], $revision['currency'], true );
+		if ( is_wp_error( $commission ) ) {
+			return $this->rollback( $commission );
+		}
+		$retry = $this->idempotent_action( $booking['id'], $key, true );
 		if ( is_wp_error( $retry ) ) {
 			return $this->rollback( $retry );
 		}
@@ -423,8 +487,12 @@ class ShowSettlementService {
 				return $this->rollback( new \WP_Error( 'show_settlement_idempotency_conflict', __( 'This lifecycle idempotency key is bound to a different request.', 'extrachill-events' ), array( 'status' => 409 ) ) );
 			}
 			$current = $this->revision_id( $revision_id, true );
-			$commit  = $this->commit();
-			return is_wp_error( $commit ) ? $commit : $this->present( $this->state( $current ) );
+			if ( ! is_array( $current ) || $current['booking_id'] !== $booking['id'] ) {
+				return $this->rollback( is_wp_error( $current ) ? $current : new \WP_Error( 'show_settlement_not_found', __( 'The show settlement was not found.', 'extrachill-events' ), array( 'status' => 404 ) ) );
+			}
+			$verified = $this->verify_revision( $current, $booking, $actor_id, false, true );
+			$commit   = is_wp_error( $verified ) ? $this->rollback( $verified ) : $this->commit();
+			return is_wp_error( $commit ) ? $commit : $this->present( $verified );
 		}
 		$revision = $this->revision_id( $revision_id, true );
 		$latest   = $this->latest_revision( $booking['id'], true );
@@ -447,12 +515,18 @@ class ShowSettlementService {
 		if ( 'paid' === $action && 'completed' !== $booking['status'] ) {
 			return $this->rollback( new \WP_Error( 'show_settlement_payment_booking_status_conflict', __( 'The booking must be completed before artist payout is recorded.', 'extrachill-events' ), array( 'status' => 409 ) ) );
 		}
-		$verified = $this->verify_revision( $revision, $booking, $actor_id, false );
+		$verified = $this->verify_revision( $revision, $booking, $actor_id, false, true );
 		if ( is_wp_error( $verified ) ) {
 			return $this->rollback( $verified );
 		}
 		if ( null !== $authenticated_payout ) {
 			$metadata = $this->verify_attachment_snapshot( $booking, $authenticated_payout );
+			if ( is_wp_error( $metadata ) ) {
+				return $this->rollback( $metadata );
+			}
+		}
+		if ( null !== $authenticated_action_evidence ) {
+			$metadata = $this->verify_attachment_snapshot( $booking, $authenticated_action_evidence );
 			if ( is_wp_error( $metadata ) ) {
 				return $this->rollback( $metadata );
 			}
@@ -590,19 +664,19 @@ class ShowSettlementService {
 		return true;
 	}
 
-	private function verify_revision( array $revision, array $booking, int $actor_id, bool $authenticate_bytes ) {
+	private function verify_revision( array $revision, array $booking, int $actor_id, bool $authenticate_bytes, bool $lock_commission = false ) {
 		if ( $revision['booking_id'] !== $booking['id'] || $revision['event_id'] !== $booking['event_id'] || $revision['venue_term_id'] !== $booking['venue_term_id'] || ! hash_equals( $revision['integrity_hash'], self::hash( self::revision_hashable( $revision ) ) ) ) {
 			return new \WP_Error( 'show_settlement_integrity_failed', __( 'The immutable show-settlement revision failed integrity verification.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
-		$commission = $this->commissions->get( $booking['id'], $actor_id );
-		if ( is_wp_error( $commission ) || $commission['id'] !== $revision['commission_settlement_id'] || ! hash_equals( $commission['integrity_hash'], $revision['commission_integrity_hash'] ) || $commission['currency'] !== $revision['currency'] ) {
-			return new \WP_Error( 'show_settlement_commission_invalid', __( 'The bound Extra Chill commission failed integrity verification.', 'extrachill-events' ), array( 'status' => 409 ) );
+		$commission = $this->commission( $booking, $actor_id, $revision['commission_settlement_id'], $revision['commission_integrity_hash'], $revision['currency'], $lock_commission );
+		if ( is_wp_error( $commission ) ) {
+			return $commission;
 		}
 		$calculation = self::calculate_amounts( $revision['terms'], $commission['amount_due_minor'] );
 		if ( is_wp_error( $calculation ) || $calculation !== $revision['calculation'] ) {
 			return new \WP_Error( 'show_settlement_calculation_invalid', __( 'The frozen show-settlement calculation is not reproducible.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
-		$ticket_gross = $this->ticket_gross( $booking, $commission, $actor_id );
+		$ticket_gross = $this->ticket_gross( $booking, $commission, $actor_id, $lock_commission );
 		if ( is_wp_error( $ticket_gross ) || $ticket_gross !== $revision['terms']['ticket_gross_minor'] ) {
 			return is_wp_error( $ticket_gross ) ? $ticket_gross : new \WP_Error( 'show_settlement_ticket_gross_conflict', __( 'Frozen ticket gross no longer matches its reconciled ticket evidence.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
@@ -630,16 +704,22 @@ class ShowSettlementService {
 					return $payout;
 				}
 			}
+			if ( isset( $action['payload']['evidence'] ) ) {
+				$acknowledgement = $this->verify_attachment_snapshot( $booking, $action['payload']['evidence'] );
+				if ( is_wp_error( $acknowledgement ) ) {
+					return $acknowledgement;
+				}
+			}
 		}
 		return $state;
 	}
 
-	private function ticket_gross( array $booking, array $commission, int $actor_id ) {
+	private function ticket_gross( array $booking, array $commission, int $actor_id, bool $lock = false ) {
 		$by_id  = array();
 		$found  = 0;
 		$needed = count( $commission['included_report_ids'] );
 		for ( $offset = 0; $offset < 10000 && $found < $needed; $offset += 200 ) {
-			$reports = $this->commissions->list_sales( $booking['id'], $actor_id, 200, $offset );
+			$reports = $lock ? $this->commissions->included_reports_for_update( $commission ) : $this->commissions->list_sales( $booking['id'], $actor_id, 200, $offset );
 			if ( is_wp_error( $reports ) ) {
 				return $reports;
 			}
@@ -650,6 +730,9 @@ class ShowSettlementService {
 				}
 			}
 			if ( count( $reports ) < 200 ) {
+				break;
+			}
+			if ( $lock ) {
 				break;
 			}
 		}
@@ -807,16 +890,35 @@ class ShowSettlementService {
 		return '' !== (string) $wpdb->last_error ? new \WP_Error( 'show_settlement_action_read_failed', __( 'The show-settlement lifecycle could not be read.', 'extrachill-events' ) ) : ( is_array( $row ) ? $this->hydrate_action( $row ) : null );
 	}
 
-	private function begin_authorized( array $booking, int $actor_id ) {
+	private function begin_authorized( array $booking, int $actor_id, string $authority = 'venue' ) {
 		global $wpdb;
 		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Complete financial transaction.
 			return new \WP_Error( 'show_settlement_transaction_start_failed', __( 'The show-settlement transaction could not start.', 'extrachill-events' ) );
 		}
 		$this->transaction_active = true;
-		$table                    = BookingSchema::memberships_table();
-		$members                  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $booking['venue_term_id'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Locks exact venue authority first.
-		$allowed                  = '' === (string) $wpdb->last_error ? $this->authorization->authorize_locked( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES, (array) $members ) : false;
+		if ( 'artist' === $authority ) {
+			$allowed = $this->authorize_action( $booking, $actor_id, $authority );
+			return true === $allowed ? true : $this->rollback( $this->denied( $allowed ) );
+		}
+		$table   = BookingSchema::memberships_table();
+		$members = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE venue_term_id = %d ORDER BY id ASC FOR UPDATE", $booking['venue_term_id'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Locks exact venue authority first.
+		$allowed = '' === (string) $wpdb->last_error ? $this->authorization->authorize_locked( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES, (array) $members ) : false;
 		return true === $allowed ? true : $this->rollback( $this->denied( $allowed ) );
+	}
+
+	private function authorize_action( array $booking, int $actor_id, string $authority ) {
+		if ( 'artist' === $authority ) {
+			return null !== $booking['artist_term_id'] ? $this->artist_authorization->authorize_artist( $booking['artist_term_id'], $actor_id ) : false;
+		}
+		return $this->authorization->authorize( $actor_id, $booking['venue_term_id'], VenueAuthorization::ACTION_MANAGE_FINANCES );
+	}
+
+	private function commission( array $booking, int $actor_id, int $expected_id, ?string $expected_hash, string $currency, bool $lock ) {
+		$commission = $lock ? $this->commissions->get_for_update( $booking['id'] ) : $this->commissions->get( $booking['id'], $actor_id );
+		if ( is_wp_error( $commission ) || ! is_array( $commission ) || $commission['id'] !== $expected_id || ! in_array( $commission['status'], array( 'finalized', 'paid' ), true ) || $commission['currency'] !== $currency || ( null !== $expected_hash && ! hash_equals( $commission['integrity_hash'], $expected_hash ) ) ) {
+			return new \WP_Error( 'show_settlement_commission_invalid', __( 'The frozen Extra Chill commission is missing, void, mismatched, or failed integrity verification.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		return $commission;
 	}
 
 	private function booking( $id ) {
@@ -826,6 +928,14 @@ class ShowSettlementService {
 		}
 		$booking = $this->bookings->get( $id );
 		return is_array( $booking ) && null !== $booking['event_id'] ? $booking : ( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'An event-linked booking was not found.', 'extrachill-events' ), array( 'status' => 404 ) ) );
+	}
+
+	private function locked_booking( int $booking_id ) {
+		$booking = $this->bookings->get_for_update( $booking_id );
+		if ( is_wp_error( $booking ) ) {
+			return new \WP_Error( 'show_settlement_booking_lock_failed', __( 'The booking could not be locked for this settlement operation.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		return is_array( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ), array( 'status' => 404 ) );
 	}
 
 	private function append_audit( array $revision, string $kind, int $actor_id ) {
@@ -856,6 +966,9 @@ class ShowSettlementService {
 				}
 				if ( isset( $action['payload']['payout_evidence'] ) ) {
 					$action['payload']['payout_evidence'] = $this->project_evidence( $action['payload']['payout_evidence'] );
+				}
+				if ( isset( $action['payload']['evidence'] ) ) {
+					$action['payload']['evidence'] = $this->project_evidence( $action['payload']['evidence'] );
 				}
 			}
 			unset( $action );

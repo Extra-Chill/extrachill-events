@@ -190,6 +190,60 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$this->assertContains( 'show_settlement_version_conflict', $this->race_result_kinds( $payment_race ) );
 	}
 
+	/** Prove commission void serializes before or after every dependent show write. */
+	public function test_commission_void_races_show_create_finalize_and_payment(): void {
+		global $wpdb;
+		$create      = $this->show_commission_race_fixture( 'void-create' );
+		$draft_input = $this->show_revision_input( $create['booking']['id'], $create['commission']['id'], 'void-create-draft' );
+		$this->assert_void_show_race(
+			$create,
+			fn() => ( new ShowSettlementService() )->draft( $draft_input, $this->actor_id )
+		);
+
+		$finalize = $this->show_commission_race_fixture( 'void-finalize' );
+		$draft    = ( new ShowSettlementService() )->draft( $this->show_revision_input( $finalize['booking']['id'], $finalize['commission']['id'], 'void-finalize-draft' ), $this->actor_id );
+		$this->assertIsArray( $draft, is_wp_error( $draft ) ? $draft->get_error_code() : '' );
+		$this->assertNotFalse( $GLOBALS['wpdb']->query( 'COMMIT' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Publishes the draft before contention.
+		$this->assert_void_show_race(
+			$finalize,
+			fn() => ( new ShowSettlementService() )->finalize( array( 'booking_id' => $finalize['booking']['id'], 'revision_id' => $draft['id'], 'expected_version' => $draft['version'], 'idempotency_key' => 'void-finalize-action' ), $this->actor_id )
+		);
+
+		$payment   = $this->show_commission_race_fixture( 'void-payment' );
+		$service   = new ShowSettlementService();
+		$draft     = $service->draft( $this->show_revision_input( $payment['booking']['id'], $payment['commission']['id'], 'void-payment-draft' ), $this->actor_id );
+		$finalized = $service->finalize(
+			array(
+				'booking_id'       => $payment['booking']['id'],
+				'revision_id'      => $draft['id'],
+				'expected_version' => $draft['version'],
+				'idempotency_key'  => 'void-payment-finalize',
+			),
+			$this->actor_id
+		);
+		$bytes = 'void race payout evidence';
+		$wpdb->insert( BookingSchema::attachments_table(), array( 'public_id' => wp_generate_uuid4(), 'booking_id' => $payment['booking']['id'], 'uploader_type' => 'user', 'uploader_user_id' => $this->actor_id, 'uploader_reference' => null, 'artist_term_id' => null, 'artist_profile_id' => null, 'purpose' => 'other_private_evidence', 'original_filename' => 'void-race-payout.txt', 'mime_type' => 'text/plain', 'byte_size' => strlen( $bytes ), 'content_hash' => hash( 'sha256', $bytes ), 'storage_reference' => 'void-race-payout', 'state' => 'active', 'idempotency_key' => 'void-race-payout', 'request_hash' => hash( 'sha256', 'void-race-payout' ), 'replaces_attachment_id' => null, 'retired_at' => null, 'purged_at' => null, 'created_at' => gmdate( 'Y-m-d H:i:s' ), 'updated_at' => gmdate( 'Y-m-d H:i:s' ) ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Seeds disposable payout evidence.
+		$attachment_id = (int) $wpdb->insert_id;
+		$wpdb->update( BookingSchema::bookings_table(), array( 'status' => 'completed', 'version' => $payment['booking']['version'] + 1 ), array( 'id' => $payment['booking']['id'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Completes the disposable booking.
+		++$payment['booking']['version'];
+		$this->assertNotFalse( $wpdb->query( 'COMMIT' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Publishes payout fixtures.
+		$this->assert_void_show_race(
+			$payment,
+			fn() => ( new ShowSettlementService( null, null, null, null, new BookingAttachmentRepository(), new ShowSettlementMySQLAttachmentService( $bytes ) ) )->mark_paid(
+				array(
+					'booking_id'                     => $payment['booking']['id'],
+					'revision_id'                    => $finalized['id'],
+					'expected_version'               => $finalized['version'],
+					'idempotency_key'                => 'void-payment-action',
+					'payment_reference'              => 'void-race',
+					'payment_date'                   => gmdate( 'Y-m-d' ),
+					'payout_evidence_attachment_ids' => array( $attachment_id ),
+				),
+				$this->actor_id
+			)
+		);
+	}
+
 	/** Prove the loser replays the completed exact winner without duplicate effects. */
 	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
 		global $wpdb;
@@ -331,8 +385,83 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		);
 	}
 
+	/** Build and publish one independent booking plus finalized commission. */
+	private function show_commission_race_fixture( string $key ): array {
+		global $wpdb;
+		$bookings = new BookingRepository();
+		$event_id = self::factory()->post->create(
+			array(
+				'post_type'   => defined( 'DATA_MACHINE_EVENTS_POST_TYPE' ) ? DATA_MACHINE_EVENTS_POST_TYPE : 'data_machine_events',
+				'post_status' => 'publish',
+			)
+		);
+		$booking  = $bookings->create(
+			array(
+				'venue_term_id' => $this->venue_id,
+				'artist_name'   => 'Void Race Artist',
+				'intake'        => array(),
+			)
+		);
+		$booking  = $bookings->claim_event( $booking['id'], $event_id, $booking['version'] );
+		$source   = ( new TicketReconciliationService() )->register_source(
+			array(
+				'booking_id' => $booking['id'],
+				'provider'   => 'manual-certified',
+				'source_key' => $key,
+				'ticket_url' => 'https://tickets.example.test/' . $key,
+			),
+			$this->actor_id
+		);
+		$service  = new TicketSettlementService();
+		$service->record_sales( $this->settlement_report_input( $booking['id'], $key . '-report', $source['id'] ), $this->actor_id );
+		$preview    = $service->calculate(
+			array(
+				'booking_id'       => $booking['id'],
+				'basis'            => 'gross_ticket_sales',
+				'basis_points'     => 2000,
+				'currency'         => 'USD',
+				'adjustment_minor' => 0,
+			),
+			$this->actor_id
+		);
+		$commission = $service->finalize(
+			array(
+				'booking_id'               => $booking['id'],
+				'expected_booking_version' => $preview['booking_version'],
+				'expected_report_ids'      => $preview['included_report_ids'],
+				'expected_evidence_hash'   => $preview['evidence_hash'],
+				'basis'                    => $preview['basis'],
+				'basis_points'             => $preview['basis_points'],
+				'currency'                 => $preview['currency'],
+				'formula_version'          => $preview['formula_version'],
+				'adjustment_minor'         => 0,
+			),
+			$this->actor_id
+		);
+		$this->assertIsArray( $commission, is_wp_error( $commission ) ? $commission->get_error_code() : '' );
+		$this->assertNotFalse( $wpdb->query( 'COMMIT' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Publishes the independent race fixture.
+		return compact( 'booking', 'commission' );
+	}
+
+	/** Race commission void against one dependent operation and verify fail-closed state. */
+	private function assert_void_show_race( array $fixture, callable $show_operation ): void {
+		$void    = array(
+			'booking_id'               => $fixture['booking']['id'],
+			'expected_booking_version' => $fixture['booking']['version'],
+			'expected_version'         => $fixture['commission']['version'],
+			'reason'                   => 'Concurrent commission void.',
+		);
+		$results = $this->race_booking_services( $fixture['booking']['id'], fn() => ( new TicketSettlementService() )->void( $void, $this->actor_id ), $show_operation, false, true );
+		$kinds   = $this->race_result_kinds( $results );
+		$this->assertSame( array( 'result', 'show_settlement_commission_invalid' ), $kinds, 'The queued void must commit before the dependent show write revalidates the commission.' );
+		$commission = ( new TicketSettlementService() )->get( $fixture['booking']['id'], $this->actor_id );
+		$this->assertSame( 'void', $commission['status'] );
+		$show = ( new ShowSettlementService() )->get( $fixture['booking']['id'], $this->actor_id );
+		$this->assertTrue( in_array( $show->get_error_code(), array( 'show_settlement_not_found', 'show_settlement_commission_invalid' ), true ) );
+	}
+
 	/** Run two service calls while both are blocked behind the same booking lock. */
-	private function race_booking_services( int $booking_id, callable $first, callable $second, bool $first_commit_uncertain = false ): array {
+	private function race_booking_services( int $booking_id, callable $first, callable $second, bool $first_commit_uncertain = false, bool $order_first = false ): array {
 		$bookings = BookingSchema::bookings_table();
 		$this->assertTrue( $this->contender->begin_transaction() );
 		$locked = $this->contender->query( "SELECT id FROM {$bookings} WHERE id = {$booking_id} FOR UPDATE" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent fixture connection deliberately owns the application lock.
@@ -345,8 +474,31 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 			array( 'ready' => $base . '.first-ready', 'result' => $base . '.first-result' ),
 			array( 'ready' => $base . '.second-ready', 'result' => $base . '.second-result' ),
 		);
-		$pids  = array(
-			$this->fork_service_call( $first, $files[0], $first_commit_uncertain ),
+		$first_pid    = $this->fork_service_call( $first, $files[0], $first_commit_uncertain );
+		$first_queued = ! $order_first;
+		if ( $order_first ) {
+			$deadline = microtime( true ) + 5;
+			while ( ! file_exists( $files[0]['ready'] ) && microtime( true ) < $deadline ) {
+				usleep( 10000 );
+			}
+			if ( file_exists( $files[0]['ready'] ) ) {
+				$thread_id = (int) file_get_contents( $files[0]['ready'] );
+				$deadline  = microtime( true ) + 5;
+				do {
+					$process = $this->contender->query( "SELECT INFO FROM information_schema.PROCESSLIST WHERE COMMAND = 'Query' AND ID = {$thread_id}" );
+					if ( $process instanceof mysqli_result ) {
+						$query = (string) ( $process->fetch_row()[0] ?? '' );
+						$process->free();
+						$first_queued = false !== stripos( $query, $bookings ) && false !== stripos( $query, 'FOR UPDATE' );
+					}
+					if ( ! $first_queued ) {
+						usleep( 10000 );
+					}
+				} while ( ! $first_queued && microtime( true ) < $deadline );
+			}
+		}
+		$pids = array(
+			$first_pid,
 			$this->fork_service_call( $second, $files[1], false ),
 		);
 		$deadline = microtime( true ) + 5;
@@ -394,6 +546,7 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		}
 
 		$this->assertTrue( $both_ready, 'Both service contenders must reach the held booking lock.' );
+		$this->assertTrue( $first_queued, 'The ordered first contender must enter the production booking lock queue before the second contender starts.' );
 		$this->assertTrue( $both_waiting, 'Both service contenders must overlap in production FOR UPDATE lock acquisition.' );
 		$this->assertTrue( $booking_waiting, 'At least one service contender must block on the production booking row lock.' );
 		$this->assertTrue( $both_blocked, 'A service contender bypassed the held booking lock.' );

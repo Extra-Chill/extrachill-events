@@ -34,6 +34,7 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		);
 		$booking  = $bookings->claim_event( $booking['id'], $event_id, $booking['version'] );
 		$this->assertIsArray( $booking, is_wp_error( $booking ) ? $booking->get_error_code() : '' );
+		$this->assertNotFalse( $wpdb->query( 'COMMIT' ), 'The source/report race fixture must be visible to independent sessions.' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Publishes the fixture before genuine cross-process contention.
 
 		$exact_source = array(
 			'booking_id' => $booking['id'],

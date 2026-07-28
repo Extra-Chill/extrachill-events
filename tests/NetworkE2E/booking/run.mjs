@@ -123,7 +123,7 @@ const provenance = {
 await writeJson(path.join(artifactRoot, 'provenance.json'), provenance);
 await writeJson(path.join(artifactRoot, 'replay.json'), { schema: 'homeboy/fuzz-replay/v1', seed, command: replayCommand });
 
-const run = spawnSync(resolveExecutable('HOMEBOY_WP_CODEBOX_BIN', 'wp-codebox'), [
+const run = spawnSync(process.env.HOMEBOY_WP_CODEBOX_BIN || 'wp-codebox', [
   'recipe-run', '--recipe', recipeFile, '--artifacts', recipe.artifacts.directory, '--timeout', '25m', '--json',
 ], { encoding: 'utf8', env: process.env, maxBuffer: 50 * 1024 * 1024 });
 
@@ -253,12 +253,8 @@ function git(directory, args) {
 }
 
 function commandVersion(command, args) {
-  const result = spawnSync(resolveExecutable('HOMEBOY_WP_CODEBOX_BIN', command), args, { encoding: 'utf8' });
+  const result = spawnSync(process.env.HOMEBOY_WP_CODEBOX_BIN || command, args, { encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : 'unavailable';
-}
-
-function resolveExecutable(environmentName, fallback) {
-  return process.env[environmentName] || fallback;
 }
 
 async function writeJson(file, value) {

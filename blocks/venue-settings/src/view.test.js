@@ -216,6 +216,17 @@ const buttonByText = ( container, text ) =>
 	[ ...container.querySelectorAll( 'button' ) ].find(
 		( button ) => button.textContent === text
 	);
+const buttonContaining = ( container, text ) =>
+	[ ...container.querySelectorAll( 'button' ) ].find( ( button ) =>
+		button.textContent.includes( text )
+	);
+const deferred = () => {
+	let resolve;
+	const promise = new Promise( ( done ) => {
+		resolve = done;
+	} );
+	return { promise, resolve };
+};
 
 const setInput = async ( input, value ) => {
 	await act( async () => {
@@ -718,6 +729,194 @@ describe( 'venue settings authorization-facing states', () => {
 			'Conversion attempt 2 failed (upstream_timeout). Retry is available.'
 		);
 		expect( container.textContent ).toContain( 'Retry event conversion' );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'does not offer immediate retry for a non-retryable conversion failure', async () => {
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve(
+					bookingActivity( {
+						conversion: {
+							status: 'failed',
+							attempt: 1,
+							failure_code: 'invalid_event',
+							retryable: false,
+						},
+					} )
+				);
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return Promise.resolve( booking( input.booking_id ) );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( { booking_id: 15 } )
+		);
+		const action = buttonByText(
+			container,
+			'Conversion retry unavailable'
+		);
+		expect( action.disabled ).toBe( true );
+		expect( container.textContent ).not.toContain(
+			'Retry event conversion'
+		);
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'rejects malformed stored deal and production documents without crashing', async () => {
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return Promise.resolve( {
+					...booking( input.booking_id ),
+					deal: { version: 1, data: { type: 'broken' } },
+					production: {
+						version: 1,
+						data: {
+							version: 1,
+							support_requirements: 'not-an-array',
+							support_offers: [],
+							production_notes: null,
+						},
+					},
+				} );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp(
+			context( { booking_id: 16 } )
+		);
+		expect( container.textContent ).toContain(
+			'The stored deal document is malformed.'
+		);
+		expect( container.textContent ).toContain(
+			'The stored production document is malformed.'
+		);
+		expect( buttonByText( container, 'Save deal terms' ) ).toBeUndefined();
+		expect(
+			buttonByText( container, 'Save production details' )
+		).toBeUndefined();
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'keeps the latest rapid booking selection when responses resolve out of order', async () => {
+		const detailA = deferred();
+		const detailB = deferred();
+		const first = { ...booking( 21 ), artist_name: 'Artist A' };
+		const second = { ...booking( 22 ), artist_name: 'Artist B' };
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				return input.booking_id === 21
+					? detailA.promise
+					: detailB.promise;
+			}
+			if ( request.path.includes( 'list-venue-bookings' ) ) {
+				return Promise.resolve( [ first, second ] );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp( context() );
+		await act( async () =>
+			buttonContaining( container, 'Artist A' ).click()
+		);
+		await act( async () =>
+			buttonContaining( container, 'Artist B' ).click()
+		);
+		await act( async () => {
+			detailB.resolve( second );
+			await detailB.promise;
+		} );
+		expect( container.textContent ).toContain( 'Booking #22' );
+		await act( async () => {
+			detailA.resolve( first );
+			await detailA.promise;
+		} );
+		expect( container.textContent ).toContain( 'Booking #22' );
+		expect( container.textContent ).not.toContain( 'Booking #21' );
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'refreshes the current selection after an earlier booking mutation resolves', async () => {
+		const mutation = deferred();
+		const detailIds = [];
+		const first = { ...booking( 31 ), artist_name: 'Mutation Artist A' };
+		const second = { ...booking( 32 ), artist_name: 'Mutation Artist B' };
+		apiFetch.mockImplementation( ( request ) => {
+			const input = request.data?.input || requestInput( request.path );
+			if ( request.path.includes( 'get-venue-profile' ) ) {
+				return Promise.resolve( profile( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-config' ) ) {
+				return Promise.resolve( config( input.venue_term_id ) );
+			}
+			if ( request.path.includes( 'get-venue-booking-activity' ) ) {
+				return Promise.resolve( bookingActivity() );
+			}
+			if ( request.path.includes( 'get-venue-booking' ) ) {
+				detailIds.push( input.booking_id );
+				return Promise.resolve(
+					input.booking_id === 31 ? first : second
+				);
+			}
+			if ( request.path.includes( 'assign-venue-booking' ) ) {
+				return mutation.promise;
+			}
+			if ( request.path.includes( 'list-venue-bookings' ) ) {
+				return Promise.resolve( [ first, second ] );
+			}
+			return Promise.resolve( [] );
+		} );
+		const { container, root } = await renderApp( context() );
+		await act( async () =>
+			buttonContaining( container, 'Mutation Artist A' ).click()
+		);
+		await act( async () => {
+			const select = container.querySelector( '#booking-assignee' );
+			select.value = '7';
+			select.dispatchEvent( new Event( 'change', { bubbles: true } ) );
+		} );
+		await act( async () =>
+			buttonByText( container, 'Save assignment' ).click()
+		);
+		await act( async () =>
+			buttonContaining( container, 'Mutation Artist B' ).click()
+		);
+		expect( container.textContent ).toContain( 'Booking #32' );
+		await act( async () => {
+			mutation.resolve( { ...first, assignee_user_id: 7, version: 5 } );
+			await mutation.promise;
+			await Promise.resolve();
+		} );
+		expect( detailIds[ detailIds.length - 1 ] ).toBe( 32 );
+		expect( container.textContent ).toContain( 'Booking #32' );
 		await act( async () => root.unmount() );
 	} );
 } );

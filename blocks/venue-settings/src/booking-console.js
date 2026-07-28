@@ -123,13 +123,84 @@ const toLocalInput = ( value ) =>
 
 const statusLabel = ( status ) => STATUS_LABELS[ status ] || status;
 
-const payloadData = ( value ) => value?.data || value || null;
+const payloadData = ( value ) => {
+	if ( value === null || value === undefined ) {
+		return null;
+	}
+	if (
+		typeof value === 'object' &&
+		! Array.isArray( value ) &&
+		Object.prototype.hasOwnProperty.call( value, 'data' )
+	) {
+		return value.data;
+	}
+	return value;
+};
 const linesToItems = ( value ) =>
 	value
 		.split( '\n' )
 		.map( ( item ) => item.trim() )
 		.filter( Boolean );
 const nullableNumber = ( value ) => ( value === '' ? null : Number( value ) );
+
+const hasExactKeys = ( value, keys ) =>
+	value !== null &&
+	typeof value === 'object' &&
+	! Array.isArray( value ) &&
+	Object.keys( value ).length === keys.length &&
+	keys.every( ( key ) => Object.prototype.hasOwnProperty.call( value, key ) );
+
+const DEAL_KEYS = [
+	'version',
+	'type',
+	'guarantee_cents',
+	'revenue_share_basis_points',
+	'revenue_share_basis',
+	'currency',
+	'capacity',
+	'advance_ticket_price_cents',
+	'door_ticket_price_cents',
+	'ticket_fee_cents',
+	'tickets_on_sale_at',
+	'ticket_url',
+	'additional_terms',
+];
+const nullableInteger = ( value ) =>
+	value === null || Number.isInteger( value );
+const nullableString = ( value ) => value === null || typeof value === 'string';
+const validDealShape = ( value ) =>
+	hasExactKeys( value, DEAL_KEYS ) &&
+	value.version === 1 &&
+	typeof value.type === 'string' &&
+	Number.isInteger( value.guarantee_cents ) &&
+	Number.isInteger( value.revenue_share_basis_points ) &&
+	typeof value.revenue_share_basis === 'string' &&
+	typeof value.currency === 'string' &&
+	[
+		'capacity',
+		'advance_ticket_price_cents',
+		'door_ticket_price_cents',
+		'ticket_fee_cents',
+	].every( ( key ) => nullableInteger( value[ key ] ) ) &&
+	[ 'tickets_on_sale_at', 'ticket_url', 'additional_terms' ].every( ( key ) =>
+		nullableString( value[ key ] )
+	);
+
+const PRODUCTION_KEYS = [
+	'version',
+	'support_requirements',
+	'support_offers',
+	'production_notes',
+];
+const validProductionShape = ( value ) =>
+	hasExactKeys( value, PRODUCTION_KEYS ) &&
+	value.version === 1 &&
+	[ 'support_requirements', 'support_offers' ].every(
+		( key ) =>
+			Array.isArray( value[ key ] ) &&
+			value[ key ].every( ( item ) => typeof item === 'string' )
+	) &&
+	nullableString( value.production_notes );
 
 export const activityLabel = ( kind ) =>
 	kind
@@ -143,14 +214,23 @@ const eventActionLabel = ( booking, operations ) => {
 			? 'Retry event reconciliation'
 			: 'Reconcile event';
 	}
+	if (
+		operations.conversion.status === 'failed' &&
+		! operations.conversion.retryable
+	) {
+		return 'Conversion retry unavailable';
+	}
 	return operations.conversion.status === 'failed'
 		? 'Retry event conversion'
 		: 'Convert to event';
 };
 
 const dealDocument = ( booking, fallback ) => {
-	const source =
-		payloadData( booking.confirmed_deal || booking.deal ) || fallback || {};
+	const stored = payloadData( booking.confirmed_deal || booking.deal );
+	if ( stored !== null && ! validDealShape( stored ) ) {
+		return null;
+	}
+	const source = stored || fallback || {};
 	return {
 		version: 1,
 		type: source.type || 'custom',
@@ -172,6 +252,17 @@ function DealEditor( { booking, defaultDeal, pending, onSave } ) {
 	const [ deal, setDeal ] = useState( () =>
 		dealDocument( booking, defaultDeal )
 	);
+	if ( deal === null ) {
+		return (
+			<section className="ec-booking-detail__section">
+				<h3>Deal terms</h3>
+				<InlineStatus tone="error">
+					The stored deal document is malformed. Editing is
+					unavailable until the canonical record is repaired.
+				</InlineStatus>
+			</section>
+		);
+	}
 	const update = ( key, value ) => setDeal( { ...deal, [ key ]: value } );
 	return (
 		<section className="ec-booking-detail__section">
@@ -364,7 +455,9 @@ function DealEditor( { booking, defaultDeal, pending, onSave } ) {
 }
 
 function ProductionEditor( { booking, pending, onSave } ) {
-	const source = payloadData( booking.production ) || {};
+	const stored = payloadData( booking.production );
+	const malformed = stored !== null && ! validProductionShape( stored );
+	const source = malformed ? {} : stored || {};
 	const [ requirements, setRequirements ] = useState(
 		( source.support_requirements || [] ).join( '\n' )
 	);
@@ -372,6 +465,17 @@ function ProductionEditor( { booking, pending, onSave } ) {
 		( source.support_offers || [] ).join( '\n' )
 	);
 	const [ notes, setNotes ] = useState( source.production_notes || '' );
+	if ( malformed ) {
+		return (
+			<section className="ec-booking-detail__section">
+				<h3>Production details</h3>
+				<InlineStatus tone="error">
+					The stored production document is malformed. Editing is
+					unavailable until the canonical record is repaired.
+				</InlineStatus>
+			</section>
+		);
+	}
 	return (
 		<section className="ec-booking-detail__section">
 			<h3>Production details</h3>
@@ -444,11 +548,6 @@ function ActivityTimeline( { operations } ) {
 					{ operations.activity.map( ( item ) => (
 						<li key={ item.id }>
 							<strong>{ activityLabel( item.kind ) }</strong>
-							<span>
-								{ item.actor_type === 'user' && item.actor_id
-									? `User #${ item.actor_id }`
-									: activityLabel( item.actor_type ) }
-							</span>
 							<small>{ formatDate( item.occurred_at ) }</small>
 						</li>
 					) ) }
@@ -1214,7 +1313,12 @@ function BookingDetail( {
 				<button
 					type="button"
 					className="button-1"
-					disabled={ pending !== '' }
+					disabled={
+						pending !== '' ||
+						( ! booking.event_id &&
+							operations.conversion.status === 'failed' &&
+							! operations.conversion.retryable )
+					}
 					onClick={ () =>
 						mutate(
 							booking.event_id
@@ -1269,6 +1373,8 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 	const [ filterAssignee, setFilterAssignee ] = useState( '' );
 	const [ month, setMonth ] = useState( monthKey() );
 	const requestId = useRef( 0 );
+	const detailRequestId = useRef( 0 );
+	const selectedIdRef = useRef( context.booking_id || 0 );
 
 	const loadList = async () => {
 		const currentRequest = ++requestId.current;
@@ -1305,7 +1411,8 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 		}
 	};
 
-	const loadDetail = async ( bookingId = selectedId ) => {
+	const loadDetail = async ( bookingId = selectedIdRef.current ) => {
+		const currentRequest = ++detailRequestId.current;
 		if ( ! bookingId ) {
 			setSelected( null );
 			setCommunications( [] );
@@ -1331,15 +1438,32 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 					'The booking is outside this venue workspace.'
 				);
 			}
+			if (
+				currentRequest !== detailRequestId.current ||
+				selectedIdRef.current !== bookingId
+			) {
+				return;
+			}
 			setSelected( booking );
 			setCommunications( messages );
 			setOperations( activity );
 		} catch ( caught ) {
+			if (
+				currentRequest !== detailRequestId.current ||
+				selectedIdRef.current !== bookingId
+			) {
+				return;
+			}
 			setSelected( null );
 			setOperations( null );
 			setDetailError( errorDetails( caught ).message );
 		} finally {
-			setDetailLoading( false );
+			if (
+				currentRequest === detailRequestId.current &&
+				selectedIdRef.current === bookingId
+			) {
+				setDetailLoading( false );
+			}
 		}
 	};
 
@@ -1351,6 +1475,7 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 	}, [ selectedId ] ); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const selectBooking = ( bookingId ) => {
+		selectedIdRef.current = bookingId;
 		setSelectedId( bookingId );
 		const url = new URL( window.location.href );
 		url.searchParams.set( 'venue_id', venueId );
@@ -1359,6 +1484,8 @@ export function BookingConsole( { context, members, defaultDeal, view } ) {
 		window.history.replaceState( {}, '', url );
 	};
 	const closeDetail = () => {
+		selectedIdRef.current = 0;
+		++detailRequestId.current;
 		setSelectedId( 0 );
 		setSelected( null );
 		const url = new URL( window.location.href );

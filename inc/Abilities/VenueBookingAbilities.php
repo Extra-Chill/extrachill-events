@@ -10,7 +10,6 @@ namespace ExtraChillEvents\Abilities;
 use ExtraChillEvents\Core\BookingLifecycle;
 use ExtraChillEvents\Core\BookingInquiryAdmissionService;
 use ExtraChillEvents\Core\BookingAttachmentPolicy;
-use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingRepository;
 use ExtraChillEvents\Core\VenueAuthorization;
@@ -50,12 +49,36 @@ class VenueBookingAbilities {
 	private $authorization;
 	/** @var BookingHoldRepository */
 	private $holds;
-	/**
-	 * Authoritative booking activity reads.
-	 *
-	 * @var BookingActivityRepository
-	 */
-	private $activity;
+	private const CORE_ACTIVITY_KINDS = array(
+		'inquiry_submitted',
+		'assignment_changed',
+		'status_changed',
+		'artist_bound',
+		'intake_corrected',
+		'performance_selected',
+		'hold_created',
+		'hold_released',
+		'hold_expired',
+		'production_updated',
+		'deal_draft_updated',
+		'deal_confirmed',
+		'event_conversion_started',
+		'event_conversion_failed',
+		'event_converted',
+		'event_sync_started',
+		'event_sync_retryable',
+		'event_sync_failed',
+		'event_sync_conflict',
+		'event_sync_succeeded',
+		'event_sync_noop',
+		'booking_message_requested',
+		'booking_message_dispatching',
+		'booking_message_queued',
+		'booking_message_failed',
+		'booking_reminder_scheduling',
+		'booking_reminder_scheduled',
+		'booking_reminder_suppressed',
+	);
 
 	/**
 	 * Build and hook the booking ability surface.
@@ -65,12 +88,10 @@ class VenueBookingAbilities {
 	 * @param VenueAuthorization|null             $authorization Venue authorization.
 	 * @param BookingHoldRepository|null          $holds             Hold reconciliation.
 	 * @param BookingInquiryAdmissionService|null $inquiry_admission Inquiry admission.
-	 * @param BookingActivityRepository|null      $activity          Authoritative activity reads.
 	 */
-	public function __construct( ?BookingRepository $bookings = null, ?BookingLifecycle $lifecycle = null, ?VenueAuthorization $authorization = null, ?BookingHoldRepository $holds = null, ?BookingInquiryAdmissionService $inquiry_admission = null, ?BookingActivityRepository $activity = null ) {
+	public function __construct( ?BookingRepository $bookings = null, ?BookingLifecycle $lifecycle = null, ?VenueAuthorization $authorization = null, ?BookingHoldRepository $holds = null, ?BookingInquiryAdmissionService $inquiry_admission = null ) {
 		$this->bookings          = $bookings ? $bookings : new BookingRepository();
 		$this->authorization     = $authorization ? $authorization : new VenueAuthorization();
-		$this->activity          = $activity ? $activity : new BookingActivityRepository();
 		$this->holds             = $holds ? $holds : new BookingHoldRepository( $this->bookings, null, $this->authorization );
 		$this->lifecycle         = $lifecycle ? $lifecycle : new BookingLifecycle( $this->bookings, null, $this->authorization, null, $this->holds );
 		$this->inquiry_admission = $inquiry_admission ? $inquiry_admission : new BookingInquiryAdmissionService( $this->lifecycle );
@@ -355,30 +376,21 @@ class VenueBookingAbilities {
 	 * @param array $input Ability input.
 	 */
 	public function get_booking_activity( array $input ) {
-		$booking_id = absint( $input['booking_id'] ?? 0 );
-		$booking    = $this->bookings->get( $booking_id );
-		if ( ! is_array( $booking ) ) {
-			return is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'Booking not found.', 'extrachill-events' ), array( 'status' => 404 ) );
+		$state = $this->holds->get_booking_activity_authorized( absint( $input['booking_id'] ?? 0 ), get_current_user_id() );
+		if ( ! is_array( $state ) ) {
+			return $state;
 		}
-
-		$activity   = $this->activity->list_for_booking( $booking_id, 200 );
-		$conversion = $this->activity->event_conversion_state( $booking_id, $booking['public_id'] );
-		$sync       = $this->activity->event_sync_state( $booking_id );
-		foreach ( array( $activity, $conversion, $sync ) as $result ) {
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-		}
+		$activity = array_values( array_filter( $state['activity'], static fn( array $item ): bool => in_array( $item['kind'], self::CORE_ACTIVITY_KINDS, true ) ) );
 
 		return array(
 			'activity'   => array_map( array( $this, 'present_activity' ), $activity ),
 			'conversion' => array(
-				'status'       => $conversion['status'],
-				'attempt'      => (int) $conversion['attempt'],
-				'failure_code' => $conversion['failed']['payload']['data']['upstream_code'] ?? null,
-				'retryable'    => (bool) ( $conversion['failed']['payload']['data']['retryable'] ?? false ),
+				'status'       => $state['conversion']['status'],
+				'attempt'      => (int) $state['conversion']['attempt'],
+				'failure_code' => $state['conversion']['failed']['payload']['data']['upstream_code'] ?? null,
+				'retryable'    => (bool) ( $state['conversion']['failed']['payload']['data']['retryable'] ?? false ),
 			),
-			'sync'       => $this->present_sync_state( $sync ),
+			'sync'       => $this->present_sync_state( $state['sync'] ),
 		);
 	}
 
@@ -668,14 +680,9 @@ class VenueBookingAbilities {
 						'properties'           => array(
 							'id'          => array( 'type' => 'integer' ),
 							'kind'        => array( 'type' => 'string' ),
-							'actor_type'  => array( 'type' => 'string' ),
-							'actor_id'    => array( 'type' => array( 'integer', 'null' ) ),
-							'direction'   => $nullable_string,
-							'channel'     => $nullable_string,
-							'external_id' => $nullable_string,
 							'occurred_at' => array( 'type' => 'string' ),
 						),
-						'required'             => array( 'id', 'kind', 'actor_type', 'actor_id', 'direction', 'channel', 'external_id', 'occurred_at' ),
+						'required'             => array( 'id', 'kind', 'occurred_at' ),
 						'additionalProperties' => false,
 					),
 				),
@@ -721,7 +728,11 @@ class VenueBookingAbilities {
 	 * @param array $activity Hydrated activity record.
 	 */
 	public function present_activity( array $activity ): array {
-		return array_intersect_key( $activity, array_flip( array( 'id', 'kind', 'actor_type', 'actor_id', 'direction', 'channel', 'external_id', 'occurred_at' ) ) );
+		return array(
+			'id'          => $activity['id'],
+			'kind'        => $activity['kind'],
+			'occurred_at' => $activity['occurred_at'],
+		);
 	}
 
 	/**
@@ -730,6 +741,18 @@ class VenueBookingAbilities {
 	 * @param array $sync Canonical event synchronization state.
 	 */
 	private function present_sync_state( array $sync ): array {
+		$terminal = $sync['terminal'] ?? null;
+		if ( is_array( $terminal ) ) {
+			$status = str_replace( 'event_sync_', '', $terminal['kind'] );
+			if ( 'noop' === $status ) {
+				$status = 'no_change';
+			}
+			return array(
+				'status'    => $status,
+				'code'      => $terminal['payload']['data']['code'] ?? null,
+				'retryable' => (bool) ( $terminal['payload']['data']['retryable'] ?? false ),
+			);
+		}
 		if ( is_array( $sync['retry'] ?? null ) ) {
 			return array(
 				'status'    => 'retryable',
@@ -737,22 +760,10 @@ class VenueBookingAbilities {
 				'retryable' => true,
 			);
 		}
-		$terminal = $sync['terminal'] ?? null;
-		if ( ! is_array( $terminal ) ) {
-			return array(
-				'status'    => ! empty( $sync['pending'] ) ? 'pending' : 'none',
-				'code'      => null,
-				'retryable' => false,
-			);
-		}
-		$status = str_replace( 'event_sync_', '', $terminal['kind'] );
-		if ( 'noop' === $status ) {
-			$status = 'no_change';
-		}
 		return array(
-			'status'    => $status,
-			'code'      => $terminal['payload']['data']['code'] ?? null,
-			'retryable' => (bool) ( $terminal['payload']['data']['retryable'] ?? false ),
+			'status'    => ! empty( $sync['pending'] ) ? 'pending' : 'none',
+			'code'      => null,
+			'retryable' => false,
 		);
 	}
 

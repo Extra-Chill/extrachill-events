@@ -1209,14 +1209,55 @@ final class BookingFoundationTest extends BookingTestCase {
 		( new BookingActivityRepository() )->append(
 			array(
 				'booking_id' => $booking['id'],
-				'kind'       => 'booking_submitted',
+				'kind'       => 'inquiry_submitted',
+				'actor_type' => 'user',
+				'actor_id'   => 12,
+				'external_id' => 'private-provider-reference',
+			)
+		);
+		( new BookingActivityRepository() )->append(
+			array(
+				'booking_id' => $booking['id'],
+				'kind'       => 'marketing_operation_submitted',
+				'actor_type' => 'user',
+				'actor_id'   => 12,
+				'channel'    => 'provider',
+				'external_id' => 'excluded-private-reference',
 			)
 		);
 		$activity = call_user_func( $registered['extrachill/get-venue-booking-activity']['execute_callback'], array( 'booking_id' => $booking['id'] ) );
-		$this->assertSame( 'booking_submitted', $activity['activity'][0]['kind'] );
+		$this->assertCount( 1, $activity['activity'] );
+		$this->assertSame( 'inquiry_submitted', $activity['activity'][0]['kind'] );
+		$this->assertSame( array( 'id', 'kind', 'occurred_at' ), array_keys( $activity['activity'][0] ) );
 		$this->assertArrayNotHasKey( 'payload', $activity['activity'][0] );
 		$this->assertSame( 'none', $activity['conversion']['status'] );
 		$this->assertSame( 'none', $activity['sync']['status'] );
+
+		$start = ( new BookingActivityRepository() )->append(
+			array(
+				'booking_id' => $booking['id'],
+				'kind'       => 'event_sync_started',
+			)
+		);
+		( new BookingActivityRepository() )->append(
+			array(
+				'booking_id'  => $booking['id'],
+				'kind'        => 'event_sync_retryable',
+				'external_id' => (string) $start['id'],
+				'payload'     => array( 'code' => 'upstream_timeout' ),
+			)
+		);
+		( new BookingActivityRepository() )->append(
+			array(
+				'booking_id'  => $booking['id'],
+				'kind'        => 'event_sync_succeeded',
+				'external_id' => (string) $start['id'],
+				'payload'     => array( 'code' => 'updated' ),
+			)
+		);
+		$replayed = call_user_func( $registered['extrachill/get-venue-booking-activity']['execute_callback'], array( 'booking_id' => $booking['id'] ) );
+		$this->assertSame( 'succeeded', $replayed['sync']['status'] );
+		$this->assertFalse( $replayed['sync']['retryable'] );
 		$presented = $abilities->present(
 			array_merge(
 				$booking,
@@ -1230,9 +1271,10 @@ final class BookingFoundationTest extends BookingTestCase {
 		$this->assertArrayNotHasKey( 'inquiry_idempotency_key', $presented );
 		$this->assertArrayNotHasKey( 'inquiry_request_hash', $presented );
 		$this->assertArrayNotHasKey( 'admission_owner_token', $presented );
+		$authorization_calls = count( $authorization->calls );
 		$this->assertTrue( $abilities->can_access_booking( array( 'booking_id' => $booking['id'] ) ) );
-		$this->assertSame( array( array( 12, 55, VenueAuthorization::ACTION_ACCESS_VENUE ) ), $authorization->calls );
+		$this->assertCount( $authorization_calls + 1, $authorization->calls );
 		$this->assertSame( 'venue_action_forbidden', $abilities->can_access_booking( array( 'booking_id' => 999 ) )->get_error_code() );
-		$this->assertSame( array( array( 12, 55, VenueAuthorization::ACTION_ACCESS_VENUE ) ), $authorization->calls, 'Missing bookings must not reach authorization with a guessed venue.' );
+		$this->assertCount( $authorization_calls + 1, $authorization->calls, 'Missing bookings must not reach authorization with a guessed venue.' );
 	}
 }

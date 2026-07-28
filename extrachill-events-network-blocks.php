@@ -4,7 +4,6 @@
  * Description: Exposes Events-owned public blocks across the Extra Chill network without loading the Events runtime on other sites.
  * Author: Chris Huber
  * Author URI: https://chubes.net
- * Requires Plugins: extrachill-network, extrachill-api
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: extrachill-events

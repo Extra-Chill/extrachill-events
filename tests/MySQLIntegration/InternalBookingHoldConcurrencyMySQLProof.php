@@ -104,6 +104,7 @@ final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMy
 		wp_set_current_user( $this->actor_id );
 		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );
 		$this->configure_booking_venue();
+		$booking = $this->prepare_booking( 'Canonical Conflict Probe' );
 
 		$event_id = self::factory()->post->create(
 			array(
@@ -126,8 +127,7 @@ final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMy
 			)
 		);
 
-		$booking = $this->prepare_booking( 'Canonical Conflict Probe' );
-		$result  = wp_get_ability( 'extrachill/create-booking-hold' )->execute(
+		$result = wp_get_ability( 'extrachill/create-booking-hold' )->execute(
 			array(
 				'booking_id'              => $booking['id'],
 				'expected_booking_version' => $booking['version'],

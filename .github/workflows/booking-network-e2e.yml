@@ -119,7 +119,7 @@ jobs:
         env:
           BOOKING_E2E_ARTIFACT_ROOT: ${{ github.workspace }}/artifacts/booking-network-e2e
           BOOKING_E2E_DATA_MACHINE: ${{ github.workspace }}/.ci/data-machine
-          BOOKING_E2E_DATA_MACHINE_REV: dc71db023b09b9d4cd29e9c853678b930384b033
+          BOOKING_E2E_DATA_MACHINE_REV: 25dbfc8e6c7e371afc80b64d58cd7761b902e3ac
           BOOKING_E2E_DATA_MACHINE_EVENTS: ${{ github.workspace }}/.ci/data-machine-events
           BOOKING_E2E_DATA_MACHINE_EVENTS_REV: fb445f87b4133600244d129ed53538cfde7fbb1b
           BOOKING_E2E_EXTRACHILL_API: ${{ github.workspace }}/.ci/extrachill-api

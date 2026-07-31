@@ -1187,7 +1187,7 @@ final class AccountMarketTest extends TestCase {
 		$this->assertStringContainsString( 'href="https://events.example/location/charleston/">City calendar</a>', $output );
 		$this->assertStringContainsString( '883 upcoming events', $output );
 		$this->assertStringContainsString( 'Austin, Texas', $output );
-		$this->assertStringContainsString( 'href="https://events.example/near-me/">Shows near me', $output );
+		$this->assertStringContainsString( 'href="' . esc_url( home_url( '/near-me/' ) ) . '">Shows near me', $output );
 		$this->assertStringContainsString( 'Browse all locations', $output );
 		$this->assertStringNotContainsString( 'Showing events for', $output );
 	}

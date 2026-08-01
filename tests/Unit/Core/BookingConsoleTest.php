@@ -35,6 +35,18 @@ if ( ! function_exists( 'add_query_arg' ) ) {
 		return $url . '?' . http_build_query( $args );
 	}
 }
+if ( ! function_exists( '__' ) ) {
+	/** Return untranslated test text. */
+	function __( $text ) {
+		return $text;
+	}
+}
+if ( ! function_exists( 'wp_login_url' ) ) {
+	/** Build a deterministic test login URL. */
+	function wp_login_url( $redirect ) {
+		return 'https://events.example/login/?redirect_to=' . rawurlencode( $redirect );
+	}
+}
 
 require_once dirname( __DIR__, 3 ) . '/inc/core/booking-console.php';
 
@@ -53,5 +65,48 @@ final class BookingConsoleTest extends TestCase {
 			$base_url . '#tab-calendar',
 			ec_events_get_booking_console_url( 0 )
 		);
+	}
+
+	/**
+	 * Verify each authorization state resolves its intended action.
+	 *
+	 * @dataProvider venue_workspace_states
+	 * @param string $state Authorization state.
+	 * @param string $label Expected action label.
+	 * @param string $url   Expected action URL.
+	 */
+	public function test_venue_workspace_action_matches_authorization_state( string $state, string $label, string $url ): void {
+		$this->assertSame(
+			array(
+				'url'   => $url,
+				'label' => $label,
+			),
+			ec_events_get_venue_workspace_action_for_state( 44, $state )
+		);
+	}
+
+	/** Provide member, non-member, logged-out, and administrator states. */
+	public function venue_workspace_states(): array {
+		$workspace = 'https://events.example/venue-settings/?venue_id=44#tab-calendar';
+		return array(
+			'active member' => array( 'member', 'Manage Venue', $workspace ),
+			'non-member'    => array( 'non_member', 'Claim or request access', $workspace ),
+			'logged out'    => array( 'logged_out', 'Sign in to claim or manage', 'https://events.example/login/?redirect_to=' . rawurlencode( $workspace ) ),
+			'administrator' => array( 'administrator', 'Review venue claims', 'https://events.example/venue-settings/?venue_id=44#tab-claims' ),
+		);
+	}
+
+	/** Ensure all requested navigation surfaces remain registered. */
+	public function test_navigation_surfaces_keep_existing_avatar_link_and_condition_homepage_card(): void {
+		$plugin_root = dirname( __DIR__, 3 );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reading local source contracts.
+		$booking_console = file_get_contents( $plugin_root . '/inc/core/booking-console.php' );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reading local source contracts.
+		$feature_cards = file_get_contents( $plugin_root . '/inc/home/feature-cards.php' );
+
+		$this->assertStringContainsString( "add_filter( 'ec_avatar_menu_items', 'ec_events_add_manage_venue_avatar_item'", $booking_console );
+		$this->assertStringContainsString( "add_filter( 'extrachill_secondary_header_items', 'ec_events_add_venue_workspace_header_item'", $booking_console );
+		$this->assertStringContainsString( 'ec_events_user_has_active_venue_membership( get_current_user_id() )', $feature_cards );
+		$this->assertStringContainsString( 'Review inquiries, manage holds, and keep your venue calendar up to date.', $feature_cards );
 	}
 }

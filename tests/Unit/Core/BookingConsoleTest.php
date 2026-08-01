@@ -44,7 +44,7 @@ if ( ! function_exists( '__' ) ) {
 if ( ! function_exists( 'wp_login_url' ) ) {
 	/** Build a deterministic test login URL. */
 	function wp_login_url( $redirect ) {
-		return 'https://events.example/login/?redirect_to=' . rawurlencode( $redirect );
+		return home_url( '/wp-login.php?redirect_to=' . rawurlencode( $redirect ) );
 	}
 }
 
@@ -76,24 +76,36 @@ final class BookingConsoleTest extends TestCase {
 	 * @param string $url   Expected action URL.
 	 */
 	public function test_venue_workspace_action_matches_authorization_state( string $state, string $label, string $url ): void {
+		$action = ec_events_get_venue_workspace_action_for_state( 44, $state );
 		$this->assertSame(
 			array(
 				'url'   => $url,
 				'label' => $label,
 			),
-			ec_events_get_venue_workspace_action_for_state( 44, $state )
+			$action
 		);
+
+		if ( 'logged_out' === $state ) {
+			parse_str( (string) parse_url( $action['url'], PHP_URL_QUERY ), $query );
+			$this->assertSame( $this->expected_workspace_url(), $query['redirect_to'] ?? '' );
+		}
 	}
 
 	/** Provide member, non-member, logged-out, and administrator states. */
 	public function venue_workspace_states(): array {
-		$workspace = 'https://events.example/venue-settings/?venue_id=44#tab-calendar';
+		$workspace = $this->expected_workspace_url();
 		return array(
 			'active member' => array( 'member', 'Manage Venue', $workspace ),
 			'non-member'    => array( 'non_member', 'Claim or request access', $workspace ),
-			'logged out'    => array( 'logged_out', 'Sign in to claim or manage', 'https://events.example/login/?redirect_to=' . rawurlencode( $workspace ) ),
-			'administrator' => array( 'administrator', 'Review venue claims', 'https://events.example/venue-settings/?venue_id=44#tab-claims' ),
+			'logged out'    => array( 'logged_out', 'Sign in to claim or manage', wp_login_url( $workspace ) ),
+			'administrator' => array( 'administrator', 'Review venue claims', str_replace( '#tab-calendar', '#tab-claims', $workspace ) ),
 		);
+	}
+
+	/** Build the expected workspace URL from the active WordPress environment. */
+	private function expected_workspace_url(): string {
+		$base_url = get_home_url( (int) ec_get_blog_id( 'events' ), '/venue-settings/' );
+		return add_query_arg( array( 'venue_id' => 44 ), $base_url ) . '#tab-calendar';
 	}
 
 	/** Ensure all requested navigation surfaces remain registered. */

@@ -14,6 +14,7 @@ const artifacts =
 const config = {
 	instanceId: 'ec-booking-browser-proof',
 	endpoint: '/booking-inquiries',
+	availabilityEndpoint: '/booking-availability',
 	restNonce: 'booking-proof-nonce',
 	authenticated: true,
 	heading: 'Booking inquiries',
@@ -37,13 +38,41 @@ const config = {
 			options: [],
 		},
 		{
-			key: 'format',
-			label: 'Performance format',
+			key: 'event_type',
+			label: 'Event type',
 			type: 'select',
 			required: true,
-			options: [ 'Full band', 'Solo' ],
+			options: [ 'Concert', 'Market', 'Other' ],
+		},
+		{
+			key: 'other_event',
+			label: 'Other event details',
+			type: 'text',
+			required: true,
+			options: [],
+			visible_when: { field: 'event_type', value: 'Other' },
+		},
+		{
+			key: 'press_links',
+			label: 'Press links',
+			type: 'url_list',
+			required: false,
+			options: [],
 		},
 	],
+	presentation: {
+		artist_name_label: 'Artist or project name',
+		contact_name_label: 'Contact name',
+		contact_email_label: 'Contact email',
+		contact_phone_label: 'Phone (Emergency use only)',
+		message_label: 'Additional performance details',
+		message_help: 'Share routing and scheduling notes.',
+	},
+	linkPage: {
+		url: 'https://artist.example/manage-link-page/',
+		hasPage: true,
+		authenticated: true,
+	},
 	consent: {
 		required: true,
 		label: 'I agree that this venue may use these details to review and respond to my booking inquiry.',
@@ -60,6 +89,21 @@ const fixture = `<!doctype html>
 	<body>
 		<main>
 			<section class="wp-block-extrachill-venue-booking-inquiry ec-venue-booking-inquiry">
+				<div class="ec-booking-guide" aria-labelledby="booking-guide-title">
+					<h2 id="booking-guide-title">Booking guide</h2>
+					<p>Venue-provided information to review before sending a booking inquiry.</p>
+					<div class="ec-booking-guide__entries">
+						<article class="ec-booking-guide__entry" data-guide-key="load_in">
+							<h3>When is load-in?</h3>
+							<p>Load-in timing is confirmed in the booking thread.</p>
+						</article>
+						<article class="ec-booking-guide__entry" data-guide-key="equipment">
+							<h3>What equipment is available?</h3>
+							<p>The current production package is shared after inquiry review.</p>
+						</article>
+					</div>
+					<p class="ec-booking-guide__communication">For details not covered here, send an inquiry below so communication stays with the booking request.</p>
+				</div>
 				<div data-booking-app></div>
 				<script type="application/json">${ JSON.stringify( config ) }</script>
 				<div data-booking-turnstile><div class="cf-turnstile">Security check</div></div>
@@ -102,8 +146,10 @@ const measure = ( page ) =>
 			scrollWidth: document.documentElement.scrollWidth,
 			shell,
 			panel: bounds( '.ec-booking-inquiry__panel' ),
+			guide: bounds( '.ec-booking-guide' ),
+			guideEntries: bounds( '.ec-booking-guide__entries' ),
 			form,
-			grid: bounds( '.ec-booking-inquiry__form > .ec-card-grid' ),
+			grid: bounds( '.ec-booking-inquiry__step .ec-card-grid' ),
 			turnstile: bounds( '.ec-booking-inquiry__turnstile' ),
 			actions: bounds( '.ec-action-row' ),
 			inlineGutter: form.left - shell.left,
@@ -149,6 +195,24 @@ const measure = ( page ) =>
 					createRoot: window.ReactDOM.createRoot,
 				},
 			};
+			window.bookingAvailable = false;
+			window.fetch = async ( url ) => {
+				if ( String( url ).includes( 'booking-availability' ) ) {
+					return new Response(
+						JSON.stringify( {
+							available: window.bookingAvailable,
+						} ),
+						{
+							status: 200,
+							headers: { 'Content-Type': 'application/json' },
+						}
+					);
+				}
+				return new Response( JSON.stringify( { public_id: 'proof' } ), {
+					status: 201,
+					headers: { 'Content-Type': 'application/json' },
+				} );
+			};
 		} );
 		await page.addScriptTag( {
 			path: path.join( root, 'build/venue-booking-inquiry/view.js' ),
@@ -156,11 +220,56 @@ const measure = ( page ) =>
 		await page.waitForSelector( '.ec-booking-inquiry__form' );
 
 		assert.equal( await page.getByText( 'Booking inquiries' ).count(), 1 );
+		assert.equal(
+			await page
+				.getByRole( 'heading', { name: 'Booking guide' } )
+				.count(),
+			1
+		);
+		assert.equal( await page.getByText( 'When is load-in?' ).count(), 1 );
 		assert.equal( await page.getByText( 'Now booking' ).count(), 1 );
 		assert.equal( await page.getByText( 'Signed-in inquiry' ).count(), 1 );
-		assert.ok( await page.getByLabel( 'Artist or project name' ).count() );
+		assert.equal(
+			await page.getByLabel( 'Artist or project name' ).count(),
+			0
+		);
+		assert.ok( await page.getByLabel( 'Requested start' ).count() );
+		assert.ok( await page.getByLabel( 'Requested end' ).count() );
+		await page.getByLabel( 'Requested start' ).fill( '2030-08-01T20:00' );
+		await page.getByLabel( 'Requested end' ).fill( '2030-08-01T23:00' );
+		await page
+			.getByRole( 'button', { name: 'Check availability' } )
+			.click();
+		await page.getByText( /That exact time is unavailable/ ).waitFor();
+		assert.equal(
+			await page.getByLabel( 'Artist or project name' ).count(),
+			0
+		);
+		assert.equal(
+			await page.getByLabel( 'Requested start' ).inputValue(),
+			'2030-08-01T20:00'
+		);
+		await page.evaluate( () => {
+			window.bookingAvailable = true;
+		} );
+		await page
+			.getByRole( 'button', { name: 'Check availability' } )
+			.click();
+		await page.getByLabel( 'Artist or project name' ).waitFor();
 		assert.ok( await page.getByLabel( 'Artist website' ).count() );
 		assert.ok( await page.getByLabel( /I agree that this venue/ ).count() );
+		assert.equal(
+			await page.getByLabel( 'Other event details' ).count(),
+			0
+		);
+		await page.getByLabel( 'Event type' ).selectOption( 'Other' );
+		assert.ok( await page.getByLabel( 'Other event details' ).count() );
+		await page.getByLabel( 'Event type' ).selectOption( 'Concert' );
+		assert.ok(
+			await page
+				.getByRole( 'link', { name: 'Use or manage your Link Page' } )
+				.count()
+		);
 		assert.equal(
 			await page
 				.locator( '.ec-booking-inquiry__turnstile .cf-turnstile' )
@@ -172,6 +281,7 @@ const measure = ( page ) =>
 		assert.equal( desktop.scrollWidth, desktop.viewportWidth );
 		assert.ok( desktop.inlineGutter > 0 );
 		assert.equal( desktop.controlsInsideViewport, true );
+		assert.ok( desktop.guideEntries.width <= desktop.guide.width );
 		assert.ok(
 			Number.parseFloat(
 				await page
@@ -192,16 +302,14 @@ const measure = ( page ) =>
 		assert.ok( mobile.inlineGutter > 0 );
 		assert.ok( mobile.form.right < mobile.viewportWidth );
 		assert.equal( mobile.controlsInsideViewport, true );
+		assert.ok( mobile.guideEntries.right <= mobile.viewportWidth );
 
 		await page.getByLabel( 'Artist or project name' ).fill( 'Proof Band' );
 		await page.getByLabel( 'Contact name' ).fill( 'Booking Agent' );
 		await page.getByLabel( 'Contact email' ).fill( 'agent@example.com' );
-		await page.getByLabel( 'Requested start' ).fill( '2030-08-01T20:00' );
+		await page.getByLabel( 'Event type' ).selectOption( 'Concert' );
 		await page
-			.getByLabel( 'Performance format' )
-			.selectOption( 'Full band' );
-		await page
-			.getByLabel( 'Performance details' )
+			.getByLabel( 'Additional performance details' )
 			.fill( 'Routing through Charleston.' );
 		await page.getByLabel( /I agree that this venue/ ).check();
 		await page

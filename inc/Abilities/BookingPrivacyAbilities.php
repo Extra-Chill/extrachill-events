@@ -25,6 +25,7 @@ class BookingPrivacyAbilities {
 	public function __construct( ?BookingPrivacyService $service = null ) {
 		$this->service = $service ? $service : new BookingPrivacyService();
 		if ( ! self::$registered ) {
+			// @phpstan-ignore arguments.count
 			add_action( 'wp_abilities_api_init', array( $this, 'register' ) );
 			self::$registered = true;
 		}
@@ -62,7 +63,7 @@ class BookingPrivacyAbilities {
 
 	public function permission( array $input ) {
 		$result = $this->service->authorize_operation( $input, get_current_user_id() );
-		return is_wp_error( $result ) ? $result : true;
+		return $result instanceof \WP_Error ? $result : true;
 	}
 
 	private function input_schema(): array {

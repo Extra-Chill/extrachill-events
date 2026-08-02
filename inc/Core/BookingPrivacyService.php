@@ -140,7 +140,7 @@ class BookingPrivacyService {
 		$offset = ( $page - 1 ) * self::BATCH_SIZE;
 		$rows   = $this->read( 'bookings', $identity, $offset, self::BATCH_SIZE );
 		$comms  = $this->read( 'communications', $identity, $offset, self::BATCH_SIZE );
-		if ( is_wp_error( $rows ) || is_wp_error( $comms ) ) {
+		if ( $rows instanceof \WP_Error || $comms instanceof \WP_Error ) {
 			return array(
 				'data' => array(),
 				'done' => true,
@@ -171,14 +171,14 @@ class BookingPrivacyService {
 			return $this->erasure_result( false, false, array(), true );
 		}
 		$rows = $this->read( 'erasable', $identity, 0, self::BATCH_SIZE );
-		if ( is_wp_error( $rows ) ) {
+		if ( $rows instanceof \WP_Error ) {
 			return $this->erasure_result( false, true, array( __( 'Booking records could not be anonymized.', 'extrachill-events' ) ), true );
 		}
 		$removed  = false;
 		$retained = false;
 		foreach ( $rows as $row ) {
 			$result = $this->redact( $row, 'verified_privacy_request', 0 );
-			if ( is_wp_error( $result ) ) {
+			if ( $result instanceof \WP_Error ) {
 				return $this->erasure_result( $removed, true, array( __( 'A booking record could not be anonymized.', 'extrachill-events' ) ), true );
 			}
 			$removed  = $removed || ! empty( $result['changed'] );
@@ -191,7 +191,7 @@ class BookingPrivacyService {
 	/** Run an authorized diagnostic or dry-run-first retention pass. */
 	public function operate( array $input, int $actor_id ) {
 		$request = $this->authorize_operation( $input, $actor_id );
-		if ( is_wp_error( $request ) ) {
+		if ( $request instanceof \WP_Error ) {
 			return $request;
 		}
 		if ( 'diagnose' === $request['operation'] ) {
@@ -208,7 +208,7 @@ class BookingPrivacyService {
 		$cutoff                      = gmdate( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) );
 		$request['retention_cutoff'] = min( $request['before'], $cutoff );
 		$rows                        = $this->read( 'cleanup', $request, 0, $request['limit'] );
-		if ( is_wp_error( $rows ) ) {
+		if ( $rows instanceof \WP_Error ) {
 			return $rows;
 		}
 		$items = array();
@@ -216,7 +216,7 @@ class BookingPrivacyService {
 			$changed = false;
 			if ( $request['apply'] ) {
 				$result = $this->redact( $row, 'retention_policy', $actor_id );
-				if ( is_wp_error( $result ) ) {
+				if ( $result instanceof \WP_Error ) {
 					return $result;
 				}
 				$changed = ! empty( $result['changed'] );
@@ -241,11 +241,11 @@ class BookingPrivacyService {
 	/** Validate scope and exact venue authority without executing a read or mutation. */
 	public function authorize_operation( array $input, int $actor_id ) {
 		$request = $this->normalize_operation( $input );
-		if ( is_wp_error( $request ) ) {
+		if ( $request instanceof \WP_Error ) {
 			return $request;
 		}
 		$allowed = $this->authorization->authorize( $actor_id, $request['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE );
-		return true === $allowed ? $request : ( is_wp_error( $allowed ) ? $allowed : $this->forbidden() );
+		return true === $allowed ? $request : ( $allowed instanceof \WP_Error ? $allowed : $this->forbidden() );
 	}
 
 	/** Exact identity rule: account-owned rows use user ID; anonymous rows use verified email. */
@@ -366,6 +366,7 @@ class BookingPrivacyService {
 		}
 
 		$communications = $wpdb->get_results( $wpdb->prepare( "SELECT id, payload FROM {$activity} WHERE booking_id = %d AND is_communication = 1 ORDER BY id ASC FOR UPDATE", (int) $current['id'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Locks exact correspondence ledger.
+		// @phpstan-ignore notIdentical.alwaysFalse -- Runtime wpdb can report an error independently of the test double's declared default.
 		if ( ! is_array( $communications ) || '' !== (string) $wpdb->last_error ) {
 			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Failed privacy mutation rollback.
 			return new \WP_Error( 'booking_privacy_activity_read_failed', __( 'Booking correspondence could not be anonymized.', 'extrachill-events' ) );
@@ -417,7 +418,7 @@ class BookingPrivacyService {
 					),
 				)
 			);
-			if ( is_wp_error( $audit ) ) {
+			if ( $audit instanceof \WP_Error ) {
 				$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Failed privacy mutation rollback.
 				return $audit;
 			}

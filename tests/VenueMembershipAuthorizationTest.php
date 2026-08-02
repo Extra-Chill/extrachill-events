@@ -1863,6 +1863,11 @@ final class VenueMembershipAuthorizationTest extends BookingTestCase {
 		$this->assertSame( array( 4 ), $config_input['oneOf'][3]['properties']['version']['enum'] );
 		$this->assertContains( 'booking_guide', $config_input['oneOf'][3]['required'] );
 		$this->assertSame( array( 4 ), $config_output['properties']['version']['enum'] );
+		$correspondence_output = $config_output['properties']['correspondence'];
+		$this->assertSame( 6, $correspondence_output['properties']['variables']['maxItems'] );
+		$this->assertContains( 'cc_address', $correspondence_output['required'] );
+		$this->assertContains( 'from_name', $correspondence_output['required'] );
+		$this->assertContains( 'footer', $correspondence_output['required'] );
 		$intake_output = $config_output['properties']['intake'];
 		$this->assertContains( 'presentation', $intake_output['required'] );
 		$this->assertSame(

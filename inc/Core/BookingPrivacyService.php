@@ -366,7 +366,8 @@ class BookingPrivacyService {
 		}
 
 		$communications = $wpdb->get_results( $wpdb->prepare( "SELECT id, payload FROM {$activity} WHERE booking_id = %d AND is_communication = 1 ORDER BY id ASC FOR UPDATE", (int) $current['id'] ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Locks exact correspondence ledger.
-		// @phpstan-ignore notIdentical.alwaysFalse -- Runtime wpdb can report an error independently of the test double's declared default.
+		// Runtime wpdb can report an error independently of the test double's declared default.
+		// @phpstan-ignore notIdentical.alwaysFalse
 		if ( ! is_array( $communications ) || '' !== (string) $wpdb->last_error ) {
 			$wpdb->query( 'ROLLBACK' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Failed privacy mutation rollback.
 			return new \WP_Error( 'booking_privacy_activity_read_failed', __( 'Booking correspondence could not be anonymized.', 'extrachill-events' ) );

@@ -191,6 +191,25 @@ final class BookingCommunicationTest extends BookingTestCase {
 		$this->assertStringContainsString( '{{venue_name}}', $queued[0]['body'] );
 	}
 
+	public function test_legacy_default_receipt_subject_upgrades_without_overwriting_custom_templates(): void {
+		$config = ( new VenueBookingConfig() )->get( 55 );
+		$config['correspondence']['templates']['inquiry_receipt']['subject'] = 'Booking inquiry received at {{venue_name}} [{{booking_id}}]';
+		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = $config;
+		$variables = array(
+			'artist_name'   => 'Test Band',
+			'booking_id'    => 'long-public-reference',
+			'contact_name'  => 'Artist Agent',
+			'requested_date' => 'Aug 1',
+			'venue_name'    => 'The Room',
+			'message'       => 'Received.',
+		);
+
+		$preview = ( new VenueBookingConfig() )->preview( 55, 'inquiry_receipt', 1, $variables );
+
+		$this->assertSame( 'Booking inquiry received: Test Band at The Room - Aug 1', $preview['subject'] );
+		$this->assertStringNotContainsString( 'long-public-reference', $preview['subject'] );
+	}
+
 	public function test_configured_policy_owns_schedule_and_stale_template_versions_fail_closed(): void {
 		$booking = $this->booking();
 		$queued = $scheduled = $cancelled = array();

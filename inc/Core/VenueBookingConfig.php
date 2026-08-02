@@ -874,11 +874,19 @@ class VenueBookingConfig {
 		}
 		$templates = array();
 		$provided  = is_array( $correspondence['templates'] ?? null ) ? $correspondence['templates'] : array();
+		$legacy_subjects = array(
+			'follow_up'       => 'Following up on booking {{booking_id}}',
+			'inquiry_receipt' => 'Booking inquiry received at {{venue_name}} [{{booking_id}}]',
+			'date_filled'     => 'Booking date update from {{venue_name}}',
+		);
 		foreach ( self::CORRESPONDENCE_TEMPLATES as $key ) {
 			$template = is_array( $provided[ $key ] ?? null ) ? $provided[ $key ] : $defaults['templates'][ $key ];
 			$version  = $template['version'] ?? self::TEMPLATE_VERSION;
 			$subject  = trim( (string) ( $template['subject'] ?? '' ) );
 			$body     = trim( (string) ( $template['body'] ?? '' ) );
+			if ( ( $legacy_subjects[ $key ] ?? null ) === $subject ) {
+				$subject = $defaults['templates'][ $key ]['subject'];
+			}
 			if ( ! is_int( $version ) || $version < 1 || $version > 1000000 || '' === $subject || mb_strlen( $subject ) > 200 || preg_match( '/[\r\n]/', $subject ) || '' === $body || mb_strlen( $body ) > 10000 ) {
 				return new \WP_Error( 'invalid_booking_correspondence_template', __( 'A booking correspondence template is invalid.', 'extrachill-events' ), array( 'template' => $key ) );
 			}

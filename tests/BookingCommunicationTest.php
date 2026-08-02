@@ -133,10 +133,12 @@ final class BookingCommunicationTest extends BookingTestCase {
 
 		$this->assertSame( 'queued', $result['status'] );
 		$this->assertCount( 1, $queued );
-		$this->assertSame( 'chubes@extrachill.com', $queued[0]['cc'] );
-		$this->assertSame( 'Extra Chill Bot', $queued[0]['from_name'] );
+		$this->assertSame( '', $queued[0]['cc'] );
+		$this->assertSame( 'Extra Chill Bookings', $queued[0]['from_name'] );
 		$this->assertSame( 'venue-booking@example.com', $queued[0]['reply_to'] );
-		$this->assertStringContainsString( "Extra Chill Bot sending on Chris's behalf.", $queued[0]['body'] );
+		$this->assertStringContainsString( 'Powered by Extra Chill', $queued[0]['body'] );
+		$this->assertStringNotContainsString( 'Extra Chill Bot', $queued[0]['body'] );
+		$this->assertStringNotContainsString( 'Chris', $queued[0]['body'] );
 		$this->assertArrayNotHasKey( 'attachments', $queued[0] );
 		$this->assertArrayNotHasKey( 'credentials', $queued[0] );
 		$activity = ( new BookingActivityRepository() )->list_for_booking( $booking['id'] );
@@ -154,6 +156,9 @@ final class BookingCommunicationTest extends BookingTestCase {
 			'subject' => '{{artist_name}} at {{venue_name}} [{{booking_id}}]',
 			'body'    => "Hello {{contact_name}},\n\n{{message}}",
 		);
+		$config['correspondence']['cc_address'] = 'audit@example.com';
+		$config['correspondence']['from_name']  = 'The Room Bookings';
+		$config['correspondence']['footer']     = 'Powered by The Room on Extra Chill';
 		$GLOBALS['ec_artist_test']['meta'][7][55][ VenueBookingConfig::META_KEY ] = $config;
 		$variables = array(
 			'artist_name' => 'Test Band',
@@ -179,6 +184,9 @@ final class BookingCommunicationTest extends BookingTestCase {
 		$this->assertSame( 'queued', $result['status'] );
 		$this->assertSame( $preview['subject'], $queued[0]['subject'] );
 		$this->assertSame( $preview['body'], $queued[0]['body'] );
+		$this->assertSame( 'audit@example.com', $queued[0]['cc'] );
+		$this->assertSame( 'The Room Bookings', $queued[0]['from_name'] );
+		$this->assertStringContainsString( 'Powered by The Room on Extra Chill', $queued[0]['body'] );
 		$this->assertStringNotContainsString( '<b>', $queued[0]['body'] );
 		$this->assertStringContainsString( '{{venue_name}}', $queued[0]['body'] );
 	}

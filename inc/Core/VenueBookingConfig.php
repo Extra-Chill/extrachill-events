@@ -24,9 +24,10 @@ class VenueBookingConfig {
 	public const CORRESPONDENCE_VERSION      = 1;
 	public const TEMPLATE_VERSION            = 1;
 	public const REMINDER_POLICY_VERSION     = 1;
-	public const CORRESPONDENCE_TEMPLATES    = array( 'operator_message', 'follow_up', 'hold_expiring' );
+	public const CORRESPONDENCE_TEMPLATES    = array( 'operator_message', 'follow_up', 'hold_expiring', 'inquiry_receipt', 'date_filled' );
 	public const CORRESPONDENCE_VARIABLES    = array( 'artist_name', 'booking_id', 'contact_name', 'venue_name' );
 	public const CONSENT_VERSION             = 1;
+	public const HOLD_TTL_MAX_MINUTES        = 20160;
 	public const SOCIAL_MARKETING_ACTION     = 'datamachine-socials/cross-post';
 	public const NEWSLETTER_MARKETING_ACTION = 'extrachill-newsletter/canonical-post-campaign';
 
@@ -70,27 +71,39 @@ class VenueBookingConfig {
 			return new \WP_Error( 'invalid_booking_public_config', __( 'The public venue booking configuration is unavailable.', 'extrachill-events' ) );
 		}
 
-		$normalized = $this->normalize( $stored );
-		if ( is_wp_error( $normalized ) ) {
-			return new \WP_Error( 'invalid_booking_public_config', __( 'The public venue booking configuration is unavailable.', 'extrachill-events' ) );
-		}
-		$revision = $normalized['revision'];
+		$revision = $stored['revision'] ?? null;
 		if ( ! is_array( $stored['intake'] ?? null ) || 1 !== ( $stored['intake']['version'] ?? null ) ) {
 			return new \WP_Error( 'invalid_booking_public_config', __( 'The public venue booking configuration is unavailable.', 'extrachill-events' ) );
 		}
+		if ( ! is_int( $revision ) || $revision < 0 ) {
+			return new \WP_Error( 'invalid_booking_public_config', __( 'The public venue booking configuration is unavailable.', 'extrachill-events' ) );
+		}
+
+		$fields       = $this->normalize_intake_fields( $stored['intake']['fields'] ?? null );
+		$presentation = $this->normalize_intake_presentation( $stored['intake']['presentation'] ?? array() );
+		$requirements = $this->normalize_public_requirements( $stored['public_requirements'] ?? null );
+		$consent      = $this->normalize_consent( $stored['consent'] ?? null );
+		$spaces       = $this->normalize_spaces( $stored['spaces'] ?? null );
+		$booking_guide = $this->normalize_booking_guide( $stored['booking_guide'] ?? array() );
+		foreach ( array( $fields, $presentation, $requirements, $consent, $spaces, $booking_guide ) as $section ) {
+			if ( is_wp_error( $section ) ) {
+				return $section;
+			}
+		}
 
 		return array(
-			'enabled'             => $normalized['enabled'],
+			'enabled'             => ! empty( $stored['enabled'] ),
 			'revision'            => $revision,
-			'fields'              => $normalized['intake']['fields'],
-			'public_requirements' => $normalized['public_requirements'],
-			'consent'             => $normalized['consent'],
-			'spaces'              => $normalized['spaces'],
+			'fields'              => $fields,
+			'presentation'        => $presentation,
+			'public_requirements' => $requirements,
+			'consent'             => $consent,
+			'spaces'              => $spaces,
 			'booking_guide'       => array(
 				'version' => self::BOOKING_GUIDE_VERSION,
 				'entries' => array_values(
 					array_filter(
-						$normalized['booking_guide']['entries'],
+						$booking_guide['entries'],
 						static function ( array $entry ): bool {
 							return 'public' === $entry['visibility'];
 						}
@@ -351,8 +364,8 @@ class VenueBookingConfig {
 			return $correspondence;
 		}
 		$hold_ttl = isset( $config['hold_ttl_minutes'] ) ? (int) $config['hold_ttl_minutes'] : 1440;
-		if ( $hold_ttl < 5 || $hold_ttl > 10080 ) {
-			return new \WP_Error( 'invalid_booking_hold_ttl', __( 'Hold TTL must be between 5 minutes and 7 days.', 'extrachill-events' ) );
+		if ( $hold_ttl < 5 || $hold_ttl > self::HOLD_TTL_MAX_MINUTES ) {
+			return new \WP_Error( 'invalid_booking_hold_ttl', __( 'Hold TTL must be between 5 minutes and 14 days.', 'extrachill-events' ) );
 		}
 
 		$revision = $config['revision'] ?? 0;
@@ -375,8 +388,9 @@ class VenueBookingConfig {
 			'updated_at'                => $updated_at,
 			'enabled'                   => ! empty( $config['enabled'] ),
 			'intake'                    => array(
-				'version' => 1,
-				'fields'  => $fields,
+				'version'      => 1,
+				'fields'       => $fields,
+				'presentation' => $this->normalize_intake_presentation( $config['intake']['presentation'] ?? array() ),
 			),
 			'public_requirements'       => $requirements,
 			'consent'                   => $consent,
@@ -407,8 +421,9 @@ class VenueBookingConfig {
 			'updated_at'                => null,
 			'enabled'                   => false,
 			'intake'                    => array(
-				'version' => 1,
-				'fields'  => array(),
+				'version'      => 1,
+				'fields'       => array(),
+				'presentation' => $this->normalize_intake_presentation( array() ),
 			),
 			'public_requirements'       => array(),
 			'consent'                   => array(
@@ -453,6 +468,16 @@ class VenueBookingConfig {
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking hold update for {{artist_name}}',
 						'body'    => "A reminder about your booking hold at {{venue_name}}:\n\n{{message}}",
+					),
+					'inquiry_receipt'  => array(
+						'version' => self::TEMPLATE_VERSION,
+						'subject' => 'Booking inquiry received at {{venue_name}} [{{booking_id}}]',
+						'body'    => "Hello {{contact_name}},\n\n{{message}}",
+					),
+					'date_filled'      => array(
+						'version' => self::TEMPLATE_VERSION,
+						'subject' => 'Booking date update from {{venue_name}}',
+						'body'    => "Hello {{contact_name}},\n\n{{message}}",
 					),
 				),
 				'reminder_policies' => array(
@@ -573,7 +598,7 @@ class VenueBookingConfig {
 		}
 		$normalized = array();
 		$seen       = array();
-		$types      = array( 'text', 'textarea', 'email', 'phone', 'number', 'select', 'checkbox', 'url' );
+		$types      = array( 'text', 'textarea', 'email', 'phone', 'number', 'select', 'checkbox', 'url', 'url_list' );
 		foreach ( $fields as $field ) {
 			$key   = mb_substr( sanitize_key( (string) ( $field['key'] ?? '' ) ), 0, 64 );
 			$type  = sanitize_key( (string) ( $field['type'] ?? 'text' ) );
@@ -582,20 +607,56 @@ class VenueBookingConfig {
 				return new \WP_Error( 'invalid_booking_intake_field', __( 'Each intake field needs a unique normalized key and supported type.', 'extrachill-events' ) );
 			}
 			$seen[ $key ] = true;
+			$visible_when = null;
+			if ( null !== ( $field['visible_when'] ?? null ) ) {
+				$condition       = is_array( $field['visible_when'] ) ? $field['visible_when'] : array();
+				$condition_field = mb_substr( sanitize_key( (string) ( $condition['field'] ?? '' ) ), 0, 64 );
+				$condition_value = mb_substr( sanitize_text_field( (string) ( $condition['value'] ?? '' ) ), 0, 191 );
+				if ( '' === $condition_field || '' === $condition_value || ! isset( $seen[ $condition_field ] ) || $condition_field === $key ) {
+					return new \WP_Error( 'invalid_booking_intake_condition', __( 'Conditional intake fields must depend on an earlier configured field and value.', 'extrachill-events' ) );
+				}
+				$visible_when = array(
+					'field' => $condition_field,
+					'value' => $condition_value,
+				);
+			}
 			$normalized[] = array(
-				'key'      => $key,
-				'label'    => $label,
-				'type'     => $type,
-				'required' => ! empty( $field['required'] ),
-				'options'  => array_map(
+				'key'          => $key,
+				'label'        => $label,
+				'type'         => $type,
+				'required'     => ! empty( $field['required'] ),
+				'options'      => array_map(
 					static function ( $option ): string {
 						return mb_substr( sanitize_text_field( $option ), 0, 191 );
 					},
 					array_values( array_slice( (array) ( $field['options'] ?? array() ), 0, 100 ) )
 				),
+				'visible_when' => $visible_when,
 			);
 		}
 		return $normalized;
+	}
+
+	/**
+	 * Normalize configurable labels for the stable built-in inquiry fields.
+	 *
+	 * @param mixed $presentation Proposed presentation values.
+	 */
+	private function normalize_intake_presentation( $presentation ): array {
+		$defaults     = array(
+			'artist_name_label'   => __( 'Artist or project name', 'extrachill-events' ),
+			'contact_name_label'  => __( 'Contact name', 'extrachill-events' ),
+			'contact_email_label' => __( 'Contact email', 'extrachill-events' ),
+			'contact_phone_label' => __( 'Contact phone', 'extrachill-events' ),
+			'message_label'       => __( 'Additional performance details', 'extrachill-events' ),
+			'message_help'        => __( 'Share routing, scheduling, and anything else the venue should know.', 'extrachill-events' ),
+		);
+		$presentation = is_array( $presentation ) ? $presentation : array();
+		foreach ( $defaults as $key => $default ) {
+			$value            = mb_substr( sanitize_text_field( (string) ( $presentation[ $key ] ?? $default ) ), 0, 500 );
+			$defaults[ $key ] = '' === $value ? $default : $value;
+		}
+		return $defaults;
 	}
 
 	/** Normalize public, non-operational requirements shown before inquiry intake. */

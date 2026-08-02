@@ -66,7 +66,15 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 				'required' => true,
 				'options'  => array(),
 			),
+			array(
+				'key'      => 'press_links',
+				'label'    => 'Press links',
+				'type'     => 'url_list',
+				'required' => false,
+				'options'  => array(),
+			),
 		);
+		$config['intake']['presentation']['contact_phone_label'] = 'Phone (Emergency use only)';
 		$config['ticket_provider_reference']         = 'private-provider-account';
 		$config['correspondence']['booking_address'] = 'private-booking@example.com';
 		update_term_meta( $this->venue_id, VenueBookingConfig::META_KEY, $config );
@@ -90,6 +98,9 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'Private operator instructions.', $output );
 		$this->assertStringNotContainsString( 'Settlement notes', $output );
 		$this->assertStringContainsString( '"revision":4', $output );
+		$this->assertStringContainsString( 'Phone (Emergency use only)', $output );
+		$this->assertStringContainsString( 'manage-link-page', $output );
+		$this->assertStringContainsString( '"hasPage":false', $output );
 		$this->assertStringNotContainsString( 'private-provider-account', $output );
 		$this->assertStringNotContainsString( 'private-booking@example.com', $output );
 		$this->assertStringNotContainsString( 'attachment', strtolower( $output ) );

@@ -96,8 +96,19 @@ describe( 'venue settings state', () => {
 				'Each guide entry needs a key, title, and answer.',
 				'Guide entry keys must be unique.',
 				'Guide visibility must be public or operators only.',
-				'Hold duration must be between 5 minutes and 7 days.',
+				'Hold duration must be between 5 minutes and 14 days.',
 			] )
+		);
+	} );
+
+	it( 'accepts a fourteen-day hold and rejects values above it', () => {
+		const config = validConfig();
+		config.hold_ttl_minutes = 20160;
+		expect( validateConfig( config ) ).toEqual( [] );
+
+		config.hold_ttl_minutes = 20161;
+		expect( validateConfig( config ) ).toContain(
+			'Hold duration must be between 5 minutes and 14 days.'
 		);
 	} );
 } );

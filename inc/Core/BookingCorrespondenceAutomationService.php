@@ -259,9 +259,13 @@ class BookingCorrespondenceAutomationService {
 	/** Resolve the canonical timezone owned by the venue data projection. */
 	private function venue_timezone( int $venue_id ) {
 		$venue_data = function_exists( 'data_machine_events_get_venue_data' ) ? data_machine_events_get_venue_data( $venue_id ) : null;
+		$name       = is_array( $venue_data ) ? (string) ( $venue_data['timezone'] ?? '' ) : '';
+		if ( '' === $name || ! in_array( $name, timezone_identifiers_list(), true ) ) {
+			return new \WP_Error( 'booking_correspondence_timezone_invalid', __( 'The venue timezone is unavailable for correspondence.', 'extrachill-events' ) );
+		}
 		try {
-			return new \DateTimeZone( is_array( $venue_data ) ? (string) ( $venue_data['timezone'] ?? '' ) : '' );
-		} catch ( \Exception $exception ) {
+			return new \DateTimeZone( $name );
+		} catch ( \Throwable $exception ) {
 			return new \WP_Error( 'booking_correspondence_timezone_invalid', __( 'The venue timezone is unavailable for correspondence.', 'extrachill-events' ) );
 		}
 	}

@@ -1074,9 +1074,13 @@ class BookingCommunicationService {
 	/** Compare venue-local requested wall times with canonical UTC performance times. */
 	private function requested_interval_overlaps_confirmed( array $booking, array $confirmed ): bool {
 		$venue_data = function_exists( 'data_machine_events_get_venue_data' ) ? data_machine_events_get_venue_data( (int) $booking['venue_term_id'] ) : null;
+		$name       = is_array( $venue_data ) ? (string) ( $venue_data['timezone'] ?? '' ) : '';
+		if ( '' === $name || ! in_array( $name, timezone_identifiers_list(), true ) ) {
+			return false;
+		}
 		try {
-			$timezone = new \DateTimeZone( is_array( $venue_data ) ? (string) ( $venue_data['timezone'] ?? '' ) : '' );
-		} catch ( \Exception $exception ) {
+			$timezone = new \DateTimeZone( $name );
+		} catch ( \Throwable $exception ) {
 			return false;
 		}
 		$requested_start = $this->strict_local_datetime( (string) ( $booking['requested_start_at'] ?? '' ), $timezone );

@@ -51,7 +51,13 @@ class VenueBookingConfig {
 		if ( ! is_array( $stored ) ) {
 			return new \WP_Error( 'invalid_booking_config_document', __( 'Stored venue booking configuration is malformed.', 'extrachill-events' ) );
 		}
-		return $this->normalize( $stored );
+		$normalized = $this->normalize( $stored );
+		if ( ! is_wp_error( $normalized ) && array_key_exists( 'cc_address', (array) ( $stored['correspondence'] ?? array() ) ) ) {
+			$repaired = $stored;
+			unset( $repaired['correspondence']['cc_address'] );
+			update_term_meta( $venue_term_id, self::META_KEY, $repaired, $stored );
+		}
+		return $normalized;
 	}
 
 	/**
@@ -542,7 +548,6 @@ class VenueBookingConfig {
 			'subject'          => mb_substr( sanitize_text_field( $render( $template['subject'] ) ), 0, 200 ),
 			'body'             => $render( $template['body'] ) . "\n\n" . $config['correspondence']['footer'],
 			'booking_address'  => $config['correspondence']['booking_address'],
-			'cc_address'       => $config['correspondence']['cc_address'],
 			'from_name'        => $config['correspondence']['from_name'],
 			'reminder_policy'  => $config['correspondence']['reminder_policies'][ $template_key ] ?? null,
 		);
@@ -555,7 +560,7 @@ class VenueBookingConfig {
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
-		unset( $result['booking_address'], $result['cc_address'], $result['from_name'], $result['reminder_policy'] );
+		unset( $result['booking_address'], $result['from_name'], $result['reminder_policy'] );
 		return $result;
 	}
 
@@ -863,10 +868,6 @@ class VenueBookingConfig {
 		if ( '' !== (string) ( $correspondence['booking_address'] ?? '' ) && '' === $address ) {
 			return new \WP_Error( 'invalid_booking_correspondence_address', __( 'The booking correspondence address is invalid.', 'extrachill-events' ) );
 		}
-		$cc_address = sanitize_email( (string) ( $correspondence['cc_address'] ?? '' ) );
-		if ( '' !== (string) ( $correspondence['cc_address'] ?? '' ) && '' === $cc_address ) {
-			return new \WP_Error( 'invalid_booking_correspondence_cc_address', __( 'The booking correspondence CC address is invalid.', 'extrachill-events' ) );
-		}
 		$from_name = sanitize_text_field( (string) ( $correspondence['from_name'] ?? $defaults['from_name'] ) );
 		$footer    = sanitize_textarea_field( (string) ( $correspondence['footer'] ?? $defaults['footer'] ) );
 		if ( '' === $from_name || mb_strlen( $from_name ) > 100 || preg_match( '/[\r\n]/', $from_name ) || '' === $footer || mb_strlen( $footer ) > 500 ) {
@@ -928,7 +929,7 @@ class VenueBookingConfig {
 		return array(
 			'version'           => self::CORRESPONDENCE_VERSION,
 			'booking_address'   => '' === $address ? null : $address,
-			'cc_address'        => '' === $cc_address ? null : $cc_address,
+			'cc_address'        => null,
 			'from_name'         => $from_name,
 			'footer'            => $footer,
 			'variables'         => $this->variable_schema(),

@@ -85,11 +85,11 @@ class VenueBookingConfig {
 			return new \WP_Error( 'invalid_booking_public_config', __( 'The public venue booking configuration is unavailable.', 'extrachill-events' ) );
 		}
 
-		$fields       = $this->normalize_intake_fields( $stored['intake']['fields'] ?? null );
-		$presentation = $this->normalize_intake_presentation( $stored['intake']['presentation'] ?? array() );
-		$requirements = $this->normalize_public_requirements( $stored['public_requirements'] ?? null );
-		$consent      = $this->normalize_consent( $stored['consent'] ?? null );
-		$spaces       = $this->normalize_spaces( $stored['spaces'] ?? null );
+		$fields        = $this->normalize_intake_fields( $stored['intake']['fields'] ?? null );
+		$presentation  = $this->normalize_intake_presentation( $stored['intake']['presentation'] ?? array() );
+		$requirements  = $this->normalize_public_requirements( $stored['public_requirements'] ?? null );
+		$consent       = $this->normalize_consent( $stored['consent'] ?? null );
+		$spaces        = $this->normalize_spaces( $stored['spaces'] ?? null );
 		$booking_guide = $this->normalize_booking_guide( $stored['booking_guide'] ?? array() );
 		foreach ( array( $fields, $presentation, $requirements, $consent, $spaces, $booking_guide ) as $section ) {
 			if ( is_wp_error( $section ) ) {
@@ -873,8 +873,8 @@ class VenueBookingConfig {
 		if ( '' === $from_name || mb_strlen( $from_name ) > 100 || preg_match( '/[\r\n]/', $from_name ) || '' === $footer || mb_strlen( $footer ) > 500 ) {
 			return new \WP_Error( 'invalid_booking_correspondence_identity', __( 'The booking correspondence sender or footer is invalid.', 'extrachill-events' ) );
 		}
-		$templates = array();
-		$provided  = is_array( $correspondence['templates'] ?? null ) ? $correspondence['templates'] : array();
+		$templates       = array();
+		$provided        = is_array( $correspondence['templates'] ?? null ) ? $correspondence['templates'] : array();
 		$legacy_subjects = array(
 			'follow_up'       => 'Following up on booking {{booking_id}}',
 			'inquiry_receipt' => 'Booking inquiry received at {{venue_name}} [{{booking_id}}]',

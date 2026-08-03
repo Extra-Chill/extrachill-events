@@ -48,14 +48,14 @@ class BookingCommunicationService {
 	private $transaction_active = false;
 
 	public function __construct( ?BookingRepository $bookings = null, ?BookingActivityRepository $activity = null, ?VenueAuthorization $authorization = null, $queue = null, $schedule = null, $cancel = null, $find_actions = null, ?VenueBookingConfig $config = null, $venue_recipients = null ) {
-		$this->bookings      = $bookings ? $bookings : new BookingRepository();
-		$this->activity      = $activity ? $activity : new BookingActivityRepository();
-		$this->authorization = $authorization ? $authorization : new VenueAuthorization();
-		$this->config        = $config ? $config : new VenueBookingConfig( $this->authorization );
-		$this->queue         = $queue;
-		$this->schedule      = $schedule;
-		$this->cancel        = $cancel;
-		$this->find_actions  = $find_actions;
+		$this->bookings         = $bookings ? $bookings : new BookingRepository();
+		$this->activity         = $activity ? $activity : new BookingActivityRepository();
+		$this->authorization    = $authorization ? $authorization : new VenueAuthorization();
+		$this->config           = $config ? $config : new VenueBookingConfig( $this->authorization );
+		$this->queue            = $queue;
+		$this->schedule         = $schedule;
+		$this->cancel           = $cancel;
+		$this->find_actions     = $find_actions;
 		$this->venue_recipients = $venue_recipients;
 	}
 
@@ -282,6 +282,7 @@ class BookingCommunicationService {
 	/** Recheck the complete reminder policy while holding the booking row lock. */
 	public function dispatch_reminder( int $activity_id ) {
 		$this->delivery_cc = null;
+
 		$intent = $this->activity->get( $activity_id );
 		if ( ! is_array( $intent ) || 'booking_message_requested' !== $intent['kind'] || empty( $intent['payload']['data']['send_at'] ) ) {
 			return new \WP_Error( 'booking_reminder_invalid', __( 'The booking reminder intent is invalid.', 'extrachill-events' ) );
@@ -343,6 +344,7 @@ class BookingCommunicationService {
 			return is_wp_error( $committed ) ? $committed : $this->state_for_intent( $intent );
 		}
 		$this->delivery_cc = $cc;
+
 		$claim = $this->append_state( $intent, 'booking_message_dispatching', 'dispatching', array() );
 		if ( is_wp_error( $claim ) ) {
 			return $this->rollback( $claim );
@@ -960,7 +962,13 @@ class BookingCommunicationService {
 			$attempts[ $attempt ] = true;
 		}
 		usort( $evidence, static fn( array $left, array $right ): int => (int) $left['action_id'] <=> (int) $right['action_id'] );
-		$priority = array( 'canceled' => 0, 'failed' => 1, 'pending' => 2, 'in-progress' => 3, 'complete' => 4 );
+		$priority = array(
+			'canceled'    => 0,
+			'failed'      => 1,
+			'pending'     => 2,
+			'in-progress' => 3,
+			'complete'    => 4,
+		);
 		$status   = 'canceled';
 		foreach ( $evidence as $item ) {
 			if ( ( $priority[ $item['status'] ] ?? -1 ) > $priority[ $status ] ) {
@@ -1014,6 +1022,7 @@ class BookingCommunicationService {
 	private function claim_side_effect( array $intent, string $stage, array $allowed_statuses ) {
 		global $wpdb;
 		$this->delivery_cc = null;
+
 		$snapshot = $this->bookings->get( (int) $intent['booking_id'] );
 		if ( ! is_array( $snapshot ) ) {
 			return is_wp_error( $snapshot ) ? $snapshot : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) );
@@ -1022,11 +1031,12 @@ class BookingCommunicationService {
 			return new \WP_Error( 'booking_communication_transaction_start_failed', __( 'The booking communication transaction could not start.', 'extrachill-events' ) );
 		}
 		$this->transaction_active = true;
+
 		$locked = $this->lock_venue_memberships( (int) $snapshot['venue_term_id'] );
 		if ( is_wp_error( $locked ) ) {
 			return $this->rollback( $locked );
 		}
-		$booking                  = $this->bookings->get_for_update( $intent['booking_id'] );
+		$booking = $this->bookings->get_for_update( $intent['booking_id'] );
 		if ( ! is_array( $booking ) ) {
 			return $this->rollback( is_wp_error( $booking ) ? $booking : new \WP_Error( 'booking_not_found', __( 'The booking was not found.', 'extrachill-events' ) ) );
 		}
@@ -1080,6 +1090,7 @@ class BookingCommunicationService {
 			return $this->rollback( $cc );
 		}
 		$this->delivery_cc = $cc;
+
 		$event = $this->append_state( $intent, $claim_kind, $stage, array() );
 		if ( is_wp_error( $event ) ) {
 			return $this->rollback( $event );
@@ -1121,12 +1132,12 @@ class BookingCommunicationService {
 			$request['template'],
 			$request['template_version'],
 			array(
-				'artist_name'   => (string) $booking['artist_name'],
-				'booking_id'    => (string) $booking['public_id'],
-				'contact_name'  => (string) $booking['contact_name'],
+				'artist_name'    => (string) $booking['artist_name'],
+				'booking_id'     => (string) $booking['public_id'],
+				'contact_name'   => (string) $booking['contact_name'],
 				'requested_date' => $this->requested_date_label( (string) ( $booking['requested_start_at'] ?? '' ) ),
-				'venue_name'    => (string) $venue->name,
-				'message'       => $request['message'],
+				'venue_name'     => (string) $venue->name,
+				'message'        => $request['message'],
 			)
 		);
 		if ( is_wp_error( $prepared ) ) {
@@ -1248,6 +1259,7 @@ class BookingCommunicationService {
 			return new \WP_Error( 'booking_communication_transaction_start_failed', __( 'The booking communication transaction could not start.', 'extrachill-events' ) );
 		}
 		$this->transaction_active = true;
+
 		$locked = $this->lock_venue_memberships( $venue_id );
 		if ( is_wp_error( $locked ) ) {
 			return $this->rollback( $locked );

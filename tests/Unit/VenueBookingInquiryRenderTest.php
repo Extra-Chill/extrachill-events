@@ -215,6 +215,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 				};
 			};
 			add_filter( 'wp_die_handler', $die_handler );
+			$buffer_level = ob_get_level();
 			try {
 				activate_plugin( $plugin, '', true, false );
 				$this->fail( 'Site-only dependencies must not permit network activation.' );
@@ -222,6 +223,9 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 				$this->assertStringContainsString( 'Network-activate these required plugins first', $error->getMessage() );
 			} finally {
 				remove_filter( 'wp_die_handler', $die_handler );
+				while ( ob_get_level() > $buffer_level ) {
+					ob_end_clean();
+				}
 			}
 			$this->assertFalse( is_plugin_active_for_network( $plugin ) );
 		} finally {

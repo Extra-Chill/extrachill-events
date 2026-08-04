@@ -61,6 +61,8 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 			),
 		);
 		$config['intake']['presentation']['contact_phone_label'] = 'Phone (Emergency use only)';
+		$config['appearance']['mode']                    = 'custom';
+		$config['appearance']['background_color']        = '#112233';
 		$config['ticket_provider_reference']         = 'private-provider-account';
 		$config['correspondence']['booking_address'] = 'private-booking@example.com';
 		update_term_meta( $this->venue_id, VenueBookingConfig::META_KEY, $config );
@@ -82,6 +84,8 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'Booking guide', $output );
 		$this->assertStringContainsString( '"revision":4', $output );
 		$this->assertStringContainsString( 'Phone (Emergency use only)', $output );
+		$this->assertStringContainsString( '--ec-booking-background:#112233', $output );
+		$this->assertStringNotContainsString( ':root', $output );
 		$this->assertStringNotContainsString( 'manage-link-page', $output );
 		$this->assertStringNotContainsString( '"hasPage"', $output );
 		$this->assertStringNotContainsString( 'private-provider-account', $output );

@@ -10,12 +10,10 @@ defined( 'ABSPATH' ) || exit;
 const EXTRACHILL_EVENTS_VENUE_UPDATE_PRODUCER  = 'extrachill-events-venue-updates';
 const EXTRACHILL_EVENTS_VENUE_UPDATE_SENT_META = '_extrachill_events_venue_update_notification_sent';
 
-/** Register venue archive controls and private notification delivery. */
+/** Register private venue notification delivery. */
 function extrachill_events_init_venue_update_subscriptions(): void {
 	add_filter( 'extrachill_users_entity_subscription_producer_authorized', 'extrachill_events_authorize_venue_update_producer', 10, 4 );
 	add_action( 'transition_post_status', 'extrachill_events_notify_venue_subscribers', 10, 3 );
-	add_action( 'extrachill_archive_below_description', 'extrachill_events_render_venue_update_control', 5 );
-	add_action( 'wp_enqueue_scripts', 'extrachill_events_venue_update_scripts' );
 }
 
 /**

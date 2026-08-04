@@ -58,7 +58,9 @@ $canonical = ( static function () use ( $events_blog_id, $venue_id ) {
 			$address    = implode( ', ', array_filter( array( $street, $city_state, $zip ) ) );
 		}
 
-		$profile = function_exists( 'data_machine_events_get_venue_profile' ) ? data_machine_events_get_venue_profile( $venue_id ) : array();
+		$profile  = function_exists( 'data_machine_events_get_venue_profile' ) ? data_machine_events_get_venue_profile( $venue_id ) : array();
+		$logo_url = is_array( $profile ) ? (string) ( $profile['logo_url'] ?? '' ) : '';
+		$logo_url = filter_var( $logo_url, FILTER_VALIDATE_URL ) ? $logo_url : '';
 
 		return array(
 			'booking_config' => $booking_config,
@@ -67,7 +69,7 @@ $canonical = ( static function () use ( $events_blog_id, $venue_id ) {
 				'name'        => $venue->name,
 				'description' => wp_strip_all_tags( $venue->description ),
 				'address'     => $address,
-				'logoUrl'     => is_array( $profile ) ? esc_url_raw( (string) ( $profile['logo_url'] ?? '' ) ) : '',
+				'logoUrl'     => $logo_url,
 			),
 		);
 	} finally {

@@ -15,6 +15,7 @@ import {
 	Panel,
 	PanelHeader,
 	SearchBox,
+	Tabs,
 } from '@extrachill/components';
 
 /**
@@ -1571,24 +1572,14 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 
 	return (
 		<div className="ec-booking-console">
-			<ActionRow>
-				<button
-					type="button"
-					className="button-2"
-					aria-pressed={ view === 'calendar' }
-					onClick={ () => setView( 'calendar' ) }
-				>
-					Calendar
-				</button>
-				<button
-					type="button"
-					className="button-2"
-					aria-pressed={ view === 'list' }
-					onClick={ () => setView( 'list' ) }
-				>
-					List
-				</button>
-			</ActionRow>
+			<Tabs
+				tabs={ [
+					{ id: 'calendar', label: 'Calendar' },
+					{ id: 'list', label: 'List' },
+				] }
+				active={ view }
+				onChange={ setView }
+			/>
 			<Grid
 				className="ec-booking-console__toolbar"
 				minColumnWidth="12rem"

@@ -117,6 +117,11 @@ foreach ( $managed_venues as $venue ) {
 $can_access       = $selected && true === $authorization->authorize( $user_id, $selected['id'], VenueAuthorization::ACTION_ACCESS_VENUE );
 $can_manage       = $selected && true === $authorization->authorize( $user_id, $selected['id'], VenueAuthorization::ACTION_MANAGE_MEMBERS );
 $selected_term    = $selected ? get_term( (int) $selected['id'], 'venue' ) : null;
+if ( $selected && $selected_term instanceof WP_Term ) {
+	$archive_url             = get_term_link( $selected_term );
+	$selected['slug']        = $selected_term->slug;
+	$selected['archive_url'] = is_wp_error( $archive_url ) ? '' : $archive_url;
+}
 $context          = array(
 	'user'               => array(
 		'id'       => $user_id,

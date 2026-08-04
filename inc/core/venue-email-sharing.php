@@ -7,6 +7,10 @@
 
 defined( 'ABSPATH' ) || exit;
 
+use ExtraChillEvents\Core\BookingSchema;
+use ExtraChillEvents\Core\VenueAuthorization;
+use ExtraChillEvents\Core\VenueMembershipRepository;
+
 const EXTRACHILL_EVENTS_VENUE_EMAIL_SHARING_PRODUCER = 'extrachill-events-venue-email-sharing';
 
 /** Register the feature-owned identity, archive control, and private producer. */
@@ -51,20 +55,52 @@ function extrachill_events_authorize_venue_email_sharing_producer( $authorized, 
 		&& 'venue' === ( $entity['taxonomy'] ?? '' );
 }
 
+/**
+ * Whether the venue has an active verified owner who can resolve consent.
+ *
+ * @param WP_Term $term Canonical venue term.
+ * @return bool
+ */
+function extrachill_events_venue_email_sharing_available( WP_Term $term ): bool {
+	static $available = array();
+
+	$term_id = (int) $term->term_id;
+	if ( isset( $available[ $term_id ] ) ) {
+		return $available[ $term_id ];
+	}
+	if ( ! BookingSchema::is_ready() ) {
+		$available[ $term_id ] = false;
+		return false;
+	}
+
+	$memberships           = new VenueMembershipRepository();
+	$owners                = $memberships->list_for_venue(
+		$term_id,
+		array(
+			'is_owner' => true,
+			'status'   => VenueAuthorization::STATUS_ACTIVE,
+			'limit'    => 1,
+		)
+	);
+	$available[ $term_id ] = is_array( $owners ) && ! empty( $owners );
+	return $available[ $term_id ];
+}
+
 /** Render the compact email-sharing action inside venue preferences. */
 function extrachill_events_render_venue_email_sharing_control(): void {
 	$term = function_exists( 'extrachill_events_get_venue_archive_term' ) ? extrachill_events_get_venue_archive_term() : null;
-	if ( null === $term || ! is_user_logged_in() ) {
+	if ( null === $term || ! is_user_logged_in() || ! extrachill_events_venue_email_sharing_available( $term ) ) {
 		return;
 	}
 	?>
-	<button class="button-3 button-small" type="button" disabled aria-live="polite" aria-pressed="false" data-venue-email-sharing data-endpoint="<?php echo esc_url( rest_url( 'wp-abilities/v1/abilities/' ) ); ?>" data-nonce="<?php echo esc_attr( wp_create_nonce( 'wp_rest' ) ); ?>" data-slug="<?php echo esc_attr( $term->slug ); ?>"><?php esc_html_e( 'Loading email sharing...', 'extrachill-events' ); ?></button>
+	<button class="button-3 button-small" type="button" disabled aria-live="polite" aria-pressed="false" data-venue-email-sharing data-endpoint="<?php echo esc_url( rest_url( 'wp-abilities/v1/abilities/' ) ); ?>" data-nonce="<?php echo esc_attr( wp_create_nonce( 'wp_rest' ) ); ?>" data-slug="<?php echo esc_attr( $term->slug ); ?>"><?php esc_html_e( 'Loading email preference...', 'extrachill-events' ); ?></button>
 	<?php
 }
 
 /** Enqueue the progressive control only for authenticated venue archives. */
 function extrachill_events_venue_email_sharing_scripts(): void {
-	if ( ! function_exists( 'extrachill_events_get_venue_archive_term' ) || null === extrachill_events_get_venue_archive_term() || ! is_user_logged_in() ) {
+	$term = function_exists( 'extrachill_events_get_venue_archive_term' ) ? extrachill_events_get_venue_archive_term() : null;
+	if ( null === $term || ! is_user_logged_in() || ! extrachill_events_venue_email_sharing_available( $term ) ) {
 		return;
 	}
 

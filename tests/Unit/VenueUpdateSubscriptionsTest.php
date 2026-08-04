@@ -7,6 +7,9 @@
 
 // phpcs:disable -- This isolated fixture shares WordPress test doubles with the festival notification tests.
 
+use ExtraChillEvents\Core\VenueAuthorization;
+use ExtraChillEvents\Core\VenueMembershipRepository;
+
 require_once dirname( __DIR__ ) . '/Support/venue-update-subscription-stubs.php';
 require_once dirname( __DIR__, 2 ) . '/inc/core/venue-update-subscriptions.php';
 require_once dirname( __DIR__, 2 ) . '/inc/core/venue-email-sharing.php';
@@ -88,7 +91,7 @@ final class VenueUpdateSubscriptionsTest extends WP_UnitTestCase {
 		$this->assertFalse( extrachill_events_authorize_venue_email_sharing_producer( false, EXTRACHILL_EVENTS_VENUE_EMAIL_SHARING_PRODUCER, array( 'entity_type' => 'venue', 'taxonomy' => 'venue' ), 'email' ) );
 	}
 
-	/** Anonymous archives offer one compact sign-in action without mutation controls. */
+	/** Anonymous archives offer a clear follow notice without mutation controls. */
 	public function test_anonymous_archive_renders_sign_in_without_mutation_control(): void {
 		$this->venue_archive();
 		wp_set_current_user( 0 );
@@ -97,9 +100,10 @@ final class VenueUpdateSubscriptionsTest extends WP_UnitTestCase {
 		extrachill_events_render_venue_update_control();
 		$html = ob_get_clean();
 
-		$this->assertStringContainsString( 'ec-action-row', $html );
+		$this->assertStringContainsString( 'events-market-context', $html );
+		$this->assertStringContainsString( 'Follow The Royal American', $html );
 		$this->assertStringContainsString( 'Sign in for venue alerts', $html );
-		$this->assertStringNotContainsString( '<aside', $html );
+		$this->assertSame( 1, substr_count( $html, '<aside' ) );
 		$this->assertStringNotContainsString( 'data-venue-update-subscription', $html );
 		$this->assertStringNotContainsString( 'data-venue-email-sharing', $html );
 	}
@@ -119,8 +123,8 @@ final class VenueUpdateSubscriptionsTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'data-slug="the-royal-american"', $html );
 	}
 
-	/** Archive preferences compose two compact actions without a standalone card. */
-	public function test_archive_composes_independent_controls_in_one_action_row(): void {
+	/** Unmanaged venue archives keep event alerts without offering email consent. */
+	public function test_unmanaged_archive_does_not_offer_email_sharing(): void {
 		$this->venue_archive();
 		wp_set_current_user( self::factory()->user->create() );
 
@@ -128,12 +132,36 @@ final class VenueUpdateSubscriptionsTest extends WP_UnitTestCase {
 		extrachill_events_render_venue_update_control();
 		$html = ob_get_clean();
 
-		$this->assertSame( 0, substr_count( $html, '<aside' ) );
-		$this->assertStringContainsString( 'ec-action-row', $html );
+		$this->assertSame( 1, substr_count( $html, '<aside' ) );
+		$this->assertStringContainsString( 'events-market-context', $html );
 		$this->assertStringContainsString( 'data-venue-preferences', $html );
 		$this->assertStringContainsString( 'data-venue-update-subscription', $html );
+		$this->assertStringNotContainsString( 'data-venue-email-sharing', $html );
+	}
+
+	/** Managed venues offer explicit email consent independently of booking state. */
+	public function test_managed_archive_offers_email_sharing_without_booking_gate(): void {
+		$term     = $this->venue_archive();
+		$owner_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$created  = ( new VenueMembershipRepository() )->create(
+			array(
+				'venue_term_id'      => (int) $term->term_id,
+				'user_id'            => $owner_id,
+				'is_owner'           => true,
+				'status'             => VenueAuthorization::STATUS_ACTIVE,
+				'created_by_user_id' => $owner_id,
+			)
+		);
+		$this->assertIsArray( $created );
+		wp_set_current_user( self::factory()->user->create() );
+
+		ob_start();
+		extrachill_events_render_venue_update_control();
+		$html = ob_get_clean();
+
 		$this->assertStringContainsString( 'data-venue-email-sharing', $html );
-		$this->assertStringContainsString( 'Loading email sharing...', $html );
+		$this->assertStringContainsString( 'Loading email preference...', $html );
+		$this->assertStringContainsString( 'verified team', $html );
 	}
 
 	/** First publication deduplicates subscribers across all assigned venues. */

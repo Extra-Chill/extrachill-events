@@ -16,7 +16,9 @@
 		button.setAttribute( 'aria-pressed', subscribed ? 'true' : 'false' );
 		button.classList.toggle( 'button-2', subscribed );
 		button.classList.toggle( 'button-3', ! subscribed );
-		button.textContent = subscribed ? 'Email shared' : 'Share email';
+		button.textContent = subscribed
+			? 'Email shared with venue'
+			: 'Share my email with this venue';
 	}
 
 	function request( ability, method ) {
@@ -52,7 +54,7 @@
 			button.disabled = false;
 		} )
 		.catch( () => {
-			button.textContent = 'Email sharing unavailable';
+			button.textContent = 'Email preference unavailable';
 		} );
 
 	button.addEventListener( 'click', () => {
@@ -64,7 +66,7 @@
 		)
 			.then( ( data ) => setState( Boolean( data.subscribed ) ) )
 			.catch( () => {
-				button.textContent = 'Try email sharing again';
+				button.textContent = 'Try email preference again';
 			} )
 			.finally( () => {
 				button.disabled = false;

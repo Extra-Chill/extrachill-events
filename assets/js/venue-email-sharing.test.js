@@ -29,7 +29,7 @@ describe( 'Venue email sharing', () => {
 			'entity-subscription-status'
 		);
 		const button = document.querySelector( 'button' );
-		expect( button.textContent ).toBe( 'Share email' );
+		expect( button.textContent ).toBe( 'Share my email with this venue' );
 		expect( button.classList.contains( 'button-3' ) ).toBe( true );
 		expect( button.disabled ).toBe( false );
 	} );
@@ -58,7 +58,7 @@ describe( 'Venue email sharing', () => {
 			'"entity_type":"venue"'
 		);
 		expect( document.querySelector( 'button' ).textContent ).toBe(
-			'Email shared'
+			'Email shared with venue'
 		);
 		expect(
 			document.querySelector( 'button' ).classList.contains( 'button-2' )
@@ -84,7 +84,7 @@ describe( 'Venue email sharing', () => {
 			'entity-unsubscribe/run'
 		);
 		expect( document.querySelector( 'button' ).textContent ).toBe(
-			'Share email'
+			'Share my email with this venue'
 		);
 	} );
 
@@ -95,7 +95,7 @@ describe( 'Venue email sharing', () => {
 
 		expect( document.querySelector( 'button' ).disabled ).toBe( true );
 		expect( document.querySelector( 'button' ).textContent ).toBe(
-			'Email sharing unavailable'
+			'Email preference unavailable'
 		);
 	} );
 } );

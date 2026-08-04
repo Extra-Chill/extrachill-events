@@ -102,8 +102,11 @@ const bookingDate = ( booking ) =>
 		10
 	);
 
-export const calendarEntries = ( bookings, events ) => {
+export const calendarEntries = ( bookings, events, supportEvents = [] ) => {
 	const eventIds = new Set( events.map( ( event ) => Number( event.id ) ) );
+	const supportByEvent = new Map(
+		supportEvents.map( ( event ) => [ Number( event.id ), event ] )
+	);
 	return [
 		...events.map( ( event ) => ( {
 			type: 'event',
@@ -112,6 +115,7 @@ export const calendarEntries = ( bookings, events ) => {
 			title: event.title,
 			status: 'published',
 			permalink: event.permalink,
+			support: supportByEvent.get( Number( event.id ) ) || null,
 		} ) ),
 		...bookings
 			.filter(
@@ -666,8 +670,9 @@ function Calendar( {
 	month,
 	onMonthChange,
 	onSelect,
+	supportEvents,
 } ) {
-	const entries = calendarEntries( bookings, events );
+	const entries = calendarEntries( bookings, events, supportEvents );
 	const byDay = entries.reduce( ( grouped, entry ) => {
 		if ( entry.date ) {
 			grouped[ entry.date ] = [
@@ -782,13 +787,26 @@ function Calendar( {
 								);
 								const className = `ec-booking-calendar__item ec-booking-calendar__item--${ entry.status }`;
 								return entry.type === 'event' ? (
-									<a
-										key={ `event-${ entry.id }` }
-										className={ className }
-										href={ entry.permalink }
-									>
-										{ content }
-									</a>
+									<span key={ `event-${ entry.id }` }>
+										<a
+											className={ className }
+											href={ entry.permalink }
+										>
+											{ content }
+										</a>
+										{ entry.support && (
+											<a
+												href={
+													entry.support.workspace_url
+												}
+											>
+												{ entry.support.status ===
+												'not_seeking'
+													? 'Find local support'
+													: 'Manage local support' }
+											</a>
+										) }
+									</span>
 								) : (
 									<button
 										type="button"
@@ -1381,7 +1399,7 @@ function BookingDetail( {
 	);
 }
 
-export function BookingConsole( { context, defaultDeal, view } ) {
+export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 	const venueId = context.selected_venue.id;
 	const [ bookings, setBookings ] = useState( [] );
 	const [ events, setEvents ] = useState( [] );
@@ -1399,6 +1417,7 @@ export function BookingConsole( { context, defaultDeal, view } ) {
 	const [ search, setSearch ] = useState( '' );
 	const [ filterStatus, setFilterStatus ] = useState( '' );
 	const [ month, setMonth ] = useState( monthKey() );
+	const [ view, setView ] = useState( 'calendar' );
 	const requestId = useRef( 0 );
 	const detailRequestId = useRef( 0 );
 	const selectedIdRef = useRef( context.booking_id || 0 );
@@ -1513,7 +1532,7 @@ export function BookingConsole( { context, defaultDeal, view } ) {
 
 	useEffect( () => {
 		loadList();
-	}, [ filterStatus, month ] ); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [ filterStatus, month, view ] ); // eslint-disable-line react-hooks/exhaustive-deps
 	useEffect( () => {
 		loadDetail();
 	}, [ selectedId ] ); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1524,7 +1543,7 @@ export function BookingConsole( { context, defaultDeal, view } ) {
 		const url = new URL( window.location.href );
 		url.searchParams.set( 'venue_id', venueId );
 		url.searchParams.set( 'booking_id', bookingId );
-		url.hash = `tab-${ view }`;
+		url.hash = 'tab-calendar';
 		window.history.replaceState( {}, '', url );
 	};
 	const closeDetail = () => {
@@ -1552,6 +1571,24 @@ export function BookingConsole( { context, defaultDeal, view } ) {
 
 	return (
 		<div className="ec-booking-console">
+			<ActionRow>
+				<button
+					type="button"
+					className="button-2"
+					aria-pressed={ view === 'calendar' }
+					onClick={ () => setView( 'calendar' ) }
+				>
+					Calendar
+				</button>
+				<button
+					type="button"
+					className="button-2"
+					aria-pressed={ view === 'list' }
+					onClick={ () => setView( 'list' ) }
+				>
+					List
+				</button>
+			</ActionRow>
 			<Grid
 				className="ec-booking-console__toolbar"
 				minColumnWidth="12rem"
@@ -1596,6 +1633,7 @@ export function BookingConsole( { context, defaultDeal, view } ) {
 							month={ month }
 							onMonthChange={ setMonth }
 							onSelect={ selectBooking }
+							supportEvents={ supportEvents }
 						/>
 					) : (
 						<Panel>

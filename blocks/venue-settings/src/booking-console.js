@@ -117,6 +117,7 @@ export const calendarEntries = ( bookings, events, supportEvents = [] ) => {
 			status: 'published',
 			permalink: event.permalink,
 			support: supportByEvent.get( Number( event.id ) ) || null,
+			venueName: event.venue_name || '',
 		} ) ),
 		...bookings
 			.filter(
@@ -131,6 +132,7 @@ export const calendarEntries = ( bookings, events, supportEvents = [] ) => {
 				title: booking.artist_name,
 				status: booking.status,
 				booking,
+				venueName: booking.venue_name || '',
 			} ) ),
 	];
 };
@@ -147,6 +149,7 @@ export const filterBookings = ( bookings, search ) => {
 			booking.contact_email,
 			booking.public_id,
 			booking.status,
+			booking.venue_name,
 		]
 			.filter( Boolean )
 			.some( ( value ) =>
@@ -652,6 +655,7 @@ function BookingCard( { booking, active, holds, onSelect } ) {
 			<span className="ec-booking-card__title">
 				{ booking.artist_name }
 			</span>
+			{ booking.venue_name && <span>{ booking.venue_name }</span> }
 			<BookingStatus status={ booking.status } />
 			<span>{ formatDate( booking.requested_start_at ) }</span>
 			{ holds.length > 0 && (
@@ -769,6 +773,9 @@ function Calendar( {
 											{ entry.type === 'event'
 												? 'Published event'
 												: statusLabel( entry.status ) }
+											{ entry.venueName
+												? ` - ${ entry.venueName }`
+												: '' }
 											{ entry.type === 'booking' &&
 											activeHoldCounts[ entry.id ]
 												? ` · ${
@@ -1400,8 +1407,52 @@ function BookingDetail( {
 	);
 }
 
-export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
-	const venueId = context.selected_venue.id;
+const PAGE_SIZE = 100;
+const MAX_PAGE_COUNT = 100;
+
+async function listAllVenueRecords( name, input, offset = 0, records = [] ) {
+	if ( offset >= PAGE_SIZE * MAX_PAGE_COUNT ) {
+		throw new Error( 'Venue records exceeded the supported page limit.' );
+	}
+	const page = await runAbility( name, {
+		...input,
+		limit: PAGE_SIZE,
+		offset,
+	} );
+	const combined = [ ...records, ...page ];
+	return page.length === PAGE_SIZE
+		? listAllVenueRecords( name, input, offset + PAGE_SIZE, combined )
+		: combined;
+}
+
+async function listAllVenueEvents( venueId, month, page = 1, events = [] ) {
+	if ( page > MAX_PAGE_COUNT ) {
+		throw new Error( 'Venue events exceeded the supported page limit.' );
+	}
+	const result = await runAbility( 'extrachill/events-calendar', {
+		venue_id: venueId,
+		month,
+		page,
+	} );
+	const combined = [
+		...events,
+		...( result.dates || [] ).flatMap( ( date ) => date.events || [] ),
+	];
+	return result.has_more
+		? listAllVenueEvents( venueId, month, page + 1, combined )
+		: combined;
+}
+
+export function BookingConsole( {
+	context,
+	venues = [],
+	defaultDeal,
+	defaultDeals = {},
+	supportEvents = [],
+} ) {
+	const scopeVenues = venues.length ? venues : [ context.selected_venue ];
+	const venueIds = scopeVenues.map( ( venue ) => venue.id );
+	const aggregateScope = ! context.selected_venue && venues.length > 0;
 	const [ bookings, setBookings ] = useState( [] );
 	const [ events, setEvents ] = useState( [] );
 	const [ holds, setHolds ] = useState( [] );
@@ -1428,39 +1479,95 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 		setLoading( true );
 		setError( '' );
 		try {
-			const input = { venue_term_id: venueId, limit: 100, offset: 0 };
 			const range = monthRange( month );
-			if ( view === 'calendar' ) {
-				input.range_start = range.start;
-				input.range_end = range.end;
+			const results = await Promise.all(
+				scopeVenues.map( async ( venue ) => {
+					const input = {
+						venue_term_id: venue.id,
+					};
+					if ( view === 'calendar' ) {
+						input.range_start = range.start;
+						input.range_end = range.end;
+					}
+					if ( filterStatus ) {
+						input.status = filterStatus;
+					}
+					const [ bookingResult, holdResult, eventResult ] =
+						await Promise.allSettled( [
+							listAllVenueRecords(
+								'extrachill/list-venue-bookings',
+								input
+							),
+							listAllVenueRecords(
+								'extrachill/list-booking-holds',
+								{
+									venue_term_id: venue.id,
+									...( view === 'calendar'
+										? {
+												range_start: range.start,
+												range_end: range.end,
+										  }
+										: {} ),
+								}
+							),
+							view === 'calendar'
+								? listAllVenueEvents( venue.id, month )
+								: Promise.resolve( [] ),
+						] );
+					return {
+						venue,
+						bookingRows:
+							bookingResult.status === 'fulfilled'
+								? bookingResult.value
+								: [],
+						holdRows:
+							holdResult.status === 'fulfilled'
+								? holdResult.value
+								: [],
+						events:
+							eventResult.status === 'fulfilled'
+								? eventResult.value
+								: [],
+						failedSources: [
+							bookingResult,
+							holdResult,
+							eventResult,
+						].filter( ( result ) => result.status === 'rejected' )
+							.length,
+					};
+				} )
+			);
+			const sourceCount = view === 'calendar' ? 3 : 2;
+			if (
+				results.every(
+					( result ) => result.failedSources >= sourceCount
+				)
+			) {
+				throw new Error( 'Venue data unavailable.' );
 			}
-			if ( filterStatus ) {
-				input.status = filterStatus;
-			}
-			const [ bookingRows, holdRows, calendar ] = await Promise.all( [
-				runAbility( 'extrachill/list-venue-bookings', input ),
-				runAbility( 'extrachill/list-booking-holds', {
-					venue_term_id: venueId,
-					...( view === 'calendar'
-						? { range_start: range.start, range_end: range.end }
-						: {} ),
-					limit: 100,
-					offset: 0,
-				} ),
-				view === 'calendar'
-					? runAbility( 'extrachill/events-calendar', {
-							venue_id: venueId,
-							month,
-					  } )
-					: Promise.resolve( { dates: [] } ),
-			] );
 			if ( currentRequest === requestId.current ) {
-				setBookings( bookingRows );
-				setHolds( holdRows );
-				setEvents(
-					( calendar.dates || [] ).flatMap(
-						( date ) => date.events || []
+				setBookings(
+					results.flatMap( ( result ) =>
+						result.bookingRows.map( ( booking ) => ( {
+							...booking,
+							venue_name: result.venue.name,
+						} ) )
 					)
+				);
+				setHolds( results.flatMap( ( result ) => result.holdRows ) );
+				setEvents(
+					results.flatMap( ( result ) =>
+						result.events.map( ( event ) => ( {
+							...event,
+							venue_term_id: result.venue.id,
+							venue_name: result.venue.name,
+						} ) )
+					)
+				);
+				setError(
+					results.some( ( result ) => result.failedSources > 0 )
+						? 'Some venue records could not be loaded.'
+						: ''
 				);
 			}
 		} catch ( caught ) {
@@ -1497,7 +1604,7 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 					booking_id: bookingId,
 				} ),
 			] );
-			if ( booking.venue_term_id !== venueId ) {
+			if ( ! venueIds.includes( booking.venue_term_id ) ) {
 				throw new Error(
 					'The booking is outside this venue workspace.'
 				);
@@ -1542,7 +1649,17 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 		selectedIdRef.current = bookingId;
 		setSelectedId( bookingId );
 		const url = new URL( window.location.href );
-		url.searchParams.set( 'venue_id', venueId );
+		const booking = bookings.find( ( item ) => item.id === bookingId );
+		if ( aggregateScope ) {
+			url.searchParams.delete( 'venue_id' );
+			url.searchParams.set(
+				'booking_venue_id',
+				booking?.venue_term_id || context.booking_venue_id
+			);
+		} else if ( booking?.venue_term_id ) {
+			url.searchParams.set( 'venue_id', booking.venue_term_id );
+			url.searchParams.delete( 'booking_venue_id' );
+		}
 		url.searchParams.set( 'booking_id', bookingId );
 		url.hash = 'tab-calendar';
 		window.history.replaceState( {}, '', url );
@@ -1555,6 +1672,7 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 		setDetailLoading( false );
 		const url = new URL( window.location.href );
 		url.searchParams.delete( 'booking_id' );
+		url.searchParams.delete( 'booking_venue_id' );
 		window.history.replaceState( {}, '', url );
 	};
 	const refreshAfterMutation = async () => {
@@ -1630,7 +1748,7 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 						<Panel>
 							<PanelHeader
 								title="Booking pipeline"
-								description="A bounded venue-authorized list. Filters are reapplied by canonical abilities."
+								description="A bounded venue-authorized list across the selected venue scope. Filters are reapplied by canonical abilities."
 							/>
 							{ visible.length ? (
 								<Grid
@@ -1652,7 +1770,8 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 								</Grid>
 							) : (
 								<EmptyState>
-									No bookings match this venue and filter.
+									No bookings match this venue scope and
+									filter.
 								</EmptyState>
 							) }
 						</Panel>
@@ -1682,7 +1801,9 @@ export function BookingConsole( { context, defaultDeal, supportEvents = [] } ) {
 					holds={ selectedHolds }
 					communications={ communications }
 					operations={ operations }
-					defaultDeal={ defaultDeal }
+					defaultDeal={
+						defaultDeals[ selected.venue_term_id ] || defaultDeal
+					}
 					onMutate={ refreshAfterMutation }
 					onClose={ closeDetail }
 					onRefreshCommunications={ loadDetail }

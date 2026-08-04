@@ -102,9 +102,25 @@ if ( $is_admin ) {
 	}
 }
 
+foreach ( $managed_venues as &$venue ) {
+	$venue_id                = (int) $venue['id'];
+	$venue_term              = get_term( $venue_id, 'venue' );
+	$archive_url             = $venue_term instanceof WP_Term ? get_term_link( $venue_term ) : '';
+	$venue['can_access']     = true === $authorization->authorize( $user_id, $venue_id, VenueAuthorization::ACTION_ACCESS_VENUE );
+	$venue['can_manage']     = true === $authorization->authorize( $user_id, $venue_id, VenueAuthorization::ACTION_MANAGE_MEMBERS );
+	$venue['slug']           = $venue_term instanceof WP_Term ? $venue_term->slug : '';
+	$venue['archive_url']    = is_wp_error( $archive_url ) ? '' : $archive_url;
+	$venue['booking_url']    = $venue['can_access'] && $venue_term instanceof WP_Term ? \ExtraChillEvents\Core\VenueBookingEmbed::booking_url( $venue_term ) : '';
+	$venue['support_events'] = $venue['can_access'] && function_exists( 'extrachill_events_local_support_organizer_events' )
+		? extrachill_events_local_support_organizer_events( $user_id, $venue_id )
+		: array();
+}
+unset( $venue );
+
 // phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only venue selection; Ability authorization remains authoritative.
-$requested_venue_id   = isset( $_GET['venue_id'] ) && is_scalar( $_GET['venue_id'] ) ? absint( wp_unslash( $_GET['venue_id'] ) ) : 0;
-$requested_booking_id = isset( $_GET['booking_id'] ) && is_scalar( $_GET['booking_id'] ) ? absint( wp_unslash( $_GET['booking_id'] ) ) : 0;
+$requested_venue_id         = isset( $_GET['venue_id'] ) && is_scalar( $_GET['venue_id'] ) ? absint( wp_unslash( $_GET['venue_id'] ) ) : 0;
+$requested_booking_id       = isset( $_GET['booking_id'] ) && is_scalar( $_GET['booking_id'] ) ? absint( wp_unslash( $_GET['booking_id'] ) ) : 0;
+$requested_booking_venue_id = isset( $_GET['booking_venue_id'] ) && is_scalar( $_GET['booking_venue_id'] ) ? absint( wp_unslash( $_GET['booking_venue_id'] ) ) : 0;
 // phpcs:enable WordPress.Security.NonceVerification.Recommended
 $selected = null;
 foreach ( $managed_venues as $venue ) {
@@ -114,13 +130,16 @@ foreach ( $managed_venues as $venue ) {
 	}
 }
 
-$can_access       = $selected && true === $authorization->authorize( $user_id, $selected['id'], VenueAuthorization::ACTION_ACCESS_VENUE );
-$can_manage       = $selected && true === $authorization->authorize( $user_id, $selected['id'], VenueAuthorization::ACTION_MANAGE_MEMBERS );
-$selected_term    = $selected ? get_term( (int) $selected['id'], 'venue' ) : null;
-if ( $selected && $selected_term instanceof WP_Term ) {
-	$archive_url             = get_term_link( $selected_term );
-	$selected['slug']        = $selected_term->slug;
-	$selected['archive_url'] = is_wp_error( $archive_url ) ? '' : $archive_url;
+$can_access       = $selected && $selected['can_access'];
+$can_manage       = $selected && $selected['can_manage'];
+$booking_venue_id = $can_access ? (int) $selected['id'] : 0;
+if ( ! $selected && $requested_booking_id && $requested_booking_venue_id ) {
+	foreach ( $managed_venues as $venue ) {
+		if ( $requested_booking_venue_id === $venue['id'] && $venue['can_access'] ) {
+			$booking_venue_id = $venue['id'];
+			break;
+		}
+	}
 }
 $context          = array(
 	'user'               => array(
@@ -135,11 +154,10 @@ $context          = array(
 	'can_manage'         => $can_manage,
 	'route_url'          => home_url( '/venue-settings/' ),
 	'requested_venue_id' => in_array( $requested_venue_id, array_column( $claim_venues, 'id' ), true ) ? $requested_venue_id : 0,
-	'booking_id'         => $can_access ? $requested_booking_id : 0,
-	'booking_url'        => $can_access && $selected_term instanceof WP_Term ? \ExtraChillEvents\Core\VenueBookingEmbed::booking_url( $selected_term ) : '',
-	'support_events'     => $can_access && function_exists( 'extrachill_events_local_support_organizer_events' )
-		? extrachill_events_local_support_organizer_events( $user_id, (int) $selected['id'] )
-		: array(),
+	'booking_id'         => $booking_venue_id ? $requested_booking_id : 0,
+	'booking_venue_id'   => $booking_venue_id,
+	'booking_url'        => $selected['booking_url'] ?? '',
+	'support_events'     => $selected['support_events'] ?? array(),
 );
 $context_id       = wp_unique_id( 'ec-venue-settings-context-' );
 $support_requests = $can_access && LocalSupportSchema::is_ready()

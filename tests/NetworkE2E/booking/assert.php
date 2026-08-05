@@ -639,6 +639,7 @@ if ( ! is_array( $config_before ) ) {
 }
 $config_input = $config_before;
 unset( $config_input['revision'], $config_input['updated_by_user_id'], $config_input['updated_at'] );
+$config_input['intake']['presentation']['message_help'] = 'E2E-updated public message help.';
 $config_after                        = booking_network_e2e_execute(
 	'extrachill/update-venue-booking-config',
 	array(

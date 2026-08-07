@@ -107,7 +107,7 @@ final class FeatureProviderBootstrapTest extends TestCase {
 	 * @return array<string, mixed>
 	 */
 	private function run_fixture( string $scenario ): array {
-		$command = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( dirname( __DIR__, 2 ) . '/fixtures/bootstrap-matrix.php' ) . ' ' . escapeshellarg( $scenario ) . ' 2>&1';
+		$command = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( dirname( __DIR__, 2 ) . '/fixtures/bootstrap-matrix.php' ) . ' ' . escapeshellarg( $scenario );
 		$output  = array();
 		$status  = 0;
 		exec( $command, $output, $status ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Isolated bootstrap process is the behavior under test.

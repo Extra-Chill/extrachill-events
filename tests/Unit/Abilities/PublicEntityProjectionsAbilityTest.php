@@ -27,6 +27,13 @@ final class PublicEntityProjectionsAbilityTest extends WP_UnitTestCase {
 	 */
 	private int $city;
 
+	/**
+	 * Whether this fixture registered the Events ability category.
+	 *
+	 * @var bool
+	 */
+	private bool $registered_category = false;
+
 	/** Register canonical taxonomies and the ability. */
 	protected function setUp(): void {
 		parent::setUp();
@@ -95,14 +102,32 @@ final class PublicEntityProjectionsAbilityTest extends WP_UnitTestCase {
 			wp_unregister_ability( 'extrachill/events-public-entity-projections' );
 		}
 		if ( ! wp_has_ability_category( 'extrachill-events' ) ) {
-			wp_register_ability_category( 'extrachill-events', array( 'label' => 'Extra Chill Events' ) );
+			$this->registered_category = true;
+			$this->run_registration_lifecycle(
+				'wp_abilities_api_categories_init',
+				static function (): void {
+					wp_register_ability_category(
+						'extrachill-events',
+						array(
+							'label'       => 'Extra Chill Events',
+							'description' => 'Extra Chill Events abilities.',
+						)
+					);
+				}
+			);
 		}
-		extrachill_events_register_public_entity_projections_ability();
+		$this->run_registration_lifecycle( 'wp_abilities_api_init', 'extrachill_events_register_public_entity_projections_ability' );
 	}
 
 	/** Restore filters and public taxonomy registrations. */
 	protected function tearDown(): void {
 		remove_filter( 'extrachill_events_canonical_blog_id', array( $this, 'canonical_blog_id' ) );
+		if ( wp_has_ability( 'extrachill/events-public-entity-projections' ) ) {
+			wp_unregister_ability( 'extrachill/events-public-entity-projections' );
+		}
+		if ( $this->registered_category && wp_has_ability_category( 'extrachill-events' ) ) {
+			wp_unregister_ability_category( 'extrachill-events' );
+		}
 		foreach ( array( 'venue', 'location' ) as $taxonomy ) {
 			if ( taxonomy_exists( $taxonomy ) ) {
 				unregister_taxonomy( $taxonomy );
@@ -343,5 +368,26 @@ final class PublicEntityProjectionsAbilityTest extends WP_UnitTestCase {
 				),
 			),
 		);
+	}
+
+	/**
+	 * Run one registration callback on its required lifecycle without firing unrelated hooks.
+	 *
+	 * @param string   $hook     Registration lifecycle hook.
+	 * @param callable $callback Registration callback.
+	 */
+	private function run_registration_lifecycle( string $hook, callable $callback ): void {
+		$previous = isset( $GLOBALS['wp_filter'][ $hook ] ) ? clone $GLOBALS['wp_filter'][ $hook ] : null;
+
+		remove_all_actions( $hook );
+		add_action( $hook, $callback );
+		do_action( $hook );
+		remove_all_actions( $hook );
+
+		if ( null === $previous ) {
+			unset( $GLOBALS['wp_filter'][ $hook ] );
+		} else {
+			$GLOBALS['wp_filter'][ $hook ] = $previous;
+		}
 	}
 }

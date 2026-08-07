@@ -14,6 +14,7 @@
 			<exclude>tests/Unit/Core/LocalSceneDigestTest.php</exclude>
 			<file>tests/Unit/Abilities/VenueQualificationTicketmasterPrecheckTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalLocationsAbilityTest.php</file>
+			<file>tests/Unit/Abilities/PublicEntityProjectionsAbilityTest.php</file>
 			<file>tests/Unit/Abilities/EventsByTermTaxonomyContextTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalAdapterContractsTest.php</file>
 			<file>tests/Unit/Abilities/ManagedVenueVoicesRestTest.php</file>

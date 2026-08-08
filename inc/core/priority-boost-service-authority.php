@@ -77,7 +77,7 @@ function extrachill_events_priority_boost_target_grant(): ?array {
 			'source_site_id' => $source_site_id,
 			'target_site_id' => $target_site_id,
 			'target_host'    => is_string( $target_host ) ? $target_host : '',
-			'keys'           => is_array( $keys ) ? $keys : array(),
+			'keys'           => $keys,
 		)
 	);
 }

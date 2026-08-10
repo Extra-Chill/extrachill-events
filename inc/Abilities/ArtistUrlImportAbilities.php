@@ -55,9 +55,6 @@ namespace ExtraChillEvents\Abilities;
 use DataMachine\Core\Selection\SelectionMode;
 use DataMachine\Abilities\HandlerAbilities;
 use ExtraChillEvents\Core\ArtistUrlSubmissionsTable;
-use function add_action;
-use function is_wp_error;
-use function wp_remote_retrieve_body;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;

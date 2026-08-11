@@ -1,3 +1,5 @@
+/* global describe, afterEach, it, jest, expect */
+
 const markup = `
 	<div class="ec-event-submission"
 		data-event-source-preview="/event-source/preview"

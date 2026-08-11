@@ -1237,9 +1237,13 @@ class ArtistUrlImportAbilities {
 		if ( '' !== trim( $explicit_name ) && '' !== (string) ( $fresh_binding['name'] ?? '' ) && 0 !== strcasecmp( trim( $explicit_name ), trim( (string) $fresh_binding['name'] ) ) ) {
 			return new \WP_Error( 'artist_identity_changed', __( 'Artist approval must use the artist proven by fresh qualification.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
+		$resolved_artist_name = trim( $explicit_name );
+		if ( '' === $resolved_artist_name ) {
+			$resolved_artist_name = (string) ( $fresh_binding['name'] ?? '' );
+		}
 		$artist_term_id = $this->resolveArtistTerm(
 			$explicit_id,
-			'' !== trim( $explicit_name ) ? $explicit_name : (string) ( $fresh_binding['name'] ?? '' ),
+			$resolved_artist_name,
 			$fresh_artist_id
 		);
 

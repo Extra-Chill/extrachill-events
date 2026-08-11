@@ -294,11 +294,14 @@ class VenueAddAbilities {
 			ARRAY_A
 		);
 
-		$location_ids     = array();
-		$has_event_import = false;
-		$has_event_upsert = false;
+		$location_ids      = array();
+		$coherent_flows    = 0;
+		$invalid_structure = false;
 		foreach ( (array) $rows as $row ) {
-			$config = json_decode( (string) ( $row['flow_config'] ?? '' ), true );
+			$config           = json_decode( (string) ( $row['flow_config'] ?? '' ), true );
+			$has_event_import = false;
+			$has_event_upsert = false;
+			$flow_locations   = array();
 			foreach ( (array) $config as $step ) {
 				if ( 'event_import' === ( $step['step_type'] ?? '' ) ) {
 					$has_event_import = true;
@@ -313,12 +316,26 @@ class VenueAddAbilities {
 				$has_event_upsert = true;
 				$value            = (string) ( $upsert['taxonomy_location_selection'] ?? '' );
 				if ( ctype_digit( $value ) && (int) $value > 0 ) {
-					$location_ids[ (int) $value ] = true;
+					$flow_locations[ (int) $value ] = true;
+				} else {
+					$invalid_structure = true;
 				}
+			}
+			if ( $has_event_import !== $has_event_upsert ) {
+				$invalid_structure = true;
+				continue;
+			}
+			if ( $has_event_import && $has_event_upsert ) {
+				if ( 1 !== count( $flow_locations ) ) {
+					$invalid_structure = true;
+					continue;
+				}
+				++$coherent_flows;
+				$location_ids[ (int) array_key_first( $flow_locations ) ] = true;
 			}
 		}
 
-		if ( ! $has_event_import || ! $has_event_upsert || 1 !== count( $location_ids ) ) {
+		if ( $invalid_structure || $coherent_flows < 1 || 1 !== count( $location_ids ) ) {
 			return new \WP_Error( 'invalid_city_pipeline', 'The selected pipeline is not an event city pipeline with one canonical location.', array( 'status' => 400 ) );
 		}
 		$location_id = (int) array_key_first( $location_ids );

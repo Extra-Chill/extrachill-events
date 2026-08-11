@@ -156,13 +156,13 @@ class ArtistUrlSubmissionsTable {
 	}
 
 	/**
-	 * Compute the dedupe hash for a normalized URL.
+	 * Compute the dedupe hash for a URL's canonical identity.
 	 *
-	 * @param string $normalized_url URL already passed through normalize_url().
+	 * @param string $url Operational or canonical URL.
 	 * @return string sha256 hex.
 	 */
-	public static function url_hash( string $normalized_url ): string {
-		return hash( 'sha256', $normalized_url );
+	public static function url_hash( string $url ): string {
+		return hash( 'sha256', self::normalize_url( $url ) );
 	}
 
 	/**

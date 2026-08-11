@@ -152,7 +152,7 @@ if ( ! function_exists( 'get_current_user_id' ) ) {
 
 if ( ! function_exists( 'wp_get_current_user' ) ) {
 	function wp_get_current_user() {
-		return (object) array( 'user_email' => 'person@example.test', 'display_name' => 'Person', 'user_login' => 'person' );
+		return $GLOBALS['event_source_current_user'] ?? (object) array( 'user_email' => 'person@example.test', 'display_name' => 'Person', 'user_login' => 'person' );
 	}
 }
 
@@ -169,6 +169,30 @@ if ( ! function_exists( 'get_term_link' ) ) {
 if ( ! function_exists( 'home_url' ) ) {
 	function home_url( $path = '' ) {
 		return 'https://events.test' . $path;
+	}
+}
+
+if ( ! function_exists( 'get_option' ) ) {
+	function get_option( $name, $default = false ) {
+		return 'admin_email' === $name ? '' : $default;
+	}
+}
+
+if ( ! function_exists( 'is_email' ) ) {
+	function is_email( $email ) {
+		return false !== filter_var( $email, FILTER_VALIDATE_EMAIL ) ? $email : false;
+	}
+}
+
+if ( ! function_exists( 'wp_mail' ) ) {
+	function wp_mail() {
+		return true;
+	}
+}
+
+if ( ! function_exists( 'get_bloginfo' ) ) {
+	function get_bloginfo() {
+		return 'Events Test';
 	}
 }
 
@@ -296,15 +320,18 @@ final class EventSourceIntakeTest extends BookingTestCase {
 		$GLOBALS['event_source_terms'] = array(
 			'venue:the room'  => new WP_Term( 41, 'The Room' ),
 			'artist:the band' => new WP_Term( 72, 'The Band' ),
+			'artist:other artist' => new WP_Term( 73, 'Other Artist' ),
 		);
 		$GLOBALS['event_source_term_ids'] = array(
 			'venue:41'   => $GLOBALS['event_source_terms']['venue:the room'],
 			'artist:72'  => $GLOBALS['event_source_terms']['artist:the band'],
+			'artist:73'  => $GLOBALS['event_source_terms']['artist:other artist'],
 			'location:10'=> new WP_Term( 10, 'Charleston' ),
 		);
 		$GLOBALS['event_source_venue_data'] = array( 41 => array( 'website' => 'https://venue.test' ) );
 		$GLOBALS['event_source_registered_abilities'] = array();
 		$GLOBALS['event_source_registered_routes']    = array();
+		$GLOBALS['event_source_current_user']         = (object) array( 'user_email' => 'person@example.test', 'display_name' => 'Person', 'user_login' => 'person' );
 		$GLOBALS['ec_artist_test']['registered']      = array();
 		$this->wpdb = new EventSourceWpdb();
 		$GLOBALS['wpdb'] = $this->wpdb;
@@ -328,13 +355,14 @@ final class EventSourceIntakeTest extends BookingTestCase {
 		);
 	}
 
-	private function qualification( string $kind = 'artist', bool $eligible = true ): array {
+	private function qualification( string $kind = 'artist', bool $eligible = true, string $url = 'https://source.test/events' ): array {
 		$term_id = 'venue' === $kind ? 41 : 72;
 		$name    = 'venue' === $kind ? 'The Room' : 'The Band';
 		return array(
 			'success'              => true,
 			'qualified'            => true,
-			'canonical_events_url' => 'https://source.test/events',
+			'canonical_events_url' => $url,
+			'source_identity_url'  => ArtistUrlSubmissionsTable::normalize_url( $url ),
 			'verdict'              => 'qualified_structured',
 			'events_found'         => 3,
 			'events_preview'       => array(),
@@ -361,6 +389,50 @@ final class EventSourceIntakeTest extends BookingTestCase {
 			'suggested_artist_term_id' => 'artist' === $kind ? 72 : null,
 			'status'                   => ArtistUrlSubmissionsTable::STATUS_PENDING_REVIEW,
 			'events_found_count'       => 3,
+		);
+	}
+
+	private function legacy_submission(): array {
+		return array(
+			'id'                       => 1,
+			'user_id'                  => 0,
+			'url'                      => 'https://source.test/events?view=calendar&utm_source=legacy',
+			'url_hash'                 => ArtistUrlSubmissionsTable::url_hash( 'https://source.test/events?view=calendar&utm_source=legacy' ),
+			'canonical_url'            => '',
+			'source_kind'              => '',
+			'entity_taxonomy'          => '',
+			'entity_term_id'           => null,
+			'entity_name'              => '',
+			'suggested_artist_name'    => 'The Band',
+			'suggested_artist_term_id' => null,
+			'detected_format'           => 'json_ld',
+			'events_found_count'       => 1,
+			'status'                   => ArtistUrlSubmissionsTable::STATUS_PENDING_REVIEW,
+		);
+	}
+
+	private function safe_legacy_qualification( int $events_found = 1 ): array {
+		$fresh                          = $this->qualification( 'unknown', false, 'https://source.test/events?view=calendar&utm_source=legacy' );
+		$fresh['success']               = true;
+		$fresh['events_found']          = $events_found;
+		$fresh['verdict']               = 'extraction_gap';
+		$fresh['extraction_method']     = 'json_ld';
+		$fresh['recommended_binding']   = array( 'taxonomy' => '', 'term_id' => null, 'name' => '' );
+		return $fresh;
+	}
+
+	private function artist_flow_abilities( EventSourceAbilityDouble $create_flow ): array {
+		return array(
+			'datamachine/get-pipeline-configuration' => new EventSourceAbilityDouble(
+				array(
+					'success'  => true,
+					'pipeline' => array( 'pipeline_id' => 42 ),
+					'flows'    => array( array( 'flow_id' => 77, 'revision' => 'sha256:' . str_repeat( 'a', 64 ) ) ),
+				)
+			),
+			'datamachine/create-flow' => $create_flow,
+			'datamachine/update-step-configuration' => new EventSourceAbilityDouble( array( 'success' => true, 'revision' => 'sha256:' . str_repeat( 'b', 64 ) ) ),
+			'datamachine/run-flow' => new EventSourceAbilityDouble( array( 'success' => true ) ),
 		);
 	}
 
@@ -421,6 +493,28 @@ final class EventSourceIntakeTest extends BookingTestCase {
 		$this->assertSame( array(), $this->wpdb->submissions );
 	}
 
+	public function test_operational_query_url_is_qualified_and_persisted_while_hash_uses_identity(): void {
+		$GLOBALS['event_source_current_user']->user_email = '';
+		$intake = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
+		$seen   = '';
+		$operational_url = 'https://source.test/events?view=calendar&utm_source=email';
+		$intake->qualifications[] = function ( string $url ) use ( &$seen, $operational_url ) {
+			$seen = $url;
+			return $this->qualification( 'artist', true, $operational_url );
+		};
+
+		$result = $intake->executeSubmit( array( 'url' => $operational_url . '#schedule' ) );
+
+		$this->assertTrue( $result['success'] );
+		$this->assertSame( $operational_url, $seen );
+		$this->assertSame( $operational_url, $this->wpdb->submissions[1]['url'] );
+		$this->assertSame( $operational_url, $this->wpdb->submissions[1]['canonical_url'] );
+		$this->assertSame(
+			ArtistUrlSubmissionsTable::url_hash( 'https://source.test/events?view=calendar' ),
+			$this->wpdb->submissions[1]['url_hash']
+		);
+	}
+
 	public function test_approval_requalifies_and_blocks_stale_admission(): void {
 		$this->wpdb->submissions[1] = $this->pending_submission( 'artist' );
 		$intake = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
@@ -437,26 +531,81 @@ final class EventSourceIntakeTest extends BookingTestCase {
 	public function test_artist_approval_dispatches_only_after_fresh_admission(): void {
 		$this->wpdb->submissions[1] = $this->pending_submission( 'artist' );
 		$intake = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
-		$intake->qualifications[] = $this->qualification( 'artist', true );
+		$operational_url = 'https://source.test/events?view=calendar&utm_source=approval';
+		$intake->qualifications[] = $this->qualification( 'artist', true, $operational_url );
 		$create_flow = new EventSourceAbilityDouble( array( 'success' => true, 'flow_id' => 77 ) );
-		$abilities   = array(
-			'datamachine/get-pipeline-configuration' => new EventSourceAbilityDouble(
-				array(
-					'success'  => true,
-					'pipeline' => array( 'pipeline_id' => 42 ),
-					'flows'    => array( array( 'flow_id' => 77, 'revision' => 'sha256:' . str_repeat( 'a', 64 ) ) ),
-				)
-			),
-			'datamachine/create-flow' => $create_flow,
-			'datamachine/update-step-configuration' => new EventSourceAbilityDouble( array( 'success' => true, 'revision' => 'sha256:' . str_repeat( 'b', 64 ) ) ),
-			'datamachine/run-flow' => new EventSourceAbilityDouble( array( 'success' => true ) ),
-		);
+		$abilities   = $this->artist_flow_abilities( $create_flow );
 		$GLOBALS['ec_test_ability_resolver'] = static fn( $name ) => $abilities[ $name ] ?? null;
 
 		$result = $intake->executeApprove( array( 'submission_id' => 1 ) );
 
 		$this->assertSame( 'artist', $result['source_kind'] );
 		$this->assertSame( '72', $create_flow->calls[0]['step_configs']['upsert']['handler_config']['taxonomy_artist_selection'] );
+		$this->assertSame( $operational_url, $create_flow->calls[0]['step_configs']['event_import']['handler_config']['source_url'] );
+	}
+
+	public function test_unmatched_fresh_artist_rejects_unrelated_explicit_term_without_side_effects(): void {
+		$row                         = $this->pending_submission( 'artist' );
+		$row['entity_term_id']       = null;
+		$row['entity_name']          = 'New Artist';
+		$this->wpdb->submissions[1] = $row;
+		$fresh                       = $this->qualification( 'artist', true );
+		$fresh['recommended_binding'] = array( 'taxonomy' => 'artist', 'term_id' => null, 'name' => 'New Artist' );
+		$intake                       = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
+		$intake->qualifications[]     = $fresh;
+
+		$result = $intake->executeApprove( array( 'submission_id' => 1, 'artist_term_id' => 72 ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'artist_identity_changed', $result->get_error_code() );
+		$this->assertSame( array(), $this->wpdb->updates );
+	}
+
+	public function test_legacy_one_event_submission_allows_matching_explicit_artist(): void {
+		$this->wpdb->submissions[1] = $this->legacy_submission();
+		$intake = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
+		$intake->qualifications[] = $this->safe_legacy_qualification( 1 );
+		$create_flow = new EventSourceAbilityDouble( array( 'success' => true, 'flow_id' => 77 ) );
+		$abilities   = $this->artist_flow_abilities( $create_flow );
+		$GLOBALS['ec_test_ability_resolver'] = static fn( $name ) => $abilities[ $name ] ?? null;
+
+		$result = $intake->executeApprove( array( 'submission_id' => 1, 'artist_term_id' => 72 ) );
+
+		$this->assertSame( 'artist', $result['source_kind'] );
+		$this->assertSame( 72, $result['artist_term_id'] );
+	}
+
+	public function test_legacy_multiple_same_venue_evidence_remains_approvable(): void {
+		$row                             = $this->legacy_submission();
+		$row['events_found_count']       = 2;
+		$this->wpdb->submissions[1]     = $row;
+		$intake                          = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
+		$intake->qualifications[]        = $this->safe_legacy_qualification( 2 );
+		$create_flow                     = new EventSourceAbilityDouble( array( 'success' => true, 'flow_id' => 77 ) );
+		$abilities                       = $this->artist_flow_abilities( $create_flow );
+		$GLOBALS['ec_test_ability_resolver'] = static fn( $name ) => $abilities[ $name ] ?? null;
+
+		$result = $intake->executeApprove( array( 'submission_id' => 1, 'artist_name' => 'The Band' ) );
+
+		$this->assertSame( 'artist', $result['source_kind'] );
+	}
+
+	public function test_failed_legacy_identity_can_retry_without_losing_compatibility(): void {
+		$this->wpdb->submissions[1] = $this->legacy_submission();
+		$intake = ( new ReflectionClass( TestableEventSourceIntake::class ) )->newInstanceWithoutConstructor();
+		$intake->qualifications[] = $this->safe_legacy_qualification( 1 );
+		$intake->qualifications[] = $this->safe_legacy_qualification( 1 );
+		$create_flow = new EventSourceAbilityDouble( array( 'success' => true, 'flow_id' => 77 ) );
+		$abilities   = $this->artist_flow_abilities( $create_flow );
+		$GLOBALS['ec_test_ability_resolver'] = static fn( $name ) => $abilities[ $name ] ?? null;
+
+		$failed = $intake->executeApprove( array( 'submission_id' => 1, 'artist_term_id' => 73 ) );
+		$this->assertInstanceOf( WP_Error::class, $failed );
+		$this->assertSame( array(), $this->wpdb->updates );
+		$this->assertSame( '', $this->wpdb->submissions[1]['source_kind'] );
+
+		$retried = $intake->executeApprove( array( 'submission_id' => 1, 'artist_term_id' => 72 ) );
+		$this->assertSame( 'artist', $retried['source_kind'] );
 	}
 
 	public function test_venue_approval_validates_pipeline_and_dispatches_owner(): void {
@@ -482,6 +631,31 @@ final class EventSourceIntakeTest extends BookingTestCase {
 		$this->wpdb->pipelines[9] = array( 'pipeline_id' => 9, 'pipeline_name' => 'Artist Tour Import' );
 		$validator = ( new ReflectionClass( VenueAddAbilities::class ) )->newInstanceWithoutConstructor();
 		$result    = $validator->validateCityPipeline( 9 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_city_pipeline', $result->get_error_code() );
+	}
+
+	public function test_mixed_import_and_located_upsert_flows_do_not_form_a_city_pipeline(): void {
+		$this->wpdb->pipelines[11] = array( 'pipeline_id' => 11, 'pipeline_name' => 'Mixed Events' );
+		$this->wpdb->flows[] = array(
+			'pipeline_id' => 11,
+			'flow_config' => wp_json_encode( array( 'import' => array( 'step_type' => 'event_import' ) ) ),
+		);
+		$this->wpdb->flows[] = array(
+			'pipeline_id' => 11,
+			'flow_config' => wp_json_encode(
+				array(
+					'upsert' => array(
+						'step_type'       => 'upsert',
+						'handler_configs' => array( 'upsert_event' => array( 'taxonomy_location_selection' => '10' ) ),
+					),
+				)
+			),
+		);
+		$validator = ( new ReflectionClass( VenueAddAbilities::class ) )->newInstanceWithoutConstructor();
+
+		$result = $validator->validateCityPipeline( 11 );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_city_pipeline', $result->get_error_code() );

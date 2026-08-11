@@ -373,6 +373,7 @@ class VenueAddAbilities {
 						'post_status'                 => 'publish',
 						'include_images'              => false,
 						'post_author'                 => self::DEFAULT_POST_AUTHOR,
+						'taxonomy_venue_selection'    => (string) $venue_term_id,
 						'taxonomy_category_selection' => 'skip',
 						'taxonomy_post_tag_selection' => 'skip',
 						'taxonomy_location_selection' => $location_term,

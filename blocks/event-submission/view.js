@@ -124,7 +124,9 @@
 	// byte-identically when no URL is provided.
 	// ────────────────────────────────────────────────────────────────────
 
-	const urlImportTimeoutMs = 8000;
+	// Qualification may test a discovered calendar plus several bounded
+	// candidates. Keep the request finite without racing the server's work.
+	const urlImportTimeoutMs = 60000;
 
 	const fetchJson = async ( url, body, nonce ) => {
 		const controller = new AbortController();
@@ -284,6 +286,16 @@
 				if ( payload?.existing_coverage?.covered ) {
 					setUrlStatus(
 						'This source is already covered by an existing import.',
+						true
+					);
+					setState( 'error' );
+					showManualForm( container );
+					return;
+				}
+				if ( ! payload?.recurring_eligible ) {
+					setUrlStatus(
+						payload?.warnings?.[ 0 ] ||
+							'This page is not eligible for a recurring import. Use the manual form below.',
 						true
 					);
 					setState( 'error' );

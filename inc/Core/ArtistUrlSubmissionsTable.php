@@ -152,45 +152,7 @@ class ArtistUrlSubmissionsTable {
 	 * @return string Normalized URL, or empty string if the input is not parseable.
 	 */
 	public static function normalize_url( string $url ): string {
-		$url = trim( $url );
-		if ( '' === $url ) {
-			return '';
-		}
-
-		$parts = wp_parse_url( $url );
-		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
-			return '';
-		}
-
-		$scheme = strtolower( $parts['scheme'] );
-		$host   = strtolower( $parts['host'] );
-		$port   = $parts['port'] ?? '';
-		$path   = $parts['path'] ?? '/';
-		$query  = $parts['query'] ?? '';
-
-		// Strip default ports.
-		if ( ( 'http' === $scheme && 80 === (int) $port ) || ( 'https' === $scheme && 443 === (int) $port ) ) {
-			$port = '';
-		}
-
-		// Trim trailing slash on non-root paths.
-		if ( strlen( $path ) > 1 && '/' === substr( $path, -1 ) ) {
-			$path = rtrim( $path, '/' );
-		}
-		if ( '' === $path ) {
-			$path = '/';
-		}
-
-		$normalized = $scheme . '://' . $host;
-		if ( '' !== (string) $port ) {
-			$normalized .= ':' . $port;
-		}
-		$normalized .= $path;
-		if ( '' !== $query ) {
-			$normalized .= '?' . $query;
-		}
-
-		return $normalized;
+		return QualifyVerdict::canonicalize_url( $url );
 	}
 
 	/**
@@ -220,6 +182,47 @@ class ArtistUrlSubmissionsTable {
 		);
 
 		return $row ? self::with_compatibility_defaults( $row ) : null;
+	}
+
+	/**
+	 * Find a pending or approved source by canonical URL identity.
+	 *
+	 * The hash fast path covers Phase 1 rows. The legacy scan keeps old
+	 * artist records readable when their stored hash includes tracking/query or
+	 * trailing-slash variants from the pre-canonical schema.
+	 */
+	public static function find_tracked_by_url( string $url, int $exclude_id = 0 ): ?array {
+		$canonical = self::normalize_url( $url );
+		if ( '' === $canonical ) {
+			return null;
+		}
+		$hashed = self::find_by_hash( self::url_hash( $canonical ) );
+		if ( $hashed && (int) $hashed['id'] !== $exclude_id && in_array( $hashed['status'], array( self::STATUS_PENDING_REVIEW, self::STATUS_APPROVED ), true ) ) {
+			return $hashed;
+		}
+
+		global $wpdb;
+		$table = self::table_name();
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted internal table name.
+				"SELECT * FROM {$table} WHERE status IN (%s, %s) ORDER BY id DESC",
+				self::STATUS_PENDING_REVIEW,
+				self::STATUS_APPROVED
+			),
+			ARRAY_A
+		);
+		foreach ( (array) $rows as $row ) {
+			if ( (int) $row['id'] === $exclude_id ) {
+				continue;
+			}
+			$candidate = (string) ( $row['canonical_url'] ?? $row['url'] ?? '' );
+			if ( self::normalize_url( $candidate ) === $canonical ) {
+				return self::with_compatibility_defaults( $row );
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -382,7 +385,10 @@ class ArtistUrlSubmissionsTable {
 	 */
 	public static function with_compatibility_defaults( array $row ): array {
 		if ( empty( $row['source_kind'] ) ) {
-			$row['source_kind'] = 'artist';
+			$row['source_kind']          = 'artist';
+			$row['compatibility_legacy'] = true;
+		} else {
+			$row['compatibility_legacy'] = false;
 		}
 		if ( empty( $row['canonical_url'] ) ) {
 			$row['canonical_url'] = (string) ( $row['url'] ?? '' );

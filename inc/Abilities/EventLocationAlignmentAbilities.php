@@ -317,7 +317,7 @@ class EventLocationAlignmentAbilities {
 		);
 
 		$expected_term = $expected['term'];
-		if ( 1 === count( $current_location_ids ) && (int) reset( $current_location_ids ) === (int) $expected_term->term_id ) {
+		if ( \extrachill_events_has_canonical_location( $current_location_ids, (int) $expected_term->term_id ) ) {
 			return array(
 				'post_id'              => $post_id,
 				'title'                => $post->post_title,

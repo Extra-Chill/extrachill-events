@@ -66,18 +66,15 @@ function extrachill_events_normalize_location( $post_id ) {
 		return;
 	}
 
-	// Don't clobber an already-correct assignment.
+	// A canonical event has exactly one market. Merely containing the expected
+	// term is insufficient because a prior pipeline may have left a conflict.
 	$current_locations = get_the_terms( $post_id, 'location' );
-	if ( $current_locations && ! is_wp_error( $current_locations ) ) {
-		foreach ( $current_locations as $loc ) {
-			if ( (int) $loc->term_id === (int) $correct_term->term_id ) {
-				return; // Already correct.
-			}
-		}
+	if ( $current_locations && ! is_wp_error( $current_locations ) && 1 === count( $current_locations ) && (int) $current_locations[0]->term_id === (int) $correct_term->term_id ) {
+		return;
 	}
 
 	// Replace all location terms with the resolved one.
-	wp_set_object_terms( $post_id, array( (int) $correct_term->term_id ), 'location' );
+	wp_set_object_terms( $post_id, array( (int) $correct_term->term_id ), 'location', false );
 }
 
 /**

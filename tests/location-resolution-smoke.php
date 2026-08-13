@@ -42,9 +42,10 @@ $GLOBALS['ec_resolution_terms'] = array(
 	12 => new WP_Term( 12, 'London', 'london-on', 5 ),
 	13 => new WP_Term( 13, 'London', 'london-uk', 7 ),
 	14 => new WP_Term( 14, 'Oxford', 'oxford-uk', 7 ),
+	15 => new WP_Term( 15, 'Phoenix', 'phoenix' ),
 );
 $GLOBALS['ec_resolution_venue']       = new WP_Term( 20, 'Resolution Venue', 'resolution-venue' );
-$GLOBALS['ec_resolution_location']    = $GLOBALS['ec_resolution_terms'][10];
+$GLOBALS['ec_resolution_locations']   = array( $GLOBALS['ec_resolution_terms'][10] );
 $GLOBALS['ec_resolution_assignments'] = array();
 $GLOBALS['ec_resolution_meta']        = array(
 	'_venue_city'    => 'Wilmington',
@@ -66,13 +67,13 @@ function wp_is_post_autosave() {
 function get_the_terms( $post_id, $taxonomy ) {
 	return 'venue' === $taxonomy
 		? array( $GLOBALS['ec_resolution_venue'] )
-		: array( $GLOBALS['ec_resolution_location'] );
+		: $GLOBALS['ec_resolution_locations'];
 }
 function get_term_meta( $term_id, $key ) {
 	return $GLOBALS['ec_resolution_meta'][ $key ] ?? '';
 }
-function wp_set_object_terms( $post_id, $terms, $taxonomy ) {
-	$GLOBALS['ec_resolution_assignments'][] = compact( 'post_id', 'terms', 'taxonomy' );
+function wp_set_object_terms( $post_id, $terms, $taxonomy, $append = false ) {
+	$GLOBALS['ec_resolution_assignments'][] = compact( 'post_id', 'terms', 'taxonomy', 'append' );
 	return $terms;
 }
 function get_term_by( $field, $value ) {
@@ -130,6 +131,16 @@ if ( array() !== $GLOBALS['ec_resolution_assignments'] ) {
 	printf( "FAIL: an already-correct canonical assignment must not be rewritten\n" );
 }
 
+// Simulate a canonical event encountered by another city pipeline: the new
+// expected market is present, but the stale market from the prior flow remains.
+$GLOBALS['ec_resolution_locations'] = array( $GLOBALS['ec_resolution_terms'][10], $GLOBALS['ec_resolution_terms'][15] );
+extrachill_events_normalize_location( 150479 );
+$replacement = end( $GLOBALS['ec_resolution_assignments'] );
+if ( array( 10 ) !== ( $replacement['terms'] ?? null ) || true === ( $replacement['append'] ?? true ) ) {
+	++$failures;
+	printf( "FAIL: cross-pipeline normalization must replace all conflicting markets with the canonical market\n" );
+}
+
 $ability = new ExtraChillEvents\Abilities\EventLocationAlignmentAbilities();
 $method  = new ReflectionMethod( $ability, 'resolveExpectedLocationTerm' );
 $result  = $method->invoke( $ability, 'Wilmington', '', '', 'US', $GLOBALS['ec_resolution_terms'][11] );
@@ -138,5 +149,5 @@ if ( null !== $result['term'] || 'ambiguous_location_hierarchy' !== $result['rea
 	printf( "FAIL: ambiguous hierarchy must not fall back to a flow term in audit/fix mode\n" );
 }
 
-printf( "%d passed, %d failed\n", count( $cases ) + 4 - $failures, $failures );
+printf( "%d passed, %d failed\n", count( $cases ) + 5 - $failures, $failures );
 exit( $failures > 0 ? 1 : 0 );

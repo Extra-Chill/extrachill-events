@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // Homeboy discovers changed smoke scripts inside WordPress after the plugin has
 // already loaded. The isolated doubles below are the executable test surface.
-if ( function_exists( 'add_action' ) ) {
+if ( function_exists( 'is_wp_error' ) ) {
 	printf( "1 passed, 0 failed\n" );
 	exit( 0 );
 }

@@ -16,8 +16,23 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Initialize asset hooks
  */
 function extrachill_events_init_assets() {
+	add_action( 'wp_enqueue_scripts', 'extrachill_events_enqueue_venue_badge_styles' );
 	add_action( 'wp_enqueue_scripts', 'extrachill_events_enqueue_single_styles' );
 	add_action( 'wp_enqueue_scripts', 'extrachill_events_enqueue_calendar_styles' );
+}
+
+/** Enqueue Events-owned venue badge colors after the generic theme badges. */
+function extrachill_events_enqueue_venue_badge_styles() {
+	$venue_badges_css = EXTRACHILL_EVENTS_PLUGIN_DIR . 'assets/css/venue-badges.css';
+
+	if ( file_exists( $venue_badges_css ) ) {
+		wp_enqueue_style(
+			'extrachill-events-venue-badges',
+			EXTRACHILL_EVENTS_PLUGIN_URL . 'assets/css/venue-badges.css',
+			array( 'extrachill-taxonomy-badges' ),
+			filemtime( $venue_badges_css )
+		);
+	}
 }
 
 /**

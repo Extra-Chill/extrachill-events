@@ -1,0 +1,26 @@
+/**
+ * Venue Badge Styles
+ *
+ * Venue colors alternate by position instead of assigning arbitrary colors
+ * to individual venues. Location badges retain their existing city colors.
+ *
+ * @package ExtraChillEvents
+ */
+
+.taxonomy-badge.venue-badge {
+	background-color: var(--badge-venue-default-bg, #000000);
+	color: var(--badge-venue-default-text, #ffffff);
+	border-color: var(--badge-venue-default-bg, #000000);
+}
+
+.taxonomy-badges > .taxonomy-badge.venue-badge:nth-child(even of .venue-badge) {
+	background-color: var(--badge-venue-default-text, #ffffff);
+	color: var(--badge-venue-default-bg, #000000);
+	border-color: var(--badge-venue-default-bg, #000000);
+}
+
+.taxonomy-badge.venue-badge:hover,
+.taxonomy-badges > .taxonomy-badge.venue-badge:nth-child(even of .venue-badge):hover {
+	background-color: var(--badge-venue-default-bg, #000000);
+	color: var(--badge-venue-default-text, #ffffff);
+}

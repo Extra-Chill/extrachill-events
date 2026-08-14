@@ -45,6 +45,7 @@ export function BookingFormTab( {
 	config,
 	baseline,
 	setConfig,
+	onInitializeConfig,
 	onSave,
 	saving,
 	status,
@@ -72,13 +73,13 @@ export function BookingFormTab( {
 			return;
 		}
 		initializedWebsite.current = true;
-		setConfig( {
+		onInitializeConfig( {
 			...config,
 			embed: { allowed_parent_origins: [ origin ] },
 		} );
-	}, [ config, profile?.website, setConfig, websites.length ] );
+	}, [ config, onInitializeConfig, profile?.website, websites.length ] );
 	useEffect( () => {
-		const mobilePreview = window.matchMedia( '(max-width: 960px)' );
+		const mobilePreview = window.matchMedia( '(max-width: 1200px)' );
 		const syncPreview = () => setPreviewOpen( ! mobilePreview.matches );
 		syncPreview();
 		mobilePreview.addEventListener( 'change', syncPreview );

@@ -150,6 +150,7 @@ export function IntakeTab( { config, setConfig, idPrefix = '' } ) {
 									<div className="ec-booking-field__row">
 										<input
 											id={ `${ idPrefix }intake-label-${ rowIndex }` }
+											type="text"
 											className="ec-booking-field__label"
 											ref={ ( element ) => {
 												if ( element ) {

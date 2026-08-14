@@ -102,10 +102,22 @@ final class BreadcrumbsTest extends TestCase {
 		$GLOBALS['test_query_vars']   = array();
 		$GLOBALS['test_is_tax']       = false;
 		$GLOBALS['test_queried_term'] = null;
+		$this->set_test_query_var( 'ec_events_location_index', '' );
+		$this->set_test_query_var( 'ec_events_router', '' );
+		if ( isset( $GLOBALS['wp_query'] ) ) {
+			$GLOBALS['wp_query']->is_tax         = false;
+			$GLOBALS['wp_query']->queried_object = null;
+		}
 	}
 
 	/** Remove request state after each test. */
 	protected function tearDown(): void {
+		$this->set_test_query_var( 'ec_events_location_index', '' );
+		$this->set_test_query_var( 'ec_events_router', '' );
+		if ( isset( $GLOBALS['wp_query'] ) ) {
+			$GLOBALS['wp_query']->is_tax         = false;
+			$GLOBALS['wp_query']->queried_object = null;
+		}
 		unset( $GLOBALS['test_query_vars'], $GLOBALS['test_is_tax'], $GLOBALS['test_queried_term'] );
 		if ( $this->switched_to_events_site ) {
 			restore_current_blog();
@@ -116,7 +128,7 @@ final class BreadcrumbsTest extends TestCase {
 
 	/** The location directory identifies its destination. */
 	public function test_location_directory_has_destination_specific_breadcrumb(): void {
-		$GLOBALS['test_query_vars']['ec_events_location_index'] = '1';
+		$this->set_test_query_var( 'ec_events_location_index', '1' );
 
 		$this->assertSame(
 			'<span>Live Music by Location</span>',
@@ -126,7 +138,7 @@ final class BreadcrumbsTest extends TestCase {
 
 	/** The all-events page identifies its destination. */
 	public function test_all_events_page_has_destination_specific_breadcrumb(): void {
-		$GLOBALS['test_query_vars']['ec_events_router'] = 'all';
+		$this->set_test_query_var( 'ec_events_router', 'all' );
 
 		$this->assertSame(
 			'<span>All Live Music Events</span>',
@@ -138,10 +150,29 @@ final class BreadcrumbsTest extends TestCase {
 	public function test_taxonomy_archive_keeps_term_breadcrumb(): void {
 		$GLOBALS['test_is_tax']       = true;
 		$GLOBALS['test_queried_term'] = (object) array( 'name' => 'Charleston' );
+		if ( isset( $GLOBALS['wp_query'] ) ) {
+			$GLOBALS['wp_query']->is_tax         = true;
+			$GLOBALS['wp_query']->queried_object = $GLOBALS['test_queried_term'];
+		}
 
 		$this->assertSame(
 			'<span>Charleston</span>',
 			ec_events_breadcrumb_trail_archives( '' )
 		);
+	}
+
+	/**
+	 * Set a query variable in either WordPress or the plain unit fixture.
+	 *
+	 * @param string $name  Query variable name.
+	 * @param string $value Query variable value.
+	 */
+	private function set_test_query_var( string $name, string $value ): void {
+		if ( function_exists( 'set_query_var' ) ) {
+			set_query_var( $name, $value );
+			return;
+		}
+
+		$GLOBALS['test_query_vars'][ $name ] = $value;
 	}
 }

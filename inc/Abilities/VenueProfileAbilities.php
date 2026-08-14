@@ -170,13 +170,28 @@ class VenueProfileAbilities {
 		$logo = array(
 			'type'                 => array( 'object', 'null' ),
 			'properties'           => array(
-				'attachment_id' => array( 'type' => 'integer', 'minimum' => 1 ),
-				'site_id'       => array( 'type' => 'integer', 'minimum' => 1 ),
-				'url'           => array( 'type' => 'string', 'format' => 'uri' ),
+				'attachment_id' => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'site_id'       => array(
+					'type'    => 'integer',
+					'minimum' => 1,
+				),
+				'url'           => array(
+					'type'   => 'string',
+					'format' => 'uri',
+				),
 				'alt'           => $text,
 				'mime_type'     => $text,
-				'width'         => array( 'type' => 'integer', 'minimum' => 0 ),
-				'height'        => array( 'type' => 'integer', 'minimum' => 0 ),
+				'width'         => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
+				'height'        => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
 			),
 			'required'             => array( 'attachment_id', 'site_id', 'url', 'alt', 'mime_type', 'width', 'height' ),
 			'additionalProperties' => false,
@@ -184,27 +199,27 @@ class VenueProfileAbilities {
 		return array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'term_id'     => array(
+				'term_id'            => array(
 					'type'    => 'integer',
 					'minimum' => 1,
 				),
-				'name'        => $text,
-				'description' => $text,
-				'address'     => $text,
-				'city'        => $text,
-				'state'       => $text,
-				'zip'         => $text,
-				'country'     => $text,
-				'phone'       => $text,
-				'website'     => $text,
-				'ticketing_url' => $text,
-				'capacity'    => $text,
+				'name'               => $text,
+				'description'        => $text,
+				'address'            => $text,
+				'city'               => $text,
+				'state'              => $text,
+				'zip'                => $text,
+				'country'            => $text,
+				'phone'              => $text,
+				'website'            => $text,
+				'ticketing_url'      => $text,
+				'capacity'           => $text,
 				'logo_attachment_id' => array(
 					'type'    => 'integer',
 					'minimum' => 0,
 				),
-				'logo'        => $logo,
-				'revision'    => array(
+				'logo'               => $logo,
+				'revision'           => array(
 					'type'    => 'string',
 					'pattern' => '^[a-f0-9]{64}$',
 				),

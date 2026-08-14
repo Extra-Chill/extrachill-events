@@ -72,7 +72,7 @@ class VenueMembershipService {
 		}
 		return array_map(
 			static function ( array $membership ): array {
-				$user = get_userdata( $membership['user_id'] );
+				$user                       = get_userdata( $membership['user_id'] );
 				$membership['display_name'] = $user instanceof \WP_User ? (string) $user->display_name : '';
 				$membership['email']        = $user instanceof \WP_User ? (string) $user->user_email : '';
 				return $membership;

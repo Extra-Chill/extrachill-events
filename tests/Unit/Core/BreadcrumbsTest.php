@@ -85,9 +85,20 @@ require_once dirname( __DIR__, 3 ) . '/inc/single-event/breadcrumbs.php';
 // phpcs:disable Universal.Files.SeparateFunctionsFromOO.Mixed -- Focused WordPress function doubles live with their tests.
 /** Verifies breadcrumb labels for Events archives and virtual routes. */
 final class BreadcrumbsTest extends TestCase {
+	/**
+	 * Whether this test switched into the Events site.
+	 *
+	 * @var bool
+	 */
+	private bool $switched_to_events_site = false;
+
 	/** Reset request state before each test. */
 	protected function setUp(): void {
 		parent::setUp();
+		if ( ! ec_is_events_site() && function_exists( 'switch_to_blog' ) ) {
+			switch_to_blog( (int) ec_get_blog_id( 'events' ) );
+			$this->switched_to_events_site = true;
+		}
 		$GLOBALS['test_query_vars']   = array();
 		$GLOBALS['test_is_tax']       = false;
 		$GLOBALS['test_queried_term'] = null;
@@ -96,6 +107,10 @@ final class BreadcrumbsTest extends TestCase {
 	/** Remove request state after each test. */
 	protected function tearDown(): void {
 		unset( $GLOBALS['test_query_vars'], $GLOBALS['test_is_tax'], $GLOBALS['test_queried_term'] );
+		if ( $this->switched_to_events_site ) {
+			restore_current_blog();
+			$this->switched_to_events_site = false;
+		}
 		parent::tearDown();
 	}
 

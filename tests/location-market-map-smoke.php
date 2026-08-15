@@ -52,12 +52,6 @@ if ( ! function_exists( 'is_wp_error' ) ) {
 		return false;
 	}
 }
-if ( ! function_exists( 'remove_accents' ) ) {
-	/** Return unchanged ASCII fixtures in the isolated smoke runtime. */
-	function remove_accents( $text ) {
-		return $text;
-	}
-}
 
 require_once dirname( __DIR__ ) . '/inc/core/location-normalizer.php';
 

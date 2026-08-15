@@ -236,7 +236,8 @@ function extrachill_events_filter_locations_by_hierarchy( array $matches, string
  * @return string Normalized identity.
  */
 function extrachill_events_location_identity_key( string $value ): string {
-	return strtolower( remove_accents( trim( $value ) ) );
+	$value = trim( $value );
+	return strtolower( function_exists( 'remove_accents' ) ? remove_accents( $value ) : $value );
 }
 
 /**

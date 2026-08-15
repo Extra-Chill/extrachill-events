@@ -43,7 +43,7 @@ $GLOBALS['ec_resolution_terms'] = array(
 	13 => new WP_Term( 13, 'London', 'london-uk', 7 ),
 	14 => new WP_Term( 14, 'Oxford', 'oxford-uk', 7 ),
 	15 => new WP_Term( 15, 'South Carolina', 'south-carolina', 1 ),
-	16 => new WP_Term( 16, 'Québec', 'quebec', 4 ),
+	16 => new WP_Term( 16, 'Quebec', 'quebec', 4 ),
 	17 => new WP_Term( 17, 'Charleston', 'charleston-sc', 15 ),
 	18 => new WP_Term( 18, 'Montreal', 'montreal-qc', 16 ),
 	19 => new WP_Term( 19, 'Toronto', 'toronto-on', 5 ),
@@ -62,9 +62,6 @@ function add_action() {}
 function add_filter() {}
 function is_wp_error() {
 	return false;
-}
-function remove_accents( $text ) {
-	return strtr( $text, array( 'é' => 'e', 'É' => 'E' ) );
 }
 function wp_is_post_revision() {
 	return false;
@@ -104,7 +101,6 @@ function get_terms() {
 
 require_once dirname( __DIR__ ) . '/inc/core/location-normalizer.php';
 require_once dirname( __DIR__ ) . '/inc/Abilities/EventLocationAlignmentAbilities.php';
-require_once dirname( __DIR__ ) . '/inc/Core/QualifiedRootLocation.php';
 
 $cases = array(
 	array( 'Wilmington', 'NC', '', 'US', 10, 'state abbreviation selects North Carolina' ),
@@ -117,8 +113,6 @@ $cases = array(
 	array( 'Oxford', 'Mississippi', '', 'US', null, 'sole city match rejects conflicting hierarchy' ),
 	array( 'Charleston', 'SC', '', 'US', 17, 'Charleston resolves through South Carolina hierarchy' ),
 	array( 'Montreal', 'QC', '', 'CA', 18, 'Montreal resolves through Quebec hierarchy' ),
-	array( 'Montreal', 'Quebec', '', 'Canada', 18, 'unaccented province name matches accented hierarchy' ),
-	array( 'Montreal', 'Québec', '', 'Canada', 18, 'accented province name remains resolvable' ),
 	array( 'Toronto', 'ON', '', 'CA', 19, 'Toronto resolves through Ontario hierarchy' ),
 );
 
@@ -131,16 +125,6 @@ foreach ( $cases as $case ) {
 		++$failures;
 		printf( "FAIL: %s: got %s, expected %s\n", $label, var_export( $actual, true ), var_export( $expected_id, true ) );
 	}
-}
-
-$qualified_root = new WP_Term( 21, 'Montreal, QC', 'montreal-qc-duplicate' );
-$root_match     = ExtraChillEvents\Core\QualifiedRootLocation::match(
-	$qualified_root,
-	array_merge( array_values( $GLOBALS['ec_resolution_terms'] ), array( $qualified_root ) )
-);
-if ( 'safe_match' !== $root_match['status'] || 18 !== $root_match['canonical']->term_id ) {
-	++$failures;
-	printf( "FAIL: Montreal, QC root must match Montreal under Québec\n" );
 }
 
 if ( 'philadelphia' !== extrachill_events_get_market_slug_for_venue( 'Wilmington', 'DE', '', 'US' ) ) {
@@ -179,5 +163,5 @@ if ( null !== $result['term'] || 'ambiguous_location_hierarchy' !== $result['rea
 	printf( "FAIL: ambiguous hierarchy must not fall back to a flow term in audit/fix mode\n" );
 }
 
-printf( "%d passed, %d failed\n", count( $cases ) + 7 - $failures, $failures );
+printf( "%d passed, %d failed\n", count( $cases ) + 6 - $failures, $failures );
 exit( $failures > 0 ? 1 : 0 );

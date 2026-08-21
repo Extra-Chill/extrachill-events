@@ -7,6 +7,8 @@
 
 use ExtraChillEvents\Core\VenueBookingConfig;
 
+require_once dirname( __DIR__ ) . '/Support/archive-template-stubs.php';
+
 /** Proves the Events-owned booking block across canonical network contexts. */
 final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 	private const EVENTS_BLOG_ID = 7;

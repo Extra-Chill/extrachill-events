@@ -84,7 +84,9 @@ if ( ! $user_id ) {
 		// Extra Chill Users owns the canonical network registration surface and
 		// validates cross-site auth continuations. Keep the WordPress fallback for
 		// isolated environments where that required network plugin is unavailable.
-		$my_shows_url     = home_url( '/my-shows/' );
+		$my_shows_url     = function_exists( 'ec_get_site_url' )
+			? trailingslashit( ec_get_site_url( 'events' ) ) . 'my-shows/'
+			: home_url( '/my-shows/' );
 		$registration_url = function_exists( 'extrachill_users_get_registration_url' )
 			? extrachill_users_get_registration_url()
 			: wp_registration_url();

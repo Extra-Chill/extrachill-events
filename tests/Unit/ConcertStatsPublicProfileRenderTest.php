@@ -126,7 +126,7 @@ final class ConcertStatsPublicProfileRenderTest extends WP_UnitTestCase {
 		$canonical_registration = extrachill_users_get_registration_url();
 		$this->assertSame( network_home_url( '/login/', 'https' ) . '#tab-register', $canonical_registration );
 
-		$my_shows_url = home_url( '/my-shows/' );
+		$my_shows_url = trailingslashit( ec_get_site_url( 'events' ) ) . 'my-shows/';
 		$expected_url = ec_users_login_url_with_redirect( $canonical_registration, $my_shows_url );
 		$output       = $this->render_block();
 

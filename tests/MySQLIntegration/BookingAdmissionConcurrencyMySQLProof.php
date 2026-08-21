@@ -313,6 +313,9 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		while ( ! file_exists( $stage_held ) && microtime( true ) < $deadline ) {
 			usleep( 10000 );
 		}
+		if ( ! file_exists( $stage_held ) && file_exists( $winner_file ) ) {
+			$this->fail( 'The winner failed before provider stage: ' . (string) file_get_contents( $winner_file ) );
+		}
 		$this->assertFileExists( $stage_held, 'The winner never entered provider stage while holding the saga lock.' );
 		$bookings    = new BookingRepository();
 		$attachments = new BookingAttachmentRepository();

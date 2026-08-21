@@ -148,6 +148,11 @@ describe( 'booking correspondence delivery state', () => {
 		const { container } = await renderCorrespondence( onRefresh );
 
 		await act( async () => submit( container ) );
+		await waitFor(
+			() =>
+				container.querySelector( '[role="status"]' )?.textContent ===
+				'Message recorded. Delivery status refreshed.'
+		);
 
 		expect( container.querySelector( '[role="status"]' ).textContent ).toBe(
 			'Message recorded. Delivery status refreshed.'

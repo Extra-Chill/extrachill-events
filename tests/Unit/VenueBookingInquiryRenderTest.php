@@ -26,6 +26,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		wp_set_current_user( 0 );
+		add_action( 'extrachill_archive_below_description', 'ec_events_render_venue_archive_workspace_action', 8 );
 		switch_to_blog( self::EVENTS_BLOG_ID );
 		$term                       = self::factory()->term->create_and_get(
 			array(

@@ -276,14 +276,23 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$winner_file = $path . '.winner';
 		file_put_contents( $path, 'concurrent inquiry' );
 		$input = array(
-			'idempotency_key' => 'mysql-concurrent-inquiry',
-			'venue_term_id'   => $this->venue_id,
-			'artist_name'     => 'Concurrent Artist',
+			'idempotency_key'     => 'mysql-concurrent-inquiry',
+			'venue_term_id'       => $this->venue_id,
+			'artist_name'         => 'Concurrent Artist',
 			'requested_space_key' => 'main-room',
 			'requested_start_at'  => '2030-08-01 20:00:00',
 			'requested_end_at'    => '2030-08-01 23:00:00',
-			'intake'          => array( 'config_revision' => $config['revision'] ),
-			'attachments'     => array(
+			'intake'              => array(
+				'config_revision' => $config['revision'],
+				'message'         => 'Please consider us.',
+				'fields'          => array(),
+				'consent'         => array(
+					'id'       => 'booking-privacy',
+					'version'  => 1,
+					'accepted' => true,
+				),
+			),
+			'attachments'         => array(
 				array(
 					'name'     => 'booking-inquiry.txt',
 					'tmp_name' => $path,

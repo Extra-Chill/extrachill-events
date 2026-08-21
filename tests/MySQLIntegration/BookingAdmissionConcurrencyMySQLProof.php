@@ -252,6 +252,13 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$config_service    = new VenueBookingConfig();
 		$config            = $config_service->get( $this->venue_id );
 		$config['enabled'] = true;
+		$config['spaces']  = array(
+			array(
+				'key'        => 'main-room',
+				'name'       => 'Main Room',
+				'is_default' => true,
+			),
+		);
 		$config['attachment_policy'] = array(
 			'version'  => 1,
 			'enabled'  => true,
@@ -259,6 +266,7 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		);
 		$config            = $config_service->update( $this->venue_id, $config, 0, $this->actor_id );
 		$this->assertIsArray( $config, is_wp_error( $config ) ? $config->get_error_code() : 'booking config was not committed' );
+		update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' );
 		add_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
 		$path        = wp_tempnam( 'booking-inquiry.txt' );
 		$event_log   = wp_tempnam( 'booking-inquiry-events.txt' );
@@ -270,6 +278,9 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 			'idempotency_key' => 'mysql-concurrent-inquiry',
 			'venue_term_id'   => $this->venue_id,
 			'artist_name'     => 'Concurrent Artist',
+			'requested_space_key' => 'main-room',
+			'requested_start_at'  => '2030-08-01 20:00:00',
+			'requested_end_at'    => '2030-08-01 23:00:00',
 			'intake'          => array( 'config_revision' => $config['revision'] ),
 			'attachments'     => array(
 				array(

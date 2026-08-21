@@ -9,6 +9,8 @@ import {
 	calendarDays,
 	calendarEntries,
 	bookingSummary,
+	bookingMessageIdentity,
+	bookingMessageKey,
 	filterBookings,
 	monthKey,
 	monthRange,
@@ -18,7 +20,59 @@ import {
 	venueLocalToUtc,
 } from './booking-console';
 
+const { TextEncoder } = require( 'node:util' );
+const { webcrypto } = require( 'node:crypto' );
+
+global.TextEncoder = TextEncoder;
+Object.defineProperty( global, 'crypto', {
+	configurable: true,
+	value: webcrypto,
+} );
+
 describe( 'venue booking console state helpers', () => {
+	it( 'keeps one key for canonical message content across teammates', async () => {
+		const message = {
+			bookingId: 42,
+			recipient: ' Artist@Example.com ',
+			subject: 'Offer details',
+			message: 'First line\r\nSecond line',
+			replyTo: ' Venue@Example.com ',
+		};
+		const canonical = {
+			...message,
+			recipient: 'artist@example.com',
+			message: 'First line\nSecond line',
+			replyTo: 'venue@example.com',
+		};
+
+		expect( bookingMessageIdentity( message ) ).toBe(
+			bookingMessageIdentity( canonical )
+		);
+		expect( await bookingMessageKey( message ) ).toBe(
+			await bookingMessageKey( canonical )
+		);
+	} );
+
+	it( 'rotates the key for changed content or a conclusive rejection', async () => {
+		const message = {
+			bookingId: 42,
+			recipient: 'artist@example.com',
+			subject: 'Offer details',
+			message: 'Original message',
+			replyTo: 'venue@example.com',
+		};
+
+		expect( await bookingMessageKey( message ) ).not.toBe(
+			await bookingMessageKey( {
+				...message,
+				message: 'Changed message',
+			} )
+		);
+		expect( await bookingMessageKey( message ) ).not.toBe(
+			await bookingMessageKey( message, 1 )
+		);
+	} );
+
 	it( 'builds a stable six-week month grid', () => {
 		const days = calendarDays( '2026-07' );
 		expect( days ).toHaveLength( 42 );

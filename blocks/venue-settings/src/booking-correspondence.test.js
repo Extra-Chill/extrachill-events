@@ -1,4 +1,4 @@
-/* global afterEach, beforeEach, describe, expect, it, jest */
+/* global afterEach, beforeEach, describe, expect, HTMLInputElement, HTMLTextAreaElement, it, jest */
 
 /**
  * External dependencies

@@ -3,6 +3,12 @@
 jest.mock( '@extrachill/components', () => ( {} ) );
 
 /**
+ * External dependencies
+ */
+const { TextEncoder } = require( 'node:util' );
+const { webcrypto } = require( 'node:crypto' );
+
+/**
  * Internal dependencies
  */
 import {
@@ -19,10 +25,6 @@ import {
 	toVenueLocalInput,
 	venueLocalToUtc,
 } from './booking-console';
-
-const { TextEncoder } = require( 'node:util' );
-const { webcrypto } = require( 'node:crypto' );
-
 global.TextEncoder = TextEncoder;
 Object.defineProperty( global, 'crypto', {
 	configurable: true,

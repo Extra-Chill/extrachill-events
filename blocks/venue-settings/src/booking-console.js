@@ -1254,7 +1254,7 @@ export function Correspondence( { booking, items, onRefresh, timezone } ) {
 			try {
 				await onRefresh();
 				setStatus( { tone: 'success', message: 'Message queued.' } );
-			} catch ( refreshError ) {
+			} catch {
 				setStatus( {
 					tone: 'warning',
 					message:
@@ -1288,7 +1288,7 @@ export function Correspondence( { booking, items, onRefresh, timezone } ) {
 							'Send outcome not confirmed. Draft preserved; retry will safely reuse the same message identity.',
 					} );
 				}
-			} catch ( refreshError ) {
+			} catch {
 				setStatus( {
 					tone: 'warning',
 					message:

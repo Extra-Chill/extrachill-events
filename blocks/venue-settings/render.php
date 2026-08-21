@@ -26,7 +26,8 @@ $requested_booking_venue_id = isset( $_GET['booking_venue_id'] ) && is_scalar( $
 // phpcs:enable WordPress.Security.NonceVerification.Recommended
 
 if ( ! is_user_logged_in() ) {
-	$login_url = wp_login_url( ec_events_get_booking_console_url( $requested_venue_id, $requested_booking_id ) );
+	$login_venue_id = $requested_venue_id ? $requested_venue_id : $requested_booking_venue_id;
+	$login_url      = wp_login_url( ec_events_get_booking_console_url( $login_venue_id, $requested_booking_id ) );
 	?>
 	<div <?php echo $wrapper_attributes; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped by get_block_wrapper_attributes(). ?>>
 		<div class="ec-block-shell ec-block-shell--depth-0">

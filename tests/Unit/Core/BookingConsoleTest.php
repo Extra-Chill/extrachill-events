@@ -180,7 +180,8 @@ final class BookingConsoleTest extends TestCase {
 	public function test_signed_out_workspace_preserves_requested_venue_for_login(): void {
 		$source = file_get_contents( dirname( __DIR__, 3 ) . '/blocks/venue-settings/render.php' );
 
-		$this->assertStringContainsString( 'wp_login_url( ec_events_get_booking_console_url( $requested_venue_id, $requested_booking_id ) )', $source );
+		$this->assertStringContainsString( '$login_venue_id = $requested_venue_id ? $requested_venue_id : $requested_booking_venue_id;', $source );
+		$this->assertStringContainsString( 'wp_login_url( ec_events_get_booking_console_url( $login_venue_id, $requested_booking_id ) )', $source );
 		$this->assertLessThan( strpos( $source, 'if ( ! is_user_logged_in() )' ), strpos( $source, '$requested_venue_id' ) );
 	}
 

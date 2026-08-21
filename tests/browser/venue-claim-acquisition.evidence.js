@@ -12,6 +12,10 @@ const artifacts =
 	path.join( os.tmpdir(), 'extrachill-events-venue-claim' );
 const workspaceUrl =
 	'https://events.example/venue-settings/?venue_id=44#tab-calendar';
+const aggregateBookingUrl =
+	'https://events.example/venue-settings/?booking_id=91&booking_venue_id=44#tab-calendar';
+const canonicalBookingUrl =
+	'https://events.example/venue-settings/?venue_id=44&booking_id=91#tab-calendar';
 const claimReviewUrl =
 	'https://events.example/venue-settings/?venue_id=44#tab-claims';
 const archiveUrl = 'https://events.example/venue/the-room/';
@@ -85,8 +89,13 @@ const archiveFixture = ( role, bookingEnabled = true ) => {
 };
 
 const workspaceFixture = ( url, expired ) => {
-	const venueId = new URL( url ).searchParams.get( 'venue_id' );
-	const destination = `https://events.example/venue-settings/?venue_id=${ venueId }#tab-calendar`;
+	const params = new URL( url ).searchParams;
+	const venueId =
+		params.get( 'venue_id' ) || params.get( 'booking_venue_id' );
+	const bookingId = params.get( 'booking_id' );
+	const destination = `https://events.example/venue-settings/?venue_id=${ venueId }${
+		bookingId ? `&booking_id=${ bookingId }` : ''
+	}#tab-calendar`;
 	return documentShell( `<main class="page-content"><h1>Venue settings</h1>
 		<p data-requested-venue>${ venueId }</p>
 		${
@@ -186,6 +195,14 @@ const workspaceFixture = ( url, expired ) => {
 			await expiredLogin.getAttribute( 'href' )
 		).searchParams.get( 'redirect_to' );
 		assert.equal( expiredRedirect, workspaceUrl );
+
+		await page.goto( aggregateBookingUrl );
+		const aggregateRedirect = new URL(
+			await page
+				.getByRole( 'link', { name: 'Sign in' } )
+				.getAttribute( 'href' )
+		).searchParams.get( 'redirect_to' );
+		assert.equal( aggregateRedirect, canonicalBookingUrl );
 
 		expired = false;
 		bookingEnabled = false;

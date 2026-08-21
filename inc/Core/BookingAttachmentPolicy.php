@@ -15,6 +15,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class BookingAttachmentPolicy {
 
 	public const MAX_BYTES = 20971520;
+	public const MAX_FILES = 5;
+	public const MAX_AGGREGATE_BYTES = 52428800;
 	public const PURPOSES  = array( 'promo_image', 'epk', 'press_release', 'stage_plot', 'technical_rider', 'hospitality_rider', 'insurance', 'contract', 'other_private_evidence' );
 	public const STATES    = array( 'active', 'replaced', 'deleted', 'purged' );
 	public const UPLOADERS = array( 'anonymous', 'user', 'email', 'system' );

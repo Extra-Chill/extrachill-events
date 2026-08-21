@@ -16,8 +16,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** Owns the staged-file saga behind the hidden inquiry ability. */
 final class BookingInquiryAdmissionService {
 
-	public const MAX_FILES           = 5;
-	public const MAX_AGGREGATE_BYTES = 52428800;
+	public const MAX_FILES           = BookingAttachmentPolicy::MAX_FILES;
+	public const MAX_AGGREGATE_BYTES = BookingAttachmentPolicy::MAX_AGGREGATE_BYTES;
 
 	/**
 	 * Inquiry lifecycle.

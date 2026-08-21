@@ -848,7 +848,7 @@ class VenueBookingConfig {
 		}
 
 		$enabled = $policy['enabled'];
-		if ( ( $enabled && empty( $purposes ) ) || ( ! $enabled && ! empty( $purposes ) ) || $required_count > BookingInquiryAdmissionService::MAX_FILES ) {
+		if ( ( $enabled && empty( $purposes ) ) || ( ! $enabled && ! empty( $purposes ) ) || $required_count > BookingAttachmentPolicy::MAX_FILES ) {
 			return new \WP_Error( 'inconsistent_booking_attachment_policy', __( 'Enabled attachment policies need purposes, disabled policies cannot invite files, and required purposes cannot exceed the upload count.', 'extrachill-events' ) );
 		}
 
@@ -887,9 +887,9 @@ class VenueBookingConfig {
 			'purposes'            => $purposes,
 			'allowed_extensions'  => BookingAttachmentPolicy::allowed_extensions(),
 			'allowed_mime_types'  => array_values( array_unique( BookingAttachmentPolicy::allowed_mimes() ) ),
-			'max_files'           => BookingInquiryAdmissionService::MAX_FILES,
+			'max_files'           => BookingAttachmentPolicy::MAX_FILES,
 			'max_file_bytes'      => BookingAttachmentPolicy::max_bytes(),
-			'max_aggregate_bytes' => BookingInquiryAdmissionService::MAX_AGGREGATE_BYTES,
+			'max_aggregate_bytes' => BookingAttachmentPolicy::MAX_AGGREGATE_BYTES,
 			'privacy_notice'      => __( 'Files are private and available only to authorized venue booking operators.', 'extrachill-events' ),
 			'retention_notice'    => __( 'Files may be retained for booking, legal, or audit obligations under the venue privacy policy.', 'extrachill-events' ),
 		);

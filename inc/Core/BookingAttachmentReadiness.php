@@ -53,6 +53,9 @@ final class BookingAttachmentReadiness {
 	/** Return the redacted configured-provider readiness for public projection. */
 	public function is_operationally_ready(): bool {
 		if ( null === $this->governance_ready ) {
+			if ( ! class_exists( BookingPrivateFileProviders::class, false ) ) {
+				return false;
+			}
 			$readiness = BookingPrivateFileProviders::readiness();
 			return true === $readiness['ready'];
 		}

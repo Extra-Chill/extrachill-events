@@ -9,6 +9,11 @@
 
 // phpcs:disable -- Isolated test doubles intentionally mirror WordPress globals.
 
+// This standalone harness owns global doubles only outside a loaded WordPress runtime.
+if ( defined( 'ABSPATH' ) && function_exists( 'add_action' ) ) {
+	return;
+}
+
 if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', __DIR__ . '/' );
 }

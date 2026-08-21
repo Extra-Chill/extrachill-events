@@ -249,7 +249,7 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
 		global $wpdb;
 		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The MySQL concurrency proof requires pcntl_fork().' );
-		update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' );
+		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );
 		$config_service    = new VenueBookingConfig();
 		$config            = $config_service->get( $this->venue_id );
 		$config['enabled'] = true;
@@ -267,6 +267,7 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		);
 		$config            = $config_service->update( $this->venue_id, $config, 0, $this->actor_id );
 		$this->assertIsArray( $config, is_wp_error( $config ) ? $config->get_error_code() : 'booking config was not committed' );
+		$this->assertNotFalse( $wpdb->query( 'COMMIT' ), 'The inquiry fixture must be visible after the winner reconnects.' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Publishes the fixture before genuine cross-process contention.
 		add_filter( 'extrachill_events_allow_test_booking_file', '__return_true' );
 		$path        = wp_tempnam( 'booking-inquiry.txt' );
 		$event_log   = wp_tempnam( 'booking-inquiry-events.txt' );

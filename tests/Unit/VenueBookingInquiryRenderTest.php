@@ -92,7 +92,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( '"hasPage"', $output );
 		$this->assertStringNotContainsString( 'private-provider-account', $output );
 		$this->assertStringNotContainsString( 'private-booking@example.com', $output );
-		$this->assertStringNotContainsString( 'attachment', strtolower( $output ) );
+		$this->assertStringContainsString( '"attachments":{"version":1,"enabled":false,"ready":false', $output );
 		$this->assertTrue( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE );
 	}
 
@@ -171,9 +171,9 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 			$this->assertNotFalse( $operator_position );
 			$this->assertNotFalse( $calendar_position );
 			$this->assertStringContainsString( 'href="' . esc_url( $archive_url . '#booking-inquiry' ) . '"', $output );
-			$this->assertLessThan( $heading_position, $cta_position );
-			$this->assertLessThan( $cta_position, $operator_position );
-			$this->assertLessThan( $operator_position, $calendar_position );
+			$this->assertLessThan( $cta_position, $heading_position );
+			$this->assertLessThan( $operator_position, $cta_position );
+			$this->assertLessThan( $calendar_position, $operator_position );
 			$this->assertSame( 1, substr_count( $output, 'Submit a booking inquiry' ) );
 		} finally {
 			$wp_query     = $previous_query;

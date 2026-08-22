@@ -523,22 +523,22 @@ class VenueBookingConfig {
 				'footer'            => 'Powered by Extra Chill',
 				'variables'         => $this->variable_schema(),
 				'templates'         => array(
-					'operator_message' => array(
+					'operator_message'        => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking update for {{artist_name}}',
 						'body'    => "A message from the Extra Chill booking team:\n\n{{message}}",
 					),
-					'follow_up'        => array(
+					'follow_up'               => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Following up: {{artist_name}} at {{venue_name}}',
 						'body'    => "Following up on your booking inquiry for {{venue_name}}:\n\n{{message}}",
 					),
-					'hold_expiring'    => array(
+					'hold_expiring'           => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking hold update for {{artist_name}}',
 						'body'    => "A reminder about your booking hold at {{venue_name}}:\n\n{{message}}",
 					),
-					'inquiry_receipt'  => array(
+					'inquiry_receipt'         => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking inquiry received: {{artist_name}} at {{venue_name}} - {{requested_date}}',
 						'body'    => "Hello {{contact_name}},\n\n{{message}}",
@@ -548,7 +548,7 @@ class VenueBookingConfig {
 						'subject' => 'Your private booking inquiry access at {{venue_name}}',
 						'body'    => "Hello {{contact_name}},\n\n{{message}}",
 					),
-					'date_filled'      => array(
+					'date_filled'             => array(
 						'version' => self::TEMPLATE_VERSION,
 						'subject' => 'Booking date update: {{artist_name}} at {{venue_name}} - {{requested_date}}',
 						'body'    => "Hello {{contact_name}},\n\n{{message}}",

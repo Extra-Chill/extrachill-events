@@ -49,7 +49,7 @@ final class ArtistBookingInquiryAbilities {
 		return $this->service->resend_receipt( (string) $input['public_id'], (int) $input['venue_term_id'], (string) $input['contact_email'], (string) $input['idempotency_key'] );
 	}
 
-	private function register_ability( string $slug, string $label, array $input, array $output, callable $callback, bool $readonly, bool $destructive ): void {
+	private function register_ability( string $slug, string $label, array $input, array $output, callable $callback, bool $read_only, bool $destructive ): void {
 		wp_register_ability(
 			'extrachill-events/' . $slug,
 			array(
@@ -63,7 +63,7 @@ final class ArtistBookingInquiryAbilities {
 				'meta'                => array(
 					'show_in_rest' => false,
 					'annotations'  => array(
-						'readonly'    => $readonly,
+						'readonly'    => $read_only,
 						'idempotent'  => true,
 						'destructive' => $destructive,
 					),
@@ -75,12 +75,12 @@ final class ArtistBookingInquiryAbilities {
 	private function access_schema(): array {
 		return $this->object_schema(
 			array(
-				'public_id'  => array(
+				'public_id'     => array(
 					'type'   => 'string',
 					'format' => 'uuid',
 				),
 				'venue_term_id' => $this->venue_id_schema(),
-				'capability' => array(
+				'capability'    => array(
 					'type'      => 'string',
 					'minLength' => 64,
 					'maxLength' => 64,
@@ -117,10 +117,21 @@ final class ArtistBookingInquiryAbilities {
 	private function recovery_schema(): array {
 		return $this->object_schema(
 			array(
-				'public_id'       => array( 'type' => 'string', 'format' => 'uuid' ),
+				'public_id'       => array(
+					'type'   => 'string',
+					'format' => 'uuid',
+				),
 				'venue_term_id'   => $this->venue_id_schema(),
-				'contact_email'   => array( 'type' => 'string', 'format' => 'email', 'maxLength' => 255 ),
-				'idempotency_key' => array( 'type' => 'string', 'minLength' => 1, 'maxLength' => 120 ),
+				'contact_email'   => array(
+					'type'      => 'string',
+					'format'    => 'email',
+					'maxLength' => 255,
+				),
+				'idempotency_key' => array(
+					'type'      => 'string',
+					'minLength' => 1,
+					'maxLength' => 120,
+				),
 			),
 			array( 'public_id', 'venue_term_id', 'contact_email', 'idempotency_key' )
 		);
@@ -177,16 +188,16 @@ final class ArtistBookingInquiryAbilities {
 	private function correction_output_schema(): array {
 		return $this->object_schema(
 			array(
-				'public_id'    => array(
+				'public_id'     => array(
 					'type'   => 'string',
 					'format' => 'uuid',
 				),
 				'venue_term_id' => $this->venue_id_schema(),
-				'operation'    => array(
+				'operation'     => array(
 					'type' => 'string',
 					'enum' => array( 'correction_requested' ),
 				),
-				'version'      => array(
+				'version'       => array(
 					'type'    => 'integer',
 					'minimum' => 1,
 				),
@@ -198,18 +209,21 @@ final class ArtistBookingInquiryAbilities {
 	private function withdrawal_output_schema(): array {
 		return $this->object_schema(
 			array(
-				'public_id'    => array(
+				'public_id'     => array(
 					'type'   => 'string',
 					'format' => 'uuid',
 				),
 				'venue_term_id' => $this->venue_id_schema(),
-				'operation'    => array(
+				'operation'     => array(
 					'type' => 'string',
 					'enum' => array( 'withdrawn', 'cancellation_requested' ),
 				),
-				'status'       => array( 'type' => 'string', 'enum' => array( 'withdrawn' ) ),
-				'status_label' => array( 'type' => 'string' ),
-				'version'      => array(
+				'status'        => array(
+					'type' => 'string',
+					'enum' => array( 'withdrawn' ),
+				),
+				'status_label'  => array( 'type' => 'string' ),
+				'version'       => array(
 					'type'    => 'integer',
 					'minimum' => 1,
 				),
@@ -221,9 +235,15 @@ final class ArtistBookingInquiryAbilities {
 	private function recovery_output_schema(): array {
 		return $this->object_schema(
 			array(
-				'public_id'     => array( 'type' => 'string', 'format' => 'uuid' ),
+				'public_id'     => array(
+					'type'   => 'string',
+					'format' => 'uuid',
+				),
 				'venue_term_id' => $this->venue_id_schema(),
-				'operation'     => array( 'type' => 'string', 'enum' => array( 'receipt_resend_requested' ) ),
+				'operation'     => array(
+					'type' => 'string',
+					'enum' => array( 'receipt_resend_requested' ),
+				),
 			),
 			array( 'public_id', 'venue_term_id', 'operation' )
 		);

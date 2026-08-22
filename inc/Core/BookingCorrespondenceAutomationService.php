@@ -133,7 +133,7 @@ class BookingCorrespondenceAutomationService {
 		if ( is_wp_error( $interval ) ) {
 			return $interval;
 		}
-		$message = null === $recovery_key
+		$message  = null === $recovery_key
 			? sprintf(
 				"We received your booking inquiry and it is pending review.\n\nArtist: %s\nVenue: %s\nRequested interval: %s\nRequested space: %s\nReference: %s\n\nSubmitting an inquiry does not place a hold or confirm the booking. Reply to this email to continue this booking thread.",
 				$booking['artist_name'],

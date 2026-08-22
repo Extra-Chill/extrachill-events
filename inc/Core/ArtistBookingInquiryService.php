@@ -168,12 +168,12 @@ final class ArtistBookingInquiryService {
 			return $this->rollback( $status_event );
 		}
 		$result = array(
-			'public_id'    => $locked['public_id'],
+			'public_id'     => $locked['public_id'],
 			'venue_term_id' => (int) $locked['venue_term_id'],
-			'operation'    => 'withdrawn',
-			'status'       => 'withdrawn',
-			'status_label' => self::STATUS_LABELS['withdrawn'],
-			'version'      => $expected_version + 1,
+			'operation'     => 'withdrawn',
+			'status'        => 'withdrawn',
+			'status_label'  => self::STATUS_LABELS['withdrawn'],
+			'version'       => $expected_version + 1,
 		);
 		$event  = $this->append_artist_activity(
 			$locked,
@@ -384,7 +384,7 @@ final class ArtistBookingInquiryService {
 		$config = $this->config->get( (int) $booking['venue_term_id'] );
 		if ( is_array( $config ) ) {
 			foreach ( (array) ( $config['spaces'] ?? array() ) as $space ) {
-				if ( $key === (string) ( $space['key'] ?? '' ) ) {
+				if ( (string) ( $space['key'] ?? '' ) === $key ) {
 					$label = (string) $space['name'];
 					break;
 				}

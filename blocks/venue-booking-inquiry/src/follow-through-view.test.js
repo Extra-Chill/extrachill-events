@@ -1,4 +1,4 @@
-/* global HTMLInputElement, HTMLTextAreaElement, Storage, afterAll, afterEach, beforeAll, beforeEach, describe, expect, global, it, jest */
+/* global HTMLInputElement, HTMLTextAreaElement, afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest */
 
 /**
  * WordPress dependencies

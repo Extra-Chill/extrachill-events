@@ -78,6 +78,8 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$output = $this->render_on( self::EVENTS_BLOG_ID, array( 'venueId' => $this->venue_id ) );
 
 		$this->assertStringContainsString( 'ec-venue-booking-inquiry', $output );
+		$this->assertMatchesRegularExpression( '/<section[^>]+aria-labelledby="ec-booking-[^"]+-heading"/', $output );
+		$this->assertStringContainsString( '"headingLevel":2', $output );
 		$this->assertStringContainsString( 'Test Room', $output );
 		$this->assertStringNotContainsString( '42 Test Street', $output );
 		$this->assertStringNotContainsString( 'Charleston, SC, 29403', $output );
@@ -94,6 +96,25 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( 'private-booking@example.com', $output );
 		$this->assertStringNotContainsString( 'attachment', strtolower( $output ) );
 		$this->assertTrue( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE );
+	}
+
+	/** Multiple blocks expose distinct region labels and caller-selected levels. */
+	public function test_render_uses_unique_heading_ids_and_caller_heading_level(): void {
+		$first  = $this->render_on( self::MAIN_BLOG_ID, array( 'venueId' => $this->venue_id ) );
+		$second = $this->render_on(
+			self::MAIN_BLOG_ID,
+			array(
+				'venueId'      => $this->venue_id,
+				'headingLevel' => 1,
+			)
+		);
+
+		preg_match( '/aria-labelledby="([^"]+)"/', $first, $first_label );
+		preg_match( '/aria-labelledby="([^"]+)"/', $second, $second_label );
+		$this->assertNotEmpty( $first_label[1] ?? '' );
+		$this->assertNotEmpty( $second_label[1] ?? '' );
+		$this->assertNotSame( $first_label[1], $second_label[1] );
+		$this->assertStringContainsString( '"headingLevel":1', $second );
 	}
 
 	/** Disabled canonical configuration must fail closed on another site. */

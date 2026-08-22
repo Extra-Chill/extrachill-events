@@ -7,8 +7,7 @@
 	failOnRisky="true"
 	failOnWarning="true">
 	<testsuites>
-		<testsuite name="venue-membership-authorization">
-			<file>tests/VenueMembershipAuthorizationTest.php</file>
+		<testsuite name="promoter-authority">
 			<file>tests/PromoterAuthorityTest.php</file>
 		</testsuite>
 	</testsuites>

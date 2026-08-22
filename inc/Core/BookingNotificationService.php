@@ -23,6 +23,9 @@ class BookingNotificationService {
 	public const TYPE_INFORMATION_RECEIVED = 'booking_information_received';
 	public const TYPE_HOLD_EXPIRED         = 'booking_hold_expired';
 	public const TYPE_EVENT_HANDOFF_FAILED = 'booking_event_handoff_failed';
+	public const TYPE_ARTIST_CORRECTION_REQUESTED   = 'booking_artist_correction_requested';
+	public const TYPE_ARTIST_CANCELLATION_REQUESTED = 'booking_artist_cancellation_requested';
+	public const TYPE_ARTIST_WITHDREW                = 'booking_artist_withdrew';
 
 	// Future producer seams. No source activity is synthesized here.
 	public const TYPE_ARTIST_REPLIED          = 'booking_artist_replied';
@@ -397,6 +400,24 @@ class BookingNotificationService {
 			self::TYPE_EVENT_HANDOFF_FAILED    => array(
 				'kind'       => 'event_conversion_failed',
 				'title'      => __( 'Booking event handoff failed', 'extrachill-events' ),
+				'recipients' => 'owners',
+				'landed'     => true,
+			),
+			self::TYPE_ARTIST_CORRECTION_REQUESTED => array(
+				'kind'       => 'artist_correction_requested',
+				'title'      => __( 'Artist requested a booking correction', 'extrachill-events' ),
+				'recipients' => 'owners',
+				'landed'     => true,
+			),
+			self::TYPE_ARTIST_CANCELLATION_REQUESTED => array(
+				'kind'       => 'artist_cancellation_requested',
+				'title'      => __( 'Artist requested booking cancellation', 'extrachill-events' ),
+				'recipients' => 'owners',
+				'landed'     => true,
+			),
+			self::TYPE_ARTIST_WITHDREW => array(
+				'kind'       => 'artist_withdrawn',
+				'title'      => __( 'Artist withdrew a booking inquiry', 'extrachill-events' ),
 				'recipients' => 'owners',
 				'landed'     => true,
 			),

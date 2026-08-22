@@ -181,6 +181,9 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 		try {
 			$archive_url = get_term_link( $this->venue_id, 'venue' );
 			$this->go_to( $archive_url );
+			$this->setExpectedDeprecated( 'Theme without header.php' );
+			$this->setExpectedDeprecated( 'Theme without footer.php' );
+			$this->setExpectedIncorrectUsage( 'WP_Styles::add' );
 			$output            = $this->render_archive();
 			$heading_position  = strpos( $output, 'class="page-title"' );
 			$cta_position      = strpos( $output, 'Submit a booking inquiry' );

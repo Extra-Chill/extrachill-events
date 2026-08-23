@@ -12,6 +12,7 @@ use ExtraChillEvents\Core\LocalSupportSchema;
 use ExtraChillEvents\Core\LocalSupportService;
 use ExtraChillEvents\Core\LocalSupportWorkspace;
 use ExtraChillEvents\Core\VenueAuthorization;
+use ExtraChillEvents\Core\DatabaseTransactionState;
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
 
@@ -329,6 +330,32 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$scope = $authorization->open_transaction_scope();
 		$this->assertSame( 'local_support_artist_advisory_locks_unsupported', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
+	}
+
+	public function test_transaction_state_probe_uses_primary_fallback_and_fails_closed(): void {
+		$wpdb = $GLOBALS['wpdb'];
+		$wpdb->transaction_active = true;
+		$this->assertSame( 1, DatabaseTransactionState::probe() );
+		$this->assertSame( array( 'SELECT @@session.in_transaction' ), $wpdb->transaction_state_queries );
+		$this->assertFalse( $wpdb->suppress_errors );
+
+		$wpdb->transaction_state_queries = array();
+		$wpdb->transaction_state_primary_supported = false;
+		$this->assertSame( 1, DatabaseTransactionState::probe() );
+		$this->assertSame( array( 'SELECT @@session.in_transaction', 'SELECT @@in_transaction' ), $wpdb->transaction_state_queries );
+		$this->assertFalse( $wpdb->suppress_errors );
+
+		$wpdb->transaction_state_queries = array();
+		$wpdb->transaction_state_fallback_supported = false;
+		$wpdb->suppress_errors = true;
+		$this->assertNull( DatabaseTransactionState::probe() );
+		$this->assertTrue( $wpdb->suppress_errors );
+		$authorization = new LocalSupportAuthorization();
+		$this->assertSame( 'local_support_transaction_scope_required', $authorization->open_transaction_scope()->get_error_code() );
+
+		$wpdb->transaction_active = false;
+		$error = $this->service->open_request( array( 'event_id' => 900, 'organizer_type' => 'venue', 'organizer_id' => 55, 'idempotency_key' => 'probe-failure' ), 12 );
+		$this->assertSame( 'local_support_transaction_state_unavailable', $error->get_error_code() );
 	}
 
 	public function test_throwable_rolls_back_and_closes_scope_without_nested_transaction(): void {
@@ -805,6 +832,10 @@ class LocalSupportAuthorityWpdb {
 	public $fail_results = false;
 	public $fail_row = false;
 	public $transaction_active = true;
+	public $transaction_state_primary_supported = true;
+	public $transaction_state_fallback_supported = true;
+	public $transaction_state_queries = array();
+	public $suppress_errors = false;
 	public $mapping_release_result = 1;
 	public $membership_release_result = 1;
 	public $after_profile_binding_lock;
@@ -818,9 +849,21 @@ class LocalSupportAuthorityWpdb {
 		}, $query );
 	}
 
+	public function suppress_errors( $suppress = true ) {
+		$previous              = $this->suppress_errors;
+		$this->suppress_errors = (bool) $suppress;
+		return $previous;
+	}
+
 	public function get_var( $query ) {
 		$this->last_error = '';
-		if ( 'SELECT @@session.in_transaction' === $query ) {
+		if ( in_array( $query, array( 'SELECT @@session.in_transaction', 'SELECT @@in_transaction' ), true ) ) {
+			$this->transaction_state_queries[] = $query;
+			$supported = 'SELECT @@session.in_transaction' === $query ? $this->transaction_state_primary_supported : $this->transaction_state_fallback_supported;
+			if ( ! $supported ) {
+				$this->last_error = 'simulated unknown transaction state variable';
+				return null;
+			}
 			return $this->transaction_active ? 1 : 0;
 		}
 		if ( false !== strpos( $query, 'GET_LOCK' ) ) {

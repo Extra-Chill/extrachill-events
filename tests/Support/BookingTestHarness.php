@@ -580,6 +580,10 @@ final class BookingWpdb {
 	public $after_reference_lock                 = null;
 	public $after_reference_unlock               = null;
 	public $transaction_active                   = false;
+	public $transaction_state_primary_supported = true;
+	public $transaction_state_fallback_supported = true;
+	public $transaction_state_queries            = array();
+	public $suppress_errors                       = false;
 	public $nested_transaction_starts            = 0;
 	public $natural_key_reads_in_transaction     = 0;
 	public $get_lock_result                      = 1;
@@ -615,6 +619,12 @@ final class BookingWpdb {
 
 	public function esc_like( $text ) {
 		return addcslashes( $text, '_%\\' );
+	}
+
+	public function suppress_errors( $suppress = true ) {
+		$previous              = $this->suppress_errors;
+		$this->suppress_errors = (bool) $suppress;
+		return $previous;
 	}
 
 	public function prepare( $query, ...$args ) {
@@ -818,7 +828,13 @@ final class BookingWpdb {
 			return null;
 		}
 		$this->last_error = '';
-		if ( 'SELECT @@session.in_transaction' === $query ) {
+		if ( in_array( $query, array( 'SELECT @@session.in_transaction', 'SELECT @@in_transaction' ), true ) ) {
+			$this->transaction_state_queries[] = $query;
+			$supported = 'SELECT @@session.in_transaction' === $query ? $this->transaction_state_primary_supported : $this->transaction_state_fallback_supported;
+			if ( ! $supported ) {
+				$this->last_error = 'simulated unknown transaction state variable';
+				return null;
+			}
 			return $this->transaction_active ? 1 : 0;
 		}
 		$database_now     = $this->current_database_time();
@@ -2211,6 +2227,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportSchema.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/ArtistMappingLock.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/DatabaseTransactionState.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportAuthorization.php';

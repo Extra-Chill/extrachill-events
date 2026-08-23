@@ -642,8 +642,8 @@ class LocalSupportService {
 		if ( $this->transaction_active ) {
 			return new \WP_Error( 'local_support_nested_transaction_forbidden', __( 'Local support cannot start a nested transaction.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
-		$in_transaction = $wpdb->get_var( 'SELECT @@session.in_transaction' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Production booking storage requires transactional MySQL/InnoDB.
-		if ( '' !== (string) $wpdb->last_error || null === $in_transaction ) {
+		$in_transaction = DatabaseTransactionState::probe();
+		if ( null === $in_transaction ) {
 			return new \WP_Error( 'local_support_transaction_state_unavailable', __( 'The database transaction state could not be verified.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		if ( '0' !== (string) $in_transaction ) {
@@ -705,14 +705,7 @@ class LocalSupportService {
 
 	/** Read current MySQL transaction state without propagating driver exceptions. */
 	private function database_transaction_state(): ?int {
-		global $wpdb;
-		try {
-			$state = $wpdb->get_var( 'SELECT @@session.in_transaction' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Determines whether failed finalization can be safely compensated.
-		} catch ( \Throwable $throwable ) {
-			unset( $throwable );
-			return null;
-		}
-		return '' === (string) $wpdb->last_error && in_array( (string) $state, array( '0', '1' ), true ) ? (int) $state : null;
+		return DatabaseTransactionState::probe();
 	}
 
 	/** Close a connection whose transaction could not be safely terminated. */

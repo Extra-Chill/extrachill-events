@@ -43,9 +43,7 @@ class LocalSupportAuthorization {
 
 	/** Register a lock-current scope only while the caller owns a transaction. */
 	public function open_transaction_scope() {
-		global $wpdb;
-		$in_transaction = $wpdb->get_var( 'SELECT @@session.in_transaction' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Guards lock helpers against autocommit.
-		if ( '' !== (string) $wpdb->last_error || '1' !== (string) $in_transaction ) {
+		if ( 1 !== DatabaseTransactionState::probe() ) {
 			return new \WP_Error( 'local_support_transaction_scope_required', __( 'Lock-current local support authorization requires its service transaction.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$scope = new \stdClass();

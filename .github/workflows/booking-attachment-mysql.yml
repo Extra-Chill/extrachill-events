@@ -23,7 +23,6 @@ on:
       - inc/Core/VenueMembershipRepository.php
       - inc/Core/LocalSupportAuthorization.php
       - inc/Core/ArtistMappingLock.php
-      - inc/Core/DatabaseTransactionState.php
       - inc/Core/LocalSupportRepository.php
       - inc/Core/LocalSupportSchema.php
       - inc/Core/LocalSupportService.php

@@ -42,9 +42,18 @@ class LocalSupportService {
 	/** @var bool Whether this service owns an active transaction. */
 	private $transaction_active = false;
 
+	/** @var object Opaque authorization-scope owner token. */
+	private $transaction_token;
+
+	/** @var \WP_Error|null Token claim failure for a reused authorization instance. */
+	private $transaction_owner_error;
+
 	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null ) {
 		$this->repository    = $repository ? $repository : new LocalSupportRepository();
 		$this->authorization = $authorization ? $authorization : new LocalSupportAuthorization();
+		$this->transaction_token = new \stdClass();
+		$claimed = $this->authorization->claim_transaction_owner( $this->transaction_token );
+		$this->transaction_owner_error = is_wp_error( $claimed ) ? $claimed : null;
 	}
 
 	/** Open one request per canonical event. */
@@ -576,12 +585,15 @@ class LocalSupportService {
 
 	/** Execute one service-owned transaction and always close its lock scope. */
 	private function transaction( callable $callback ) {
+		if ( is_wp_error( $this->transaction_owner_error ) ) {
+			return $this->transaction_owner_error;
+		}
 		$started = $this->begin();
 		if ( is_wp_error( $started ) ) {
 			return $started;
 		}
 		try {
-			$scope = $this->authorization->open_transaction_scope();
+			$scope = $this->authorization->open_transaction_scope( $this->transaction_token );
 		} catch ( \Throwable $throwable ) {
 			if ( $this->transaction_active ) {
 				$this->rollback_transaction( new \WP_Error( 'local_support_transaction_interrupted', __( 'The local support transaction was interrupted.', 'extrachill-events' ) ) );
@@ -642,12 +654,19 @@ class LocalSupportService {
 		if ( $this->transaction_active ) {
 			return new \WP_Error( 'local_support_nested_transaction_forbidden', __( 'Local support cannot start a nested transaction.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
-		$in_transaction = DatabaseTransactionState::probe();
-		if ( null === $in_transaction ) {
-			return new \WP_Error( 'local_support_transaction_state_unavailable', __( 'The database transaction state could not be verified.', 'extrachill-events' ), array( 'status' => 503 ) );
+		$previous = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+		try {
+			$boundary = $wpdb->query( 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Portable MySQL/MariaDB active-transaction rejection and required next-key isolation.
+		} catch ( \Throwable $throwable ) {
+			unset( $throwable );
+			$boundary = false;
+		} finally {
+			if ( method_exists( $wpdb, 'suppress_errors' ) ) {
+				$wpdb->suppress_errors( $previous );
+			}
 		}
-		if ( '0' !== (string) $in_transaction ) {
-			return new \WP_Error( 'local_support_nested_transaction_forbidden', __( 'Local support cannot start inside another transaction.', 'extrachill-events' ), array( 'status' => 409 ) );
+		if ( false === $boundary ) {
+			return new \WP_Error( 'local_support_transaction_boundary_forbidden', __( 'Local support requires an isolated transaction boundary.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
 		if ( false === $wpdb->query( 'START TRANSACTION' ) ) { // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Aggregate transaction boundary.
 			return new \WP_Error( 'local_support_transaction_start_failed', __( 'The local support transaction could not start.', 'extrachill-events' ) );
@@ -669,16 +688,7 @@ class LocalSupportService {
 			$this->transaction_active = false;
 			return true;
 		}
-
-		$state = $this->database_transaction_state();
-		if ( 1 === $state ) {
-			return $this->rollback_transaction( new \WP_Error( 'local_support_transaction_commit_failed', __( 'The local support transaction could not commit and was rolled back.', 'extrachill-events' ) ) );
-		}
-		if ( null === $state ) {
-			return $this->quarantine_uncertain_commit();
-		}
-		$this->transaction_active = false;
-		return new \WP_Error( 'local_support_transaction_commit_uncertain', __( 'The local support transaction outcome is uncertain.', 'extrachill-events' ) );
+		return $this->quarantine_uncertain_commit();
 	}
 
 	/** Roll back an active service transaction while preserving its cause. */
@@ -694,18 +704,7 @@ class LocalSupportService {
 			$this->transaction_active = false;
 			return $cause;
 		}
-
-		$state = $this->database_transaction_state();
-		if ( 0 === $state ) {
-			$this->transaction_active = false;
-			return new \WP_Error( 'local_support_transaction_rollback_failed', __( 'The local support transaction rollback could not be confirmed.', 'extrachill-events' ), array( 'cause' => $cause->get_error_code() ) );
-		}
 		return $this->quarantine_transaction( $cause );
-	}
-
-	/** Read current MySQL transaction state without propagating driver exceptions. */
-	private function database_transaction_state(): ?int {
-		return DatabaseTransactionState::probe();
 	}
 
 	/** Close a connection whose transaction could not be safely terminated. */

@@ -561,6 +561,9 @@ final class BookingWpdb {
 	public $fail_activity_inserts                = false;
 	public $fail_activity_kinds                  = array();
 	public $fail_transaction_start               = false;
+	public $fail_transaction_boundary            = false;
+	public $throw_transaction_boundary           = false;
+	public $transaction_boundary_queries         = array();
 	public $fail_transaction_commit              = false;
 	public $fail_transaction_rollback            = false;
 	public $throw_transaction_commit             = false;
@@ -580,9 +583,6 @@ final class BookingWpdb {
 	public $after_reference_lock                 = null;
 	public $after_reference_unlock               = null;
 	public $transaction_active                   = false;
-	public $transaction_state_primary_supported = true;
-	public $transaction_state_fallback_supported = true;
-	public $transaction_state_queries            = array();
 	public $suppress_errors                       = false;
 	public $nested_transaction_starts            = 0;
 	public $natural_key_reads_in_transaction     = 0;
@@ -828,15 +828,6 @@ final class BookingWpdb {
 			return null;
 		}
 		$this->last_error = '';
-		if ( in_array( $query, array( 'SELECT @@session.in_transaction', 'SELECT @@in_transaction' ), true ) ) {
-			$this->transaction_state_queries[] = $query;
-			$supported = 'SELECT @@session.in_transaction' === $query ? $this->transaction_state_primary_supported : $this->transaction_state_fallback_supported;
-			if ( ! $supported ) {
-				$this->last_error = 'simulated unknown transaction state variable';
-				return null;
-			}
-			return $this->transaction_active ? 1 : 0;
-		}
 		$database_now     = $this->current_database_time();
 		if ( preg_match( "/SELECT GET_LOCK\('([^']+)', (\d+)\)/", $query, $match ) ) {
 			$name               = stripslashes( $match[1] );
@@ -1974,6 +1965,17 @@ final class BookingWpdb {
 		}
 		$this->last_query = $query;
 		$this->last_error = '';
+		if ( 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' === $query ) {
+			$this->transaction_boundary_queries[] = $query;
+			if ( $this->throw_transaction_boundary ) {
+				throw new RuntimeException( 'simulated transaction boundary throwable' );
+			}
+			if ( $this->transaction_active || $this->fail_transaction_boundary ) {
+				$this->last_error = 'simulated transaction boundary failure';
+				return false;
+			}
+			return 1;
+		}
 		if ( 'START TRANSACTION' === $query ) {
 			$this->transaction_start_reference_lock_counts[] = array_sum( $this->reference_locks );
 			if ( $this->transaction_active ) {
@@ -2227,7 +2229,6 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportSchema.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/ArtistMappingLock.php';
-require_once dirname( __DIR__, 2 ) . '/inc/Core/DatabaseTransactionState.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportAuthorization.php';

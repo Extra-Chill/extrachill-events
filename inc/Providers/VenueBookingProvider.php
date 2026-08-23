@@ -42,7 +42,6 @@ final class VenueBookingProvider {
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueMembershipRepository.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueAuthorization.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/ArtistMappingLock.php';
-		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/DatabaseTransactionState.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/LocalSupportAuthorization.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VendorRequestAuthorization.php';
 		require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Core/VenueMembershipService.php';

@@ -36,14 +36,28 @@ class LocalSupportAuthorization {
 	/** @var \SplObjectStorage Active service-owned transaction scopes. */
 	private $transaction_scopes;
 
+	/** @var object|null Opaque owner token held only by LocalSupportService. */
+	private $transaction_owner;
+
 	public function __construct( ?VenueAuthorization $venues = null ) {
 		$this->venues             = $venues ? $venues : new VenueAuthorization();
 		$this->transaction_scopes = new \SplObjectStorage();
 	}
 
-	/** Register a lock-current scope only while the caller owns a transaction. */
-	public function open_transaction_scope() {
-		if ( 1 !== DatabaseTransactionState::probe() ) {
+	/** Claim this authorization instance for one service-owned transaction token. */
+	public function claim_transaction_owner( object $owner ) {
+		if ( null === $this->transaction_owner ) {
+			$this->transaction_owner = $owner;
+			return true;
+		}
+		return $this->transaction_owner === $owner
+			? true
+			: new \WP_Error( 'local_support_transaction_owner_conflict', __( 'Local support authorization already belongs to another service.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+
+	/** Register a lock-current scope only for the owning service's opaque token. */
+	public function open_transaction_scope( object $owner ) {
+		if ( null === $this->transaction_owner || $this->transaction_owner !== $owner ) {
 			return new \WP_Error( 'local_support_transaction_scope_required', __( 'Lock-current local support authorization requires its service transaction.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$scope = new \stdClass();

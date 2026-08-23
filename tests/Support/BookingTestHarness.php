@@ -138,6 +138,14 @@ if ( ! function_exists( 'wp_salt' ) ) {
 	function wp_salt( $scheme = 'auth' ) {
 		return 'booking-test-salt:' . $scheme; }
 }
+if ( ! function_exists( 'maybe_unserialize' ) ) {
+	function maybe_unserialize( $value ) {
+		if ( ! is_string( $value ) || ! preg_match( '/^[aObisdN]:/', $value ) ) {
+			return $value;
+		}
+		return unserialize( $value ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_unserialize -- Test double for trusted fixture values.
+	}
+}
 if ( ! function_exists( 'ec_get_blog_id' ) ) {
 	function ec_get_blog_id( $site ) {
 		return array(
@@ -383,7 +391,16 @@ if ( ! function_exists( 'extrachill_events_read_artist_mapping_claims' ) ) {
 		if ( ! empty( $GLOBALS['ec_artist_test']['artist_mapping_claims_error'] ) ) {
 			return new WP_Error( 'artist_mapping_claims_read_failed' );
 		}
-		$claims = $GLOBALS['ec_artist_test']['artist_mapping_claims'][ (int) $events_term_id ] ?? array();
+		if ( array_key_exists( (int) $events_term_id, $GLOBALS['ec_artist_test']['artist_mapping_claims'] ?? array() ) ) {
+			$claims = $GLOBALS['ec_artist_test']['artist_mapping_claims'][ (int) $events_term_id ];
+		} else {
+			$claims = array();
+			foreach ( (array) ( $GLOBALS['ec_artist_test']['artist_mappings'] ?? array() ) as $canonical_id => $mapped_id ) {
+				if ( (int) $mapped_id === (int) $events_term_id ) {
+					$claims[] = (int) $canonical_id;
+				}
+			}
+		}
 		if ( ! empty( $GLOBALS['ec_artist_test']['artist_mapping_claims_db_error'] ) ) {
 			$GLOBALS['wpdb']->last_error = 'simulated empty reverse mapping database failure';
 			$claims = array();
@@ -594,8 +611,14 @@ final class BookingWpdb {
 	public $fail_activity_inserts                = false;
 	public $fail_activity_kinds                  = array();
 	public $fail_transaction_start               = false;
+	public $fail_transaction_boundary            = false;
+	public $throw_transaction_boundary           = false;
+	public $transaction_boundary_queries         = array();
 	public $fail_transaction_commit              = false;
 	public $fail_transaction_rollback            = false;
+	public $throw_transaction_commit             = false;
+	public $throw_transaction_commit_after_success = false;
+	public $throw_transaction_rollback           = false;
 	public $rollback_queries                     = 0;
 	public $after_membership_lock                = null;
 	public $after_booking_lock                   = null;
@@ -610,6 +633,7 @@ final class BookingWpdb {
 	public $after_reference_lock                 = null;
 	public $after_reference_unlock               = null;
 	public $transaction_active                   = false;
+	public $suppress_errors                       = false;
 	public $nested_transaction_starts            = 0;
 	public $natural_key_reads_in_transaction     = 0;
 	public $get_lock_result                      = 1;
@@ -654,6 +678,12 @@ final class BookingWpdb {
 
 	public function flush() {
 		$this->last_error = '';
+	}
+
+	public function suppress_errors( $suppress = true ) {
+		$previous              = $this->suppress_errors;
+		$this->suppress_errors = (bool) $suppress;
+		return $previous;
 	}
 
 	public function prepare( $query, ...$args ) {
@@ -2068,6 +2098,17 @@ final class BookingWpdb {
 		}
 		$this->last_query = $query;
 		$this->last_error = '';
+		if ( 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' === $query ) {
+			$this->transaction_boundary_queries[] = $query;
+			if ( $this->throw_transaction_boundary ) {
+				throw new RuntimeException( 'simulated transaction boundary throwable' );
+			}
+			if ( $this->transaction_active || $this->fail_transaction_boundary ) {
+				$this->last_error = 'simulated transaction boundary failure';
+				return false;
+			}
+			return 1;
+		}
 		if ( 'START TRANSACTION' === $query ) {
 			$this->transaction_start_reference_lock_counts[] = array_sum( $this->reference_locks );
 			if ( $this->transaction_active ) {
@@ -2099,6 +2140,15 @@ final class BookingWpdb {
 			return 1;
 		}
 		if ( 'COMMIT' === $query ) {
+			if ( $this->throw_transaction_commit_after_success ) {
+				$this->transaction_snapshot = null;
+				$this->savepoint_snapshot   = null;
+				$this->transaction_active   = false;
+				throw new RuntimeException( 'simulated post-commit throwable' );
+			}
+			if ( $this->throw_transaction_commit ) {
+				throw new RuntimeException( 'simulated transaction commit throwable' );
+			}
 			if ( $this->fail_transaction_commit ) {
 				$this->last_error = 'simulated transaction commit failure';
 				return false;
@@ -2110,6 +2160,9 @@ final class BookingWpdb {
 		}
 		if ( 'ROLLBACK' === $query ) {
 			++$this->rollback_queries;
+			if ( $this->throw_transaction_rollback ) {
+				throw new RuntimeException( 'simulated transaction rollback throwable' );
+			}
 			if ( $this->fail_transaction_rollback ) {
 				$this->last_error = 'simulated transaction rollback failure';
 				return false;
@@ -2308,6 +2361,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingSchema.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportSchema.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/ArtistMappingLock.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportAuthorization.php';

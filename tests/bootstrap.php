@@ -64,6 +64,14 @@ if ( ! class_exists( 'WP_Error' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_Term_Query' ) ) {
+	class WP_Term_Query {
+		public function query( array $args ) {
+			return get_terms( $args );
+		}
+	}
+}
+
 if ( ! function_exists( 'is_wp_error' ) ) {
 	function is_wp_error( $value ) {
 		return $value instanceof WP_Error;

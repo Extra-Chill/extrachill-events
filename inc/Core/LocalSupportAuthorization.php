@@ -130,7 +130,7 @@ class LocalSupportAuthorization {
 			if ( is_wp_error( $term ) ) {
 				return $term;
 			}
-			$profile_id = $term && ! is_wp_error( $term ) ? absint( get_term_meta( $artist_term_id, '_artist_profile_id', true ) ) : 0;
+			$profile_id = $term ? absint( get_term_meta( $artist_term_id, '_artist_profile_id', true ) ) : 0;
 		} finally {
 			restore_current_blog();
 		}
@@ -175,7 +175,8 @@ class LocalSupportAuthorization {
 		global $wpdb;
 
 		$wpdb->flush();
-		$terms          = get_terms(
+		$query          = new \WP_Term_Query();
+		$terms          = $query->query(
 			array(
 				'taxonomy'      => $taxonomy,
 				'hide_empty'    => false,

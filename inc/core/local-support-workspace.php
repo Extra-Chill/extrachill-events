@@ -115,7 +115,7 @@ function extrachill_events_local_support_resolve_organizer_options( int $event_i
 		$options[] = array(
 			'type'  => 'venue',
 			'id'    => (int) $context['venue_term_id'],
-			'label' => $venue instanceof WP_Term ? $venue->name : __( 'Venue', 'extrachill-events' ),
+			'label' => $venue->name,
 		);
 	} elseif ( is_wp_error( $venue_allowed ) && 'venue_action_forbidden' !== $venue_allowed->get_error_code() ) {
 		return $venue_allowed;
@@ -147,7 +147,7 @@ function extrachill_events_local_support_resolve_organizer_options( int $event_i
 			$options[] = array(
 				'type'  => 'artist',
 				'id'    => (int) $canonical_term_id,
-				'label' => $term instanceof WP_Term ? $term->name : __( 'Touring artist', 'extrachill-events' ),
+				'label' => $term->name,
 			);
 		} elseif ( is_wp_error( $artist_allowed ) && 'local_support_forbidden' !== $artist_allowed->get_error_code() ) {
 			return $artist_allowed;
@@ -229,8 +229,11 @@ function extrachill_events_local_support_organizer_scope( int $user_id ) {
 				return is_wp_error( $authorized ) ? $authorized : new WP_Error( 'local_support_artist_scope_corrupt', __( 'An organizer artist binding is invalid.', 'extrachill-events' ) );
 			}
 			$mapped = extrachill_events_resolve_artist_term( $canonical_term_id );
-			if ( is_wp_error( $mapped ) || ! is_array( $mapped ) || empty( $mapped['term_id'] ) ) {
-				return is_wp_error( $mapped ) ? $mapped : new WP_Error( 'local_support_artist_scope_corrupt', __( 'An organizer artist mapping is invalid.', 'extrachill-events' ) );
+			if ( is_wp_error( $mapped ) ) {
+				return $mapped;
+			}
+			if ( empty( $mapped['term_id'] ) ) {
+				return new WP_Error( 'local_support_artist_scope_corrupt', __( 'An organizer artist mapping is invalid.', 'extrachill-events' ) );
 			}
 			$main_blog_id = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'main' ) : 0;
 			if ( $main_blog_id < 1 ) {

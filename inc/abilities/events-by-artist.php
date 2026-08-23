@@ -205,7 +205,8 @@ function extrachill_events_read_artist_mapping_claims( int $events_term_id ) {
 	$wpdb->flush();
 	// A single indexed metadata value bounds this duplicate-claim check.
 	// phpcs:disable WordPress.DB.SlowDBQuery.slow_db_query_meta_key,WordPress.DB.SlowDBQuery.slow_db_query_meta_value
-	$claims = get_terms(
+	$query  = new WP_Term_Query();
+	$claims = $query->query(
 		array(
 			'taxonomy'      => 'artist',
 			'hide_empty'    => false,
@@ -234,7 +235,8 @@ function extrachill_events_read_artist_term( int $artist_term_id ) {
 	global $wpdb;
 
 	$wpdb->flush();
-	$terms          = get_terms(
+	$query          = new WP_Term_Query();
+	$terms          = $query->query(
 		array(
 			'taxonomy'      => 'artist',
 			'hide_empty'    => false,

@@ -204,6 +204,11 @@ if ( ! function_exists( 'wp_json_encode' ) ) {
 
 if ( ! function_exists( 'current_time' ) ) {
 	function current_time( $type, $gmt = 0 ) {
+		if ( 'mysql' === $type && isset( $GLOBALS['ec_artist_test']['current_time_calls'] ) ) {
+			++$GLOBALS['ec_artist_test']['current_time_calls'];
+			$times = $GLOBALS['ec_artist_test']['current_times'] ?? array();
+			return empty( $times ) ? '2030-01-01 00:00:00' : (string) $times[ min( count( $times ) - 1, $GLOBALS['ec_artist_test']['current_time_calls'] - 1 ) ];
+		}
 		return 'mysql' === $type ? gmdate( 'Y-m-d H:i:s' ) : time();
 	}
 }

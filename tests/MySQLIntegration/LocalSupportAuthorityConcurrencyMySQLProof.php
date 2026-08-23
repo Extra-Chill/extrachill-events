@@ -67,6 +67,11 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		);
 		wp_set_object_terms( $event_id, array( $this->venue_id ), 'venue', false );
 
+		// This proof exercises a production service-owned transaction rather than
+		// the wrapper transaction WP_UnitTestCase starts for ordinary tests.
+		self::commit_transaction();
+		$this->assertNotFalse( $wpdb->query( 'SET autocommit = 1' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Ends the test harness transaction boundary before the production transaction starts.
+
 		$table         = BookingSchema::memberships_table();
 		$revoke        = "UPDATE {$table} SET status = 'revoked' WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}";
 		$activate      = "UPDATE {$table} SET status = 'active', revoked_at = NULL WHERE venue_term_id = {$this->venue_id} AND user_id = {$this->actor_id}";

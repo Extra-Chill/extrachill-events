@@ -53,7 +53,7 @@ class LocalSupportService {
 		$this->authorization = $authorization ? $authorization : new LocalSupportAuthorization();
 		$this->transaction_token = new \stdClass();
 		$claimed = $this->authorization->claim_transaction_owner( $this->transaction_token );
-		$this->transaction_owner_error = is_wp_error( $claimed ) ? $claimed : null;
+		$this->transaction_owner_error = $claimed instanceof \WP_Error ? $claimed : null;
 	}
 
 	/** Open one request per canonical event. */

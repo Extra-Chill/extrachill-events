@@ -147,6 +147,10 @@ final class PromoterAuthoritySchemaMultisiteTest extends WP_UnitTestCase {
 				)
 			);
 
+			// This migration proof needs persistent DDL rather than the temporary
+			// table rewrites applied by WP_UnitTestCase around normal test queries.
+			remove_filter( 'query', array( $this, '_create_temporary_tables' ) );
+			remove_filter( 'query', array( $this, '_drop_temporary_tables' ) );
 			$wpdb->query( "DROP TABLE `{$grants}`" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange -- Recreates the exact v1 schema in a disposable database.
 			$this->assertSame( '', (string) $wpdb->last_error );
 			update_option( PromoterAuthoritySchema::VERSION_OPTION, '1', false );

@@ -711,8 +711,10 @@ final class PromoterLinkPages {
 
 	/** Withdraw the exact promoter page without reversing authority/page lock order. */
 	private static function withdraw_for_revocation( int $promoter_term_id ) {
+		$defined_functions = get_defined_functions();
+		$user_functions    = array_map( 'strtolower', $defined_functions['user'] );
 		foreach ( array( 'ec_normalize_link_page_owner_reference', 'ec_get_link_page_id_for_owner', 'ec_with_link_page_storage_blog', 'ec_get_stored_link_page_owner_references', 'ec_write_link_page_meta' ) as $function ) {
-			if ( ! is_callable( $function ) ) {
+			if ( ! in_array( strtolower( $function ), $user_functions, true ) ) {
 				return new \WP_Error( 'promoter_link_page_runtime_unavailable', __( 'Promoter authority cannot be revoked while its public projection runtime is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
 			}
 		}

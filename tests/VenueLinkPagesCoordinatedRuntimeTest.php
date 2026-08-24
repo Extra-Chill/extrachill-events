@@ -102,7 +102,9 @@ final class VenueLinkPagesCoordinatedRuntimeTest extends TestCase {
 		$provider  = file_get_contents( $root . '/inc/Providers/VenueLinkPagesProvider.php' );
 		$abilities = file_get_contents( $root . '/inc/Abilities/VenueLinkPageAbilities.php' );
 		$core      = file_get_contents( $root . '/inc/Core/VenueLinkPages.php' );
-		$this->assertStringContainsString( 'Requires Plugins: data-machine, data-machine-events, extrachill-link-pages', $plugin );
+		$this->assertStringContainsString( 'Requires Plugins: data-machine, data-machine-events', $plugin );
+		$this->assertStringNotContainsString( 'Requires Plugins: data-machine, data-machine-events, extrachill-link-pages', $plugin );
+		$this->assertStringContainsString( 'Add the native plugin dependency after Link Pages PR #4', $provider );
 		$this->assertStringContainsString( "add_action( 'plugins_loaded', array( self::class, 'initialize' ), 30 )", $provider );
 		$this->assertSame( 7, substr_count( $abilities, "'extrachill/" ) );
 		$this->assertSame( 1, substr_count( $abilities, "'show_in_rest' => true" ) );

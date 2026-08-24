@@ -58,14 +58,6 @@ jobs:
           ref: 2fb1839a241c798bff0271f0de0f7412abcd5193
           path: .ci/data-machine-events
 
-      # TODO: switch to main after Extra-Chill/extrachill-link-pages#4 lands.
-      - name: Checkout Extra Chill Link Pages runtime
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: Extra-Chill/extrachill-link-pages
-          ref: 0169e889a92f8f93a057756ce52a4afb400d1ce8
-          path: .ci/extrachill-link-pages
-
       - name: Checkout Extra Chill API
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -130,8 +122,6 @@ jobs:
           BOOKING_E2E_DATA_MACHINE_REV: 25dbfc8e6c7e371afc80b64d58cd7761b902e3ac
           BOOKING_E2E_DATA_MACHINE_EVENTS: ${{ github.workspace }}/.ci/data-machine-events
           BOOKING_E2E_DATA_MACHINE_EVENTS_REV: 2fb1839a241c798bff0271f0de0f7412abcd5193
-          BOOKING_E2E_EXTRACHILL_LINK_PAGES: ${{ github.workspace }}/.ci/extrachill-link-pages
-          BOOKING_E2E_EXTRACHILL_LINK_PAGES_REV: 0169e889a92f8f93a057756ce52a4afb400d1ce8
           BOOKING_E2E_EXTRACHILL_API: ${{ github.workspace }}/.ci/extrachill-api
           BOOKING_E2E_EXTRACHILL_API_REV: d449ed353f17b4c81cfd466fcbbefaa5ee637609
           BOOKING_E2E_EXTRACHILL_NETWORK: ${{ github.workspace }}/.ci/extrachill-network

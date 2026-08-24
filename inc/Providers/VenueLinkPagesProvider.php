@@ -9,7 +9,12 @@ namespace ExtraChillEvents\Providers;
 
 defined( 'ABSPATH' ) || exit;
 
-/** Defers Events adapters until the standalone API-v3 runtime is complete. */
+/**
+ * Defers Events adapters until the standalone API-v3 runtime is complete.
+ *
+ * TODO: Add the native plugin dependency after Link Pages PR #4 is merged,
+ * released, and installed across the deployment stack.
+ */
 final class VenueLinkPagesProvider {
 
 	private const PLUGIN = 'extrachill-link-pages/extrachill-link-pages.php';

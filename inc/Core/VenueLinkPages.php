@@ -542,9 +542,27 @@ final class VenueLinkPages {
 
 	/** Convert canonical profile data into the minimum immutable public record. */
 	private static function build_snapshot_from_source( array $source, string $reference ): array {
-		$logo           = is_array( $source['logo'] ?? null ) ? $source['logo'] : array();
-		$encoded_source = wp_json_encode( $source );
-		$source_version = isset( $source['revision'] ) ? (string) $source['revision'] : hash( 'sha256', false !== $encoded_source ? $encoded_source : serialize( $source ) );
+		$logo      = is_array( $source['logo'] ?? null ) ? $source['logo'] : array();
+		$canonical = array(
+			'address'     => (string) ( $source['address'] ?? '' ),
+			'city'        => (string) ( $source['city'] ?? '' ),
+			'country'     => (string) ( $source['country'] ?? '' ),
+			'description' => (string) ( $source['description'] ?? '' ),
+			'logo_alt'    => (string) ( $logo['alt'] ?? '' ),
+			'logo_url'    => (string) ( $logo['url'] ?? '' ),
+			'name'        => (string) ( $source['name'] ?? '' ),
+			'slug'        => (string) ( $source['slug'] ?? '' ),
+			'state'       => (string) ( $source['state'] ?? '' ),
+			'term_id'     => (int) ( $source['term_id'] ?? 0 ),
+			'website'     => (string) ( $source['website'] ?? '' ),
+			'zip'         => (string) ( $source['zip'] ?? '' ),
+		);
+		ksort( $canonical );
+		$encoded_source = wp_json_encode( $canonical, JSON_INVALID_UTF8_SUBSTITUTE );
+		if ( false === $encoded_source ) {
+			$encoded_source = 'venue-source-json-encoding-failed';
+		}
+		$source_version = isset( $source['revision'] ) ? (string) $source['revision'] : hash( 'sha256', $encoded_source );
 		return array(
 			'version'         => self::SNAPSHOT_VERSION,
 			'owner_reference' => $reference,

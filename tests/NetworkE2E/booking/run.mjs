@@ -70,7 +70,6 @@ const settings = {
     plugin('extrachill-api', 'extrachill-api.php'),
     plugin('data-machine', 'data-machine.php'),
     plugin('data-machine-events', 'data-machine-events.php'),
-    plugin('extrachill-link-pages', 'extrachill-link-pages.php'),
     plugin('extrachill-events', 'extrachill-events.php'),
   ],
   wp_codebox_extra_themes: [{
@@ -207,7 +206,6 @@ async function resolveComponents() {
   const declarations = {
     'data-machine': ['BOOKING_E2E_DATA_MACHINE', path.join(parent, 'data-machine')],
     'data-machine-events': ['BOOKING_E2E_DATA_MACHINE_EVENTS', path.join(parent, 'data-machine-events')],
-    'extrachill-link-pages': ['BOOKING_E2E_EXTRACHILL_LINK_PAGES', path.join(parent, 'extrachill-link-pages')],
     'extrachill-events': ['BOOKING_E2E_EXTRACHILL_EVENTS', componentRoot],
     'extrachill-api': ['BOOKING_E2E_EXTRACHILL_API', path.join(parent, 'extrachill-api')],
     'extrachill-network': ['BOOKING_E2E_EXTRACHILL_NETWORK', path.join(parent, 'extrachill-network')],

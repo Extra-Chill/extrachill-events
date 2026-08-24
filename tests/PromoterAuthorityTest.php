@@ -606,7 +606,14 @@ final class PromoterAuthorityTest extends TestCase {
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 4, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
 
 		unset( $GLOBALS['promoter_test']['feature_access'][3] );
+		$venue_feature_available = $GLOBALS['venue_membership_test']['feature_available'] ?? null;
+		$GLOBALS['venue_membership_test']['feature_available'] = false;
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 3, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
+		if ( null === $venue_feature_available ) {
+			unset( $GLOBALS['venue_membership_test']['feature_available'] );
+		} else {
+			$GLOBALS['venue_membership_test']['feature_available'] = $venue_feature_available;
+		}
 		$GLOBALS['promoter_test']['feature_access'][3] = true;
 		$service->revoke_membership( 2, 100, 3, 1 );
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 3, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );

@@ -258,8 +258,8 @@ final class PromoterLinkPageAbilities {
 
 	/** Closed composed management response. */
 	private function document_schema(): array {
-		$link                                      = $this->link_schema( true );
-		$section                                   = array(
+		$link                           = $this->link_schema( true );
+		$section                        = array(
 			'type'                 => 'object',
 			'properties'           => array(
 				'id'            => array( 'type' => 'string' ),
@@ -272,9 +272,9 @@ final class PromoterLinkPageAbilities {
 			'required'             => array( 'id', 'section_title', 'links' ),
 			'additionalProperties' => false,
 		);
-		$normalized_section                       = $section;
-		$normalized_section['required']           = array( 'section_title', 'links' );
-		$social                                    = array(
+		$normalized_section             = $section;
+		$normalized_section['required'] = array( 'section_title', 'links' );
+		$social                         = array(
 			'type'                 => 'object',
 			'properties'           => array(
 				'type' => array( 'type' => 'string' ),
@@ -283,7 +283,7 @@ final class PromoterLinkPageAbilities {
 			'required'             => array( 'type', 'url' ),
 			'additionalProperties' => false,
 		);
-		$source                                    = array(
+		$source                         = array(
 			'type'                 => 'object',
 			'properties'           => array_fill_keys( array( 'taxonomy', 'version', 'refreshed_at', 'public_url' ), array( 'type' => 'string' ) ) + array(
 				'blog_id'          => array( 'type' => 'integer' ),
@@ -292,7 +292,7 @@ final class PromoterLinkPageAbilities {
 			'required'             => array( 'blog_id', 'taxonomy', 'promoter_term_id', 'version', 'refreshed_at', 'public_url' ),
 			'additionalProperties' => false,
 		);
-		$snapshot                                  = array(
+		$snapshot                       = array(
 			'type'                 => 'object',
 			'properties'           => array(
 				'version'         => array( 'type' => 'integer' ),
@@ -315,10 +315,10 @@ final class PromoterLinkPageAbilities {
 			'required'             => array( 'version', 'owner_reference', 'title', 'description', 'image_url', 'image_alt', 'website', 'social_links', 'entity_type', 'source' ),
 			'additionalProperties' => false,
 		);
-		$styles                                    = $this->styles_schema();
-		$settings                                  = $this->settings_schema();
+		$styles                         = $this->styles_schema();
+		$settings                       = $this->settings_schema();
 		unset( $styles['minProperties'] );
-		$settings['properties']['overlay_enabled'] = array( 'type' => 'boolean' );
+		$settings['properties']['overlay_enabled']     = array( 'type' => 'boolean' );
 		$settings['properties']['background_image_id'] = array(
 			'oneOf' => array(
 				array(

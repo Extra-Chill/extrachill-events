@@ -195,8 +195,8 @@ final class PromoterLinkPages {
 				if ( is_wp_error( $provisioned ) ) {
 					return $provisioned;
 				}
-				$link_page_id = (int) $provisioned['link_page_id'];
-				$created      = ! empty( $provisioned['created'] );
+				$link_page_id        = (int) $provisioned['link_page_id'];
+				$created             = ! empty( $provisioned['created'] );
 				$response            = self::compose_response( ec_read_link_page_persistence( $link_page_id ), $snapshot );
 				$response['created'] = $created;
 				return $response;
@@ -712,7 +712,7 @@ final class PromoterLinkPages {
 	/** Withdraw the exact promoter page without reversing authority/page lock order. */
 	private static function withdraw_for_revocation( int $promoter_term_id ) {
 		foreach ( array( 'ec_normalize_link_page_owner_reference', 'ec_get_link_page_id_for_owner', 'ec_with_link_page_storage_blog', 'ec_get_stored_link_page_owner_references', 'ec_write_link_page_meta' ) as $function ) {
-			if ( ! function_exists( $function ) ) {
+			if ( ! is_callable( $function ) ) {
 				return new \WP_Error( 'promoter_link_page_runtime_unavailable', __( 'Promoter authority cannot be revoked while its public projection runtime is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
 			}
 		}

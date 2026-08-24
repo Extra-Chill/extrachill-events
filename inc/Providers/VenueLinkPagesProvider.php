@@ -114,13 +114,13 @@ final class VenueLinkPagesProvider {
 			'ec_save_link_page'                            => array( 2, 2 ),
 			'ec_link_page_id_meta_keys'                    => array( 0, 0 ),
 		);
+		$defined_functions = get_defined_functions();
+		$user_functions    = array_map( 'strtolower', $defined_functions['user'] ?? array() );
 		foreach ( $signatures as $function => $arity ) {
-			try {
-				$reflection = new \ReflectionFunction( $function );
-			} catch ( \ReflectionException $exception ) {
-				unset( $exception );
+			if ( ! in_array( strtolower( $function ), $user_functions, true ) ) {
 				return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );
 			}
+			$reflection = new \ReflectionFunction( $function );
 			if ( $arity[0] !== $reflection->getNumberOfParameters() || $arity[1] !== $reflection->getNumberOfRequiredParameters() ) {
 				return new \WP_Error( 'venue_link_pages_runtime_incompatible', __( 'The configured Extra Chill Link Pages API-v3 runtime has an incompatible signature.', 'extrachill-events' ), array( 'function' => $function ) );
 			}

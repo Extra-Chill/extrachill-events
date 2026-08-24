@@ -542,7 +542,9 @@ final class VenueLinkPages {
 
 	/** Convert canonical profile data into the minimum immutable public record. */
 	private static function build_snapshot_from_source( array $source, string $reference ): array {
-		$logo = is_array( $source['logo'] ?? null ) ? $source['logo'] : array();
+		$logo           = is_array( $source['logo'] ?? null ) ? $source['logo'] : array();
+		$encoded_source = wp_json_encode( $source );
+		$source_version = isset( $source['revision'] ) ? (string) $source['revision'] : hash( 'sha256', false !== $encoded_source ? $encoded_source : serialize( $source ) );
 		return array(
 			'version'         => self::SNAPSHOT_VERSION,
 			'owner_reference' => $reference,
@@ -563,7 +565,7 @@ final class VenueLinkPages {
 				'blog_id'       => self::events_blog_id(),
 				'taxonomy'      => 'venue',
 				'venue_term_id' => (int) $source['term_id'],
-				'version'       => (string) ( $source['revision'] ?? hash( 'sha256', wp_json_encode( $source ) ) ),
+				'version'       => $source_version,
 				'refreshed_at'  => gmdate( 'c' ),
 				'public_url'    => is_wp_error( $source['source_url'] ?? null ) ? '' : esc_url_raw( (string) ( $source['source_url'] ?? '' ) ),
 			),

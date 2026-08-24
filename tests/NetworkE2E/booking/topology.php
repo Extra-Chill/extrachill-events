@@ -43,9 +43,10 @@ foreach ( array(
 	}
 }
 update_site_option( 'extrachill_booking_network_e2e_sites', $sites );
+update_site_option( 'ec_link_page_storage_blog_id', 4 );
 
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
-foreach ( array( 'extrachill-network/extrachill-network.php', 'extrachill-api/extrachill-api.php', 'extrachill-users/extrachill-users.php', 'data-machine/data-machine.php' ) as $plugin_file ) {
+foreach ( array( 'extrachill-network/extrachill-network.php', 'extrachill-api/extrachill-api.php', 'extrachill-users/extrachill-users.php', 'data-machine/data-machine.php', 'extrachill-link-pages/extrachill-link-pages.php' ) as $plugin_file ) {
 	if ( ! is_plugin_active_for_network( $plugin_file ) ) {
 		$result = activate_plugin( $plugin_file, '', true );
 		if ( is_wp_error( $result ) ) {

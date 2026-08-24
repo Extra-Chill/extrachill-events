@@ -6,7 +6,7 @@
  * Version: 0.64.1
  * Author: Chris Huber
  * Author URI: https://chubes.net
- * Requires Plugins: data-machine, data-machine-events
+ * Requires Plugins: data-machine, data-machine-events, extrachill-link-pages
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: extrachill-events
@@ -42,6 +42,7 @@ require_once __DIR__ . '/inc/Providers/CoreRuntimeProvider.php';
 require_once __DIR__ . '/inc/Providers/ArtistUrlImportProvider.php';
 require_once __DIR__ . '/inc/Providers/PromoterAuthorityProvider.php';
 require_once __DIR__ . '/inc/Providers/VenueBookingProvider.php';
+require_once __DIR__ . '/inc/Providers/VenueLinkPagesProvider.php';
 require_once __DIR__ . '/inc/Providers/PublicExperienceProvider.php';
 require_once __DIR__ . '/inc/Providers/AbilitiesProvider.php';
 require_once __DIR__ . '/inc/Providers/DataMachineEventsProvider.php';

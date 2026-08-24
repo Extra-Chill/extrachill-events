@@ -81,7 +81,7 @@ final class VenueLinkPagesProvider {
 		if ( '3' !== $runtime_version ) {
 			return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );
 		}
-		$signatures = array(
+		$signatures      = array(
 			'ec_validate_link_pages_runtime'               => array( 1, 0 ),
 			'ec_link_pages_runtime_ready'                  => array( 0, 0 ),
 			'ec_get_link_page_storage_blog_id'             => array( 0, 0 ),
@@ -115,7 +115,7 @@ final class VenueLinkPagesProvider {
 			'ec_link_page_id_meta_keys'                    => array( 0, 0 ),
 		);
 		$defined_functions = get_defined_functions();
-		$user_functions    = array_map( 'strtolower', $defined_functions['user'] ?? array() );
+		$user_functions    = array_map( 'strtolower', $defined_functions['user'] );
 		foreach ( $signatures as $function => $arity ) {
 			if ( ! in_array( strtolower( $function ), $user_functions, true ) ) {
 				return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );

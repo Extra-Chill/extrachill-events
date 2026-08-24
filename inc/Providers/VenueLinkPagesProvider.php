@@ -115,16 +115,18 @@ final class VenueLinkPagesProvider {
 			'ec_link_page_id_meta_keys'                    => array( 0, 0 ),
 		);
 		foreach ( $signatures as $function => $arity ) {
-			if ( ! is_callable( $function ) ) {
+			try {
+				$reflection = new \ReflectionFunction( $function );
+			} catch ( \ReflectionException $exception ) {
+				unset( $exception );
 				return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );
 			}
-			$reflection = new \ReflectionFunction( $function );
 			if ( $arity[0] !== $reflection->getNumberOfParameters() || $arity[1] !== $reflection->getNumberOfRequiredParameters() ) {
 				return new \WP_Error( 'venue_link_pages_runtime_incompatible', __( 'The configured Extra Chill Link Pages API-v3 runtime has an incompatible signature.', 'extrachill-events' ), array( 'function' => $function ) );
 			}
 		}
 		$storage_callback = 'ec_get_link_page_storage_blog_id';
-		if ( ! is_callable( $storage_callback ) || ! call_user_func( $storage_callback ) ) {
+		if ( ! call_user_func( $storage_callback ) ) {
 			return new \WP_Error( 'venue_link_pages_storage_unavailable', __( 'The canonical Link Page storage blog is unavailable.', 'extrachill-events' ) );
 		}
 		$validation_callback = 'ec_validate_link_pages_runtime';

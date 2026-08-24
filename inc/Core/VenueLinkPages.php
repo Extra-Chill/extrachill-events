@@ -370,7 +370,7 @@ final class VenueLinkPages {
 					true
 				);
 				ec_purge_link_page_after_mutation( $link_page_id );
-				if ( is_wp_error( $updated ) || ! $updated || 'draft' !== get_post_field( 'post_status', $link_page_id ) ) {
+				if ( is_wp_error( $updated ) || 'draft' !== get_post_field( 'post_status', $link_page_id ) ) {
 					return is_wp_error( $updated ) ? $updated : new \WP_Error( 'venue_link_page_orphan_draft_failed', __( 'The deleted venue Link Page could not be made non-public.', 'extrachill-events' ) );
 				}
 				return true;
@@ -501,8 +501,11 @@ final class VenueLinkPages {
 	private static function read_live_venue( int $venue_term_id ) {
 		$events_blog_id = self::events_blog_id();
 		$did_switch     = get_current_blog_id() !== $events_blog_id;
-		if ( $did_switch && ! switch_to_blog( $events_blog_id ) ) {
-			return new \WP_Error( 'venue_link_page_events_switch_failed', __( 'The canonical Events site is unavailable.', 'extrachill-events' ) );
+		if ( $did_switch ) {
+			switch_to_blog( $events_blog_id );
+			if ( get_current_blog_id() !== $events_blog_id ) {
+				return new \WP_Error( 'venue_link_page_events_switch_failed', __( 'The canonical Events site is unavailable.', 'extrachill-events' ) );
+			}
 		}
 		try {
 			$term = get_term( $venue_term_id, 'venue' );
@@ -513,7 +516,6 @@ final class VenueLinkPages {
 			if ( is_wp_error( $profile ) ) {
 				return $profile;
 			}
-			$profile                = is_array( $profile ) ? $profile : array();
 			$profile['term_id']     = $venue_term_id;
 			$profile['name']        = (string) ( $profile['name'] ?? $term->name );
 			$profile['slug']        = (string) $term->slug;
@@ -649,8 +651,11 @@ final class VenueLinkPages {
 	private static function authorize( int $venue_term_id ) {
 		$events_blog_id = self::events_blog_id();
 		$did_switch     = get_current_blog_id() !== $events_blog_id;
-		if ( $did_switch && ! switch_to_blog( $events_blog_id ) ) {
-			return new \WP_Error( 'venue_link_page_events_switch_failed', __( 'The canonical Events site is unavailable.', 'extrachill-events' ) );
+		if ( $did_switch ) {
+			switch_to_blog( $events_blog_id );
+			if ( get_current_blog_id() !== $events_blog_id ) {
+				return new \WP_Error( 'venue_link_page_events_switch_failed', __( 'The canonical Events site is unavailable.', 'extrachill-events' ) );
+			}
 		}
 		try {
 			return ( new VenueAuthorization() )->authorize( get_current_user_id(), $venue_term_id, VenueAuthorization::ACTION_ACCESS_VENUE );

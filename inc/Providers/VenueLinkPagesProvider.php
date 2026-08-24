@@ -77,7 +77,8 @@ final class VenueLinkPagesProvider {
 		if ( ! in_array( self::PLUGIN, $active, true ) && ! isset( $network_active[ self::PLUGIN ] ) ) {
 			return new \WP_Error( 'venue_link_pages_runtime_not_configured', __( 'Extra Chill Link Pages must be active before venue Link Pages can load.', 'extrachill-events' ) );
 		}
-		if ( ! defined( 'EC_LINK_PAGES_RUNTIME_API_VERSION' ) || '3' !== EC_LINK_PAGES_RUNTIME_API_VERSION || ! function_exists( 'ec_validate_link_pages_runtime' ) || ! function_exists( 'ec_link_pages_runtime_ready' ) ) {
+		$runtime_version = defined( 'EC_LINK_PAGES_RUNTIME_API_VERSION' ) ? constant( 'EC_LINK_PAGES_RUNTIME_API_VERSION' ) : null;
+		if ( '3' !== $runtime_version ) {
 			return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );
 		}
 		$signatures = array(
@@ -114,7 +115,7 @@ final class VenueLinkPagesProvider {
 			'ec_link_page_id_meta_keys'                    => array( 0, 0 ),
 		);
 		foreach ( $signatures as $function => $arity ) {
-			if ( ! function_exists( $function ) ) {
+			if ( ! is_callable( $function ) ) {
 				return new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages API-v3 runtime is incomplete.', 'extrachill-events' ) );
 			}
 			$reflection = new \ReflectionFunction( $function );
@@ -122,14 +123,17 @@ final class VenueLinkPagesProvider {
 				return new \WP_Error( 'venue_link_pages_runtime_incompatible', __( 'The configured Extra Chill Link Pages API-v3 runtime has an incompatible signature.', 'extrachill-events' ), array( 'function' => $function ) );
 			}
 		}
-		if ( ! function_exists( 'ec_get_link_page_storage_blog_id' ) || ! ec_get_link_page_storage_blog_id() ) {
+		$storage_callback = 'ec_get_link_page_storage_blog_id';
+		if ( ! is_callable( $storage_callback ) || ! call_user_func( $storage_callback ) ) {
 			return new \WP_Error( 'venue_link_pages_storage_unavailable', __( 'The canonical Link Page storage blog is unavailable.', 'extrachill-events' ) );
 		}
-		$valid = ec_validate_link_pages_runtime();
+		$validation_callback = 'ec_validate_link_pages_runtime';
+		$readiness_callback  = 'ec_link_pages_runtime_ready';
+		$valid               = call_user_func( $validation_callback );
 		if ( is_wp_error( $valid ) ) {
 			return new \WP_Error( 'venue_link_pages_runtime_incompatible', $valid->get_error_message(), array( 'cause' => $valid->get_error_code() ) );
 		}
-		return true === ec_link_pages_runtime_ready() ? true : new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages runtime is not ready.', 'extrachill-events' ) );
+		return true === call_user_func( $readiness_callback ) ? true : new \WP_Error( 'venue_link_pages_runtime_incomplete', __( 'The configured Extra Chill Link Pages runtime is not ready.', 'extrachill-events' ) );
 	}
 
 	/** Make integration failure visible without partially registering adapters. */

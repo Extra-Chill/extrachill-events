@@ -475,6 +475,10 @@ describe( 'venue settings authorization-facing states', () => {
 		document.body.innerHTML = '';
 		apiFetch.mockReset();
 		installApi();
+		window.ecLinkPageEditorAdapters = {};
+		window.ExtraChillLinkPageEditor = {
+			mount: jest.fn( () => jest.fn() ),
+		};
 	} );
 
 	it.each( [ 'invited', 'revoked' ] )(
@@ -572,8 +576,8 @@ describe( 'venue settings authorization-facing states', () => {
 			await Promise.resolve();
 			await Promise.resolve();
 		} );
-		const input = container.querySelector( 'input[type="text"][required]' );
-		await setInput( input, 'Unsaved promoter link' );
+		const adapter = Object.values( window.ecLinkPageEditorAdapters )[ 0 ];
+		await act( async () => adapter.onDirtyChange( true ) );
 		const unload = new Event( 'beforeunload', { cancelable: true } );
 		window.dispatchEvent( unload );
 		expect( unload.defaultPrevented ).toBe( true );
@@ -659,6 +663,7 @@ describe( 'venue settings authorization-facing states', () => {
 		).toEqual( [
 			'Bookings',
 			'Venue',
+			'Link Page',
 			'Booking Form',
 			'Booking Rules',
 			'Team',
@@ -842,7 +847,13 @@ describe( 'venue settings authorization-facing states', () => {
 					'[data-context-surface="venue-settings"] > button'
 				),
 			].map( ( button ) => button.textContent )
-		).toEqual( [ 'Bookings', 'Venue', 'Booking Form', 'Booking Rules' ] );
+		).toEqual( [
+			'Bookings',
+			'Venue',
+			'Link Page',
+			'Booking Form',
+			'Booking Rules',
+		] );
 		for ( const retired of [
 			'Local Support',
 			'Profile',
@@ -890,6 +901,7 @@ describe( 'venue settings authorization-facing states', () => {
 		).toEqual( [
 			'Bookings',
 			'Venue',
+			'Link Page',
 			'Booking Form',
 			'Booking Rules',
 			'Team',
@@ -961,7 +973,7 @@ describe( 'venue settings authorization-facing states', () => {
 			container.querySelectorAll(
 				'[data-context-surface="venue-settings"] > button'
 			)
-		).toHaveLength( 4 );
+		).toHaveLength( 5 );
 		await act( async () => root.unmount() );
 	} );
 

@@ -73,6 +73,23 @@ final class VenueLinkPageAbilities {
 		);
 		$this->register_ability( 'extrachill/save-venue-link-page-styles', __( 'Save Venue Link Page Styles', 'extrachill-events' ), array( 'css_vars' => $this->styles_schema() ), array( $this, 'save_styles' ), false, false );
 		$this->register_ability( 'extrachill/save-venue-link-page-settings', __( 'Save Venue Link Page Settings', 'extrachill-events' ), array( 'settings' => $this->settings_schema() ), array( $this, 'save_settings' ), false, false );
+		$this->register_ability(
+			'extrachill/save-venue-link-page',
+			__( 'Save Venue Link Page', 'extrachill-events' ),
+			array(
+				'links'               => $this->document_links_input_schema(),
+				'css_vars'            => $this->styles_schema(),
+				'settings'            => $this->settings_schema(),
+				'bio'                 => array( 'type' => 'string' ),
+				'background_image_id' => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
+			),
+			array( $this, 'save_document' ),
+			false,
+			false
+		);
 		$this->register_ability( 'extrachill/refresh-venue-link-page-snapshot', __( 'Refresh Venue Link Page Snapshot', 'extrachill-events' ), array(), array( $this, 'refresh' ), false, true );
 		$this->register_ability(
 			'extrachill/get-venue-link-page-analytics',
@@ -112,12 +129,10 @@ final class VenueLinkPageAbilities {
 			$properties
 		);
 		$required   = array( 'venue_term_id' );
-		if ( false !== strpos( $name, '-links' ) ) {
-			$required[] = 'links';
-		} elseif ( false !== strpos( $name, '-styles' ) ) {
-			$required[] = 'css_vars';
-		} elseif ( false !== strpos( $name, '-settings' ) ) {
-			$required[] = 'settings';
+		foreach ( array( 'links', 'css_vars', 'settings', 'bio', 'background_image_id' ) as $field ) {
+			if ( isset( $properties[ $field ] ) ) {
+				$required[] = $field;
+			}
 		}
 		wp_register_ability(
 			$name,
@@ -172,6 +187,26 @@ final class VenueLinkPageAbilities {
 		return $this->save( $input, $input['settings'] );
 	}
 
+	/**
+	 * Save the portable editor document through one authorized mutation.
+	 *
+	 * @param array $input Ability input.
+	 */
+	public function save_document( array $input ) {
+		return $this->save(
+			$input,
+			array_merge(
+				$input['settings'],
+				array(
+					'links'               => $input['links'],
+					'css_vars'            => $input['css_vars'],
+					'bio'                 => $input['bio'],
+					'background_image_id' => $input['background_image_id'],
+				)
+			)
+		);
+	}
+
 	public function refresh( array $input ) {
 		return VenueLinkPages::refresh_snapshot( absint( $input['venue_term_id'] ) );
 	}
@@ -194,6 +229,39 @@ final class VenueLinkPageAbilities {
 			'properties'           => array_fill_keys( $keys, array( 'type' => 'string' ) ),
 			'minProperties'        => 1,
 			'additionalProperties' => false,
+		);
+	}
+
+	/** Closed section-and-link input used by the portable document save. */
+	private function document_links_input_schema(): array {
+		return array(
+			'type'  => 'array',
+			'items' => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'id'            => array( 'type' => 'string' ),
+					'section_title' => array( 'type' => 'string' ),
+					'links'         => array(
+						'type'  => 'array',
+						'items' => array(
+							'type'                 => 'object',
+							'properties'           => array(
+								'id'         => array( 'type' => 'string' ),
+								'link_text'  => array( 'type' => 'string' ),
+								'link_url'   => array(
+									'type'   => 'string',
+									'format' => 'uri',
+								),
+								'expires_at' => array( 'type' => 'string' ),
+							),
+							'required'             => array( 'link_text', 'link_url' ),
+							'additionalProperties' => false,
+						),
+					),
+				),
+				'required'             => array( 'links' ),
+				'additionalProperties' => false,
+			),
 		);
 	}
 

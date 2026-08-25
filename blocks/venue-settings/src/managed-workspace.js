@@ -1,7 +1,7 @@
 /**
  * WordPress dependencies
  */
-import { useEffect, useState } from '@wordpress/element';
+import { useEffect } from '@wordpress/element';
 
 /**
  * External dependencies
@@ -16,403 +16,118 @@ import {
 /**
  * Internal dependencies
  */
-import { errorDetails, runAbility } from './api';
+import { runAbility } from './api';
 
-const MAX_LINK_SECTIONS = 10;
-const MAX_LINKS_PER_SECTION = 25;
+const noop = () => {};
 
-const initialLinkPagePhase = ( status ) => {
-	if ( status === 'not_provisioned' ) {
-		return 'absent';
-	}
-	return status === 'unavailable' ? 'unavailable' : 'loading';
-};
-
-const normalizeLinkSections = ( document ) => {
-	const sections = document?.link_page?.link_sections;
-	if ( Array.isArray( sections ) && sections.length > 0 ) {
-		return sections.map( ( section ) => ( {
-			id: section.id || '',
-			section_title: section.section_title || '',
-			links: ( section.links || [] ).map( ( link ) => ( { ...link } ) ),
-		} ) );
-	}
-	const links = ( document?.link_page?.links || [] ).filter(
-		( link ) => ! Array.isArray( link.links )
-	);
-	return [ { id: '', section_title: '', links } ];
-};
-
-const saveableSections = ( sections ) =>
-	sections.map( ( section ) => ( {
-		...( section.id ? { id: section.id } : {} ),
-		...( section.section_title
-			? { section_title: section.section_title.trim() }
-			: {} ),
-		links: section.links.map( ( link ) => ( {
-			...( link.id ? { id: link.id } : {} ),
-			link_text: link.link_text.trim(),
-			link_url: link.link_url.trim(),
-			...( link.expires_at ? { expires_at: link.expires_at } : {} ),
-		} ) ),
-	} ) );
-
-export function PromoterLinkPageManager( {
-	promoterId,
+export function SharedLinkPageEditor( {
+	identityType,
+	identityId,
+	identityName,
 	initialStatus,
-	onDirtyChange = () => {},
+	onDirtyChange,
 } ) {
-	const [ phase, setPhase ] = useState(
-		initialLinkPagePhase( initialStatus )
-	);
-	const [ document, setDocument ] = useState( null );
-	const [ sections, setSections ] = useState( [] );
-	const [ message, setMessage ] = useState( '' );
-
-	const acceptDocument = ( result, successMessage = '' ) => {
-		setDocument( result );
-		setSections( normalizeLinkSections( result ) );
-		setMessage( successMessage );
-		setPhase( 'ready' );
-		onDirtyChange( false );
-	};
-	const load = async () => {
-		setPhase( 'loading' );
-		setMessage( '' );
-		try {
-			acceptDocument(
-				await runAbility( 'extrachill/get-promoter-link-page', {
-					promoter_term_id: promoterId,
-				} )
-			);
-		} catch ( error ) {
-			const details = errorDetails( error );
-			if ( details.status === 404 ) {
-				setPhase( 'absent' );
-				return;
-			}
-			setMessage( details.message );
-			setPhase( 'error' );
-		}
-	};
-
+	const dirtyChange = onDirtyChange || noop;
+	const mountId = `ec-events-link-page-${ identityType }-${ identityId }`;
 	useEffect( () => {
-		if ( initialStatus === 'available' ) {
-			load();
-		} else if ( initialStatus === 'unavailable' ) {
-			setPhase( 'unavailable' );
-		} else {
-			setPhase( 'absent' );
+		const runtime = window.ExtraChillLinkPageEditor;
+		const target = document.getElementById( mountId );
+		if ( ! runtime?.mount || ! target ) {
+			return undefined;
 		}
-		// Identity changes remount this exact manager scope.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [ promoterId, initialStatus ] );
-
-	const provision = async () => {
-		setPhase( 'saving' );
-		setMessage( '' );
-		try {
-			acceptDocument(
-				await runAbility( 'extrachill/provision-promoter-link-page', {
-					promoter_term_id: promoterId,
-				} ),
-				'Link Page created.'
-			);
-		} catch ( error ) {
-			setMessage( errorDetails( error ).message );
-			setPhase( 'error' );
-		}
-	};
-	const save = async ( event ) => {
-		event.preventDefault();
-		setPhase( 'saving' );
-		setMessage( '' );
-		try {
-			acceptDocument(
-				await runAbility( 'extrachill/save-promoter-link-page-links', {
-					promoter_term_id: promoterId,
-					links: saveableSections( sections ),
-				} ),
-				'Links saved.'
-			);
-		} catch ( error ) {
-			setMessage( errorDetails( error ).message );
-			setPhase( 'error' );
-		}
-	};
-	const updateSection = ( sectionIndex, changes ) => {
-		onDirtyChange( true );
-		setSections( ( current ) =>
-			current.map( ( section, index ) =>
-				index === sectionIndex ? { ...section, ...changes } : section
-			)
+		const field = `${ identityType }_term_id`;
+		const adapterKey = `extrachill-events-link-pages-${ identityType }-${ identityId }`;
+		const mapDocument = ( document ) => ( {
+			identity: {
+				id: identityId,
+				name: document[ identityType ]?.title || identityName,
+				image_url: document[ identityType ]?.snapshot?.image_url || '',
+			},
+			link_page: document.link_page,
+			socials: document[ identityType ]?.snapshot?.social_links || [],
+		} );
+		window.ecLinkPageEditorAdapters[ adapterKey ] = {
+			read: async () =>
+				mapDocument(
+					await runAbility(
+						`extrachill/get-${ identityType }-link-page`,
+						{
+							[ field ]: identityId,
+						}
+					)
+				),
+			provision: async () =>
+				mapDocument(
+					await runAbility(
+						`extrachill/provision-${ identityType }-link-page`,
+						{
+							[ field ]: identityId,
+						}
+					)
+				),
+			save: async ( ignored, draft ) => {
+				const settings = {};
+				[
+					'link_expiration_enabled',
+					'redirect_enabled',
+					'redirect_target_url',
+					'youtube_embed_enabled',
+					'meta_pixel_id',
+					'google_tag_id',
+					'google_tag_manager_id',
+					'social_icons_position',
+					'profile_image_shape',
+				].forEach( ( key ) => {
+					if (
+						Object.prototype.hasOwnProperty.call(
+							draft.page.settings,
+							key
+						)
+					) {
+						settings[ key ] = draft.page.settings[ key ];
+					}
+				} );
+				const document = await runAbility(
+					`extrachill/save-${ identityType }-link-page`,
+					{
+						[ field ]: identityId,
+						links: draft.page.links,
+						css_vars: draft.page.styles,
+						settings,
+						bio: draft.page.bio,
+						background_image_id: draft.page.backgroundImageId || 0,
+					}
+				);
+				return mapDocument( document );
+			},
+			onDirtyChange: dirtyChange,
+		};
+		const unmount = runtime.mount( target, {
+			adapter: adapterKey,
+			identities: [ { id: identityId, label: identityName } ],
+			initialIdentity: identityId,
+			status: initialStatus,
+		} );
+		return () => {
+			unmount?.();
+			delete window.ecLinkPageEditorAdapters[ adapterKey ];
+		};
+	}, [
+		dirtyChange,
+		identityId,
+		identityName,
+		identityType,
+		initialStatus,
+		mountId,
+	] );
+	if ( ! window.ExtraChillLinkPageEditor?.mount ) {
+		return (
+			<InlineStatus tone="warning">
+				Link Page management is unavailable.
+			</InlineStatus>
 		);
-	};
-	const updateLink = ( sectionIndex, linkIndex, changes ) => {
-		onDirtyChange( true );
-		setSections( ( current ) =>
-			current.map( ( section, index ) =>
-				index === sectionIndex
-					? {
-							...section,
-							links: section.links.map( ( link, itemIndex ) =>
-								itemIndex === linkIndex
-									? { ...link, ...changes }
-									: link
-							),
-					  }
-					: section
-			)
-		);
-	};
-
-	return (
-		<section
-			id="promoter-link-page"
-			className="ec-promoter-link-page-manager"
-			aria-labelledby="promoter-link-page-heading"
-			aria-busy={ phase === 'loading' || phase === 'saving' }
-		>
-			<Panel depth={ 2 }>
-				<PanelHeader
-					title="Promoter Link Page"
-					description="Manage the public links for this promoter organization."
-				/>
-				<h2
-					id="promoter-link-page-heading"
-					className="screen-reader-text"
-				>
-					Promoter Link Page management
-				</h2>
-				{ phase === 'loading' && (
-					<p role="status">Loading Link Page...</p>
-				) }
-				{ phase === 'absent' && (
-					<div className="ec-promoter-link-page-manager__empty">
-						<p>This promoter does not have a Link Page yet.</p>
-						<button
-							type="button"
-							className="button-1"
-							onClick={ provision }
-						>
-							Create Link Page
-						</button>
-					</div>
-				) }
-				{ phase === 'error' && (
-					<InlineStatus tone="error" role="alert">
-						{ message || 'Link Page management could not load.' }{ ' ' }
-						<button
-							type="button"
-							className="button-link"
-							onClick={ load }
-						>
-							Retry
-						</button>
-					</InlineStatus>
-				) }
-				{ phase === 'unavailable' && (
-					<InlineStatus tone="warning" role="status">
-						Link Page management is unavailable because its runtime
-						is not active.
-					</InlineStatus>
-				) }
-				{ ( phase === 'ready' || phase === 'saving' ) && document && (
-					<form
-						onSubmit={ save }
-						className="ec-promoter-link-page-manager__form"
-					>
-						{ document.link_page.public_url && (
-							<p>
-								<a
-									href={ document.link_page.public_url }
-									target="_blank"
-									rel="noreferrer"
-								>
-									Open public Link Page
-								</a>
-							</p>
-						) }
-						<fieldset
-							className="ec-promoter-link-page-manager__controls"
-							disabled={ phase === 'saving' }
-						>
-							<legend className="screen-reader-text">
-								Link Page editor controls
-							</legend>
-							{ sections.map( ( section, sectionIndex ) => (
-								<fieldset
-									key={
-										section.id ||
-										`section-${ sectionIndex }`
-									}
-								>
-									<legend>
-										Link section { sectionIndex + 1 }
-									</legend>
-									<label
-										htmlFor={ `promoter-section-title-${ sectionIndex }` }
-									>
-										Section title
-										<input
-											id={ `promoter-section-title-${ sectionIndex }` }
-											type="text"
-											maxLength={ 200 }
-											value={ section.section_title }
-											onChange={ ( event ) =>
-												updateSection( sectionIndex, {
-													section_title:
-														event.target.value,
-												} )
-											}
-										/>
-									</label>
-									{ section.links.length === 0 && (
-										<p>No links in this section.</p>
-									) }
-									{ section.links.map(
-										( link, linkIndex ) => (
-											<div
-												className="ec-promoter-link-page-manager__link"
-												key={
-													link.id ||
-													`link-${ linkIndex }`
-												}
-											>
-												<label
-													htmlFor={ `promoter-link-text-${ sectionIndex }-${ linkIndex }` }
-												>
-													Link text
-													<input
-														id={ `promoter-link-text-${ sectionIndex }-${ linkIndex }` }
-														type="text"
-														maxLength={ 200 }
-														required
-														value={ link.link_text }
-														onChange={ ( event ) =>
-															updateLink(
-																sectionIndex,
-																linkIndex,
-																{
-																	link_text:
-																		event
-																			.target
-																			.value,
-																}
-															)
-														}
-													/>
-												</label>
-												<label
-													htmlFor={ `promoter-link-url-${ sectionIndex }-${ linkIndex }` }
-												>
-													URL
-													<input
-														id={ `promoter-link-url-${ sectionIndex }-${ linkIndex }` }
-														type="url"
-														maxLength={ 2048 }
-														required
-														value={ link.link_url }
-														onChange={ ( event ) =>
-															updateLink(
-																sectionIndex,
-																linkIndex,
-																{
-																	link_url:
-																		event
-																			.target
-																			.value,
-																}
-															)
-														}
-													/>
-												</label>
-												<button
-													type="button"
-													className="button-link-delete"
-													onClick={ () =>
-														updateSection(
-															sectionIndex,
-															{
-																links: section.links.filter(
-																	(
-																		item,
-																		index
-																	) =>
-																		index !==
-																		linkIndex
-																),
-															}
-														)
-													}
-												>
-													Remove link
-												</button>
-											</div>
-										)
-									) }
-									{ section.links.length <
-										MAX_LINKS_PER_SECTION && (
-										<button
-											type="button"
-											className="button-2"
-											onClick={ () =>
-												updateSection( sectionIndex, {
-													links: [
-														...section.links,
-														{
-															id: '',
-															link_text: '',
-															link_url: '',
-														},
-													],
-												} )
-											}
-										>
-											Add link
-										</button>
-									) }
-								</fieldset>
-							) ) }
-							{ sections.length < MAX_LINK_SECTIONS && (
-								<button
-									type="button"
-									className="button-2"
-									onClick={ () => {
-										onDirtyChange( true );
-										setSections( ( current ) => [
-											...current,
-											{
-												id: '',
-												section_title: '',
-												links: [],
-											},
-										] );
-									} }
-								>
-									Add section
-								</button>
-							) }{ ' ' }
-							<button
-								type="submit"
-								className="button-1"
-								disabled={ phase === 'saving' }
-							>
-								{ phase === 'saving'
-									? 'Saving...'
-									: 'Save links' }
-							</button>
-						</fieldset>
-						{ message && (
-							<InlineStatus tone="success" role="status">
-								{ message }
-							</InlineStatus>
-						) }
-					</form>
-				) }
-			</Panel>
-		</section>
-	);
+	}
+	return <div id={ mountId } className="ec-events-link-page-editor" />;
 }
 
 export function ManagedIdentitySelector( {
@@ -566,8 +281,10 @@ export function PromoterWorkspacePanel( { workspace, onLinkPageDirtyChange } ) {
 				) }
 			</section>
 
-			<PromoterLinkPageManager
-				promoterId={ promoter.id }
+			<SharedLinkPageEditor
+				identityType="promoter"
+				identityId={ promoter.id }
+				identityName={ promoter.name }
 				initialStatus={ promoter.link_page.status }
 				onDirtyChange={ onLinkPageDirtyChange }
 			/>

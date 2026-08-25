@@ -44,6 +44,23 @@ final class PromoterLinkPageAbilities {
 		$this->register_management( 'extrachill/save-promoter-link-page-links', __( 'Save Promoter Link Page Links', 'extrachill-events' ), array( 'links' => $this->links_input_schema() ), array( $this, 'save_links' ), false, false );
 		$this->register_management( 'extrachill/save-promoter-link-page-styles', __( 'Save Promoter Link Page Styles', 'extrachill-events' ), array( 'css_vars' => $this->styles_schema() ), array( $this, 'save_styles' ), false, false );
 		$this->register_management( 'extrachill/save-promoter-link-page-settings', __( 'Save Promoter Link Page Settings', 'extrachill-events' ), array( 'settings' => $this->settings_schema() ), array( $this, 'save_settings' ), false, false );
+		$this->register_management(
+			'extrachill/save-promoter-link-page',
+			__( 'Save Promoter Link Page', 'extrachill-events' ),
+			array(
+				'links'               => $this->links_input_schema(),
+				'css_vars'            => $this->styles_schema(),
+				'settings'            => $this->settings_schema(),
+				'bio'                 => array( 'type' => 'string' ),
+				'background_image_id' => array(
+					'type'    => 'integer',
+					'minimum' => 0,
+				),
+			),
+			array( $this, 'save_document' ),
+			false,
+			false
+		);
 		$this->register_management( 'extrachill/refresh-promoter-link-page-snapshot', __( 'Refresh Promoter Link Page Snapshot', 'extrachill-events' ), array(), array( $this, 'refresh' ), false, true );
 		$this->register_management(
 			'extrachill/get-promoter-link-page-analytics',
@@ -117,7 +134,7 @@ final class PromoterLinkPageAbilities {
 			$properties
 		);
 		$required   = array( 'promoter_term_id' );
-		foreach ( array( 'links', 'css_vars', 'settings' ) as $field ) {
+		foreach ( array( 'links', 'css_vars', 'settings', 'bio', 'background_image_id' ) as $field ) {
 			if ( isset( $properties[ $field ] ) ) {
 				$required[] = $field;
 			}
@@ -211,6 +228,30 @@ final class PromoterLinkPageAbilities {
 	 */
 	public function save_settings( array $input ) {
 		return $this->save( $input, $input['settings'] );
+	}
+
+	/**
+	 * Save the portable editor document through one authorized mutation.
+	 *
+	 * @param array $input Ability input.
+	 */
+	public function save_document( array $input ) {
+		$valid = $this->validate_links( $input['links'] ?? null );
+		if ( true !== $valid ) {
+			return $valid;
+		}
+		return $this->save(
+			$input,
+			array_merge(
+				$input['settings'],
+				array(
+					'links'               => $input['links'],
+					'css_vars'            => $input['css_vars'],
+					'bio'                 => $input['bio'],
+					'background_image_id' => $input['background_image_id'],
+				)
+			)
+		);
 	}
 
 	/**

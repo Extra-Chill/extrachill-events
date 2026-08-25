@@ -1,6 +1,18 @@
 /* global afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest */
+
+/**
+ * WordPress dependencies
+ */
 import { createRoot } from '@wordpress/element';
+
+/**
+ * External dependencies
+ */
 import { act } from 'react';
+
+/**
+ * Internal dependencies
+ */
 import {
 	ManagedIdentitySelector,
 	PromoterWorkspacePanel,

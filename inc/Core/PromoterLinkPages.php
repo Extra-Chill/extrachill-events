@@ -641,7 +641,8 @@ final class PromoterLinkPages {
 
 	/** Hash only canonical generic persistence fields for optimistic concurrency. */
 	private static function persistence_revision( array $data ): string {
-		return hash( 'sha256', wp_json_encode( array_intersect_key( $data, array_flip( array( 'links', 'css_vars', 'bio', 'settings', 'background_image_id' ) ) ) ) );
+		$encoded = wp_json_encode( array_intersect_key( $data, array_flip( array( 'links', 'css_vars', 'bio', 'settings', 'background_image_id' ) ) ) );
+		return hash( 'sha256', false === $encoded ? '{}' : $encoded );
 	}
 
 	/** Deterministic base, optional canonical qualifier, and stable ID suffix. */

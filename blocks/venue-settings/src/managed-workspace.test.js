@@ -138,17 +138,22 @@ describe( 'managed identity workspace', () => {
 				10,
 				{
 					page: {
+						revision: 'a'.repeat( 64 ),
 						links: [],
 						styles: { '--link-page-background-color': '#000000' },
 						settings: { redirect_enabled: false },
 						backgroundImageId: 0,
 					},
 				},
-				{ dirtyAreas: [ 'styles' ] }
+				{ dirtyAreas: [ 'styles', 'links' ] }
 			);
+			expect( runAbility ).toHaveBeenCalledTimes( 1 );
 			expect( runAbility ).toHaveBeenCalledWith(
-				`extrachill/save-${ type }-link-page-styles`,
+				`extrachill/patch-${ type }-link-page`,
 				expect.objectContaining( {
+					[ `${ type }_term_id` ]: 10,
+					expected_revision: 'a'.repeat( 64 ),
+					links: [],
 					css_vars: { '--link-page-background-color': '#000000' },
 				} )
 			);
@@ -158,26 +163,6 @@ describe( 'managed identity workspace', () => {
 						name === `extrachill/save-${ type }-link-page`
 				)
 			).toBe( false );
-			await adapter.save(
-				10,
-				{
-					page: {
-						links: [],
-						styles: {},
-						settings: {},
-						bio: '',
-						backgroundImageId: 0,
-					},
-				},
-				{ dirtyAreas: [ 'links' ] }
-			);
-			expect( runAbility ).toHaveBeenLastCalledWith(
-				`extrachill/save-${ type }-link-page-links`,
-				expect.objectContaining( {
-					[ `${ type }_term_id` ]: 10,
-					links: [],
-				} )
-			);
 			expect( mounted.configuration.capabilities ).toEqual(
 				expect.objectContaining( {
 					identity: false,

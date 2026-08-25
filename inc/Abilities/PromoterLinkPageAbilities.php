@@ -74,6 +74,7 @@ final class PromoterLinkPageAbilities {
 			false,
 			false
 		);
+		$this->register_patch_ability();
 		$this->register_management( 'extrachill/refresh-promoter-link-page-snapshot', __( 'Refresh Promoter Link Page Snapshot', 'extrachill-events' ), array(), array( $this, 'refresh' ), false, true );
 		$this->register_management(
 			'extrachill/get-promoter-link-page-analytics',
@@ -119,6 +120,49 @@ final class PromoterLinkPageAbilities {
 						'readonly'    => true,
 						'idempotent'  => true,
 						'destructive' => false,
+					),
+				),
+			)
+		);
+	}
+
+	/** Register one atomic sparse patch contract for the shared editor. */
+	private function register_patch_ability(): void {
+		wp_register_ability(
+			'extrachill/patch-promoter-link-page',
+			array(
+				'label'               => __( 'Patch Promoter Link Page', 'extrachill-events' ),
+				'description'         => __( 'Atomically patch changed promoter Link Page areas.', 'extrachill-events' ),
+				'category'            => 'extrachill-events',
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'promoter_term_id'    => array(
+							'type'    => 'integer',
+							'minimum' => 1,
+						),
+						'expected_revision'   => $this->revision_schema(),
+						'links'               => $this->links_input_schema(),
+						'css_vars'            => $this->styles_schema(),
+						'settings'            => $this->settings_schema(),
+						'background_image_id' => array(
+							'type'    => 'integer',
+							'minimum' => 0,
+						),
+					),
+					'required'             => array( 'promoter_term_id', 'expected_revision' ),
+					'minProperties'        => 3,
+					'additionalProperties' => false,
+				),
+				'output_schema'       => $this->document_schema(),
+				'execute_callback'    => array( $this, 'patch' ),
+				'permission_callback' => array( $this, 'authorize' ),
+				'meta'                => array(
+					'show_in_rest' => true,
+					'annotations'  => array(
+						'readonly'    => false,
+						'idempotent'  => false,
+						'destructive' => true,
 					),
 				),
 			)
@@ -253,6 +297,20 @@ final class PromoterLinkPageAbilities {
 	 */
 	public function save_settings( array $input ) {
 		return $this->save( $input, array_merge( $input['settings'], array( 'expected_revision' => $input['expected_revision'] ) ) );
+	}
+
+	/** Atomically save only supplied generic areas under one canonical lock. */
+	public function patch( array $input ) {
+		$data = array( 'expected_revision' => $input['expected_revision'] );
+		foreach ( array( 'links', 'css_vars', 'background_image_id' ) as $field ) {
+			if ( array_key_exists( $field, $input ) ) {
+				$data[ $field ] = $input[ $field ];
+			}
+		}
+		if ( isset( $input['settings'] ) ) {
+			$data = array_merge( $data, $input['settings'] );
+		}
+		return $this->save( $input, $data );
 	}
 
 	/**

@@ -119,6 +119,7 @@ final class VenueLinkPageAbilities {
 			false,
 			false
 		);
+		$this->register_patch_ability();
 		$this->register_ability( 'extrachill/refresh-venue-link-page-snapshot', __( 'Refresh Venue Link Page Snapshot', 'extrachill-events' ), array(), array( $this, 'refresh' ), false, true );
 		$this->register_ability(
 			'extrachill/get-venue-link-page-analytics',
@@ -143,6 +144,49 @@ final class VenueLinkPageAbilities {
 			true,
 			true,
 			$this->analytics_schema()
+		);
+	}
+
+	/** Register one atomic sparse patch contract for the shared editor. */
+	private function register_patch_ability(): void {
+		wp_register_ability(
+			'extrachill/patch-venue-link-page',
+			array(
+				'label'               => __( 'Patch Venue Link Page', 'extrachill-events' ),
+				'description'         => __( 'Atomically patch changed venue Link Page areas.', 'extrachill-events' ),
+				'category'            => 'extrachill-events',
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'venue_term_id'       => array(
+							'type'    => 'integer',
+							'minimum' => 1,
+						),
+						'expected_revision'   => $this->revision_schema(),
+						'links'               => $this->links_input_schema(),
+						'css_vars'            => $this->styles_schema(),
+						'settings'            => $this->settings_schema(),
+						'background_image_id' => array(
+							'type'    => 'integer',
+							'minimum' => 0,
+						),
+					),
+					'required'             => array( 'venue_term_id', 'expected_revision' ),
+					'minProperties'        => 3,
+					'additionalProperties' => false,
+				),
+				'output_schema'       => $this->document_schema(),
+				'execute_callback'    => array( $this, 'patch' ),
+				'permission_callback' => array( $this, 'authorize' ),
+				'meta'                => array(
+					'show_in_rest' => true,
+					'annotations'  => array(
+						'readonly'    => false,
+						'idempotent'  => false,
+						'destructive' => true,
+					),
+				),
+			)
 		);
 	}
 
@@ -228,6 +272,20 @@ final class VenueLinkPageAbilities {
 		return $this->save( $input, array_merge( $input['settings'], array( 'expected_revision' => $input['expected_revision'] ) ) );
 	}
 
+	/** Atomically save only supplied generic areas under one canonical lock. */
+	public function patch( array $input ) {
+		$data = array( 'expected_revision' => $input['expected_revision'] );
+		foreach ( array( 'links', 'css_vars', 'background_image_id' ) as $field ) {
+			if ( array_key_exists( $field, $input ) ) {
+				$data[ $field ] = $input[ $field ];
+			}
+		}
+		if ( isset( $input['settings'] ) ) {
+			$data = array_merge( $data, $input['settings'] );
+		}
+		return $this->save( $input, $data );
+	}
+
 	public function refresh( array $input ) {
 		return VenueLinkPages::refresh_snapshot( absint( $input['venue_term_id'] ) );
 	}
@@ -240,6 +298,57 @@ final class VenueLinkPageAbilities {
 	private function save( array $input, array $data ) {
 		$reference = VenueLinkPages::owner_reference( absint( $input['venue_term_id'] ) );
 		return is_wp_error( $reference ) ? $reference : ec_save_link_page( $reference, $data );
+	}
+
+	/** Closed bounded section-and-link patch schema. */
+	private function links_input_schema(): array {
+		return array(
+			'type'     => 'array',
+			'maxItems' => self::MAX_LINK_SECTIONS,
+			'items'    => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'id'            => array(
+						'type'      => 'string',
+						'maxLength' => self::MAX_ID_LENGTH,
+					),
+					'section_title' => array(
+						'type'      => 'string',
+						'maxLength' => self::MAX_TITLE_LENGTH,
+					),
+					'links'         => array(
+						'type'     => 'array',
+						'maxItems' => self::MAX_LINKS_PER_SECTION,
+						'items'    => array(
+							'type'                 => 'object',
+							'properties'           => array(
+								'id'         => array(
+									'type'      => 'string',
+									'maxLength' => self::MAX_ID_LENGTH,
+								),
+								'link_text'  => array(
+									'type'      => 'string',
+									'maxLength' => self::MAX_LINK_TEXT_LENGTH,
+								),
+								'link_url'   => array(
+									'type'      => 'string',
+									'format'    => 'uri',
+									'maxLength' => self::MAX_URL_LENGTH,
+								),
+								'expires_at' => array(
+									'type'      => 'string',
+									'maxLength' => self::MAX_EXPIRATION_LENGTH,
+								),
+							),
+							'required'             => array( 'link_text', 'link_url' ),
+							'additionalProperties' => false,
+						),
+					),
+				),
+				'required'             => array( 'links' ),
+				'additionalProperties' => false,
+			),
+		);
 	}
 
 	/** Enumerate standalone-supported style keys while leaving value validation generic. */

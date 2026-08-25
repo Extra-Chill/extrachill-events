@@ -75,7 +75,6 @@ export function SharedLinkPageEditor( {
 				),
 			save: async ( ignored, draft, { dirtyAreas = [] } = {} ) => {
 				const dirty = new Set( dirtyAreas );
-				let revision = draft.page.revision;
 				const settings = {};
 				[
 					'link_expiration_enabled',
@@ -97,49 +96,32 @@ export function SharedLinkPageEditor( {
 						settings[ key ] = draft.page.settings[ key ];
 					}
 				} );
-				if ( dirty.has( 'background' ) ) {
-					settings.background_image_id =
-						draft.page.backgroundImageId || 0;
-				}
-				let document;
+				const patch = {
+					[ field ]: identityId,
+					expected_revision: draft.page.revision,
+				};
 				if ( dirty.has( 'links' ) ) {
-					document = await runAbility(
-						`extrachill/save-${ identityType }-link-page-links`,
-						{
-							[ field ]: identityId,
-							links: draft.page.links,
-							expected_revision: revision,
-						}
-					);
-					revision = document.link_page.revision;
+					patch.links = draft.page.links;
 				}
 				if ( dirty.has( 'styles' ) ) {
-					document = await runAbility(
-						`extrachill/save-${ identityType }-link-page-styles`,
-						{
-							[ field ]: identityId,
-							css_vars: draft.page.styles,
-							expected_revision: revision,
-						}
-					);
-					revision = document.link_page.revision;
+					patch.css_vars = draft.page.styles;
 				}
-				if ( dirty.has( 'settings' ) || dirty.has( 'background' ) ) {
-					document = await runAbility(
-						`extrachill/save-${ identityType }-link-page-settings`,
-						{
-							[ field ]: identityId,
-							settings,
-							expected_revision: revision,
-						}
-					);
+				if ( dirty.has( 'settings' ) ) {
+					patch.settings = settings;
 				}
-				if ( ! document ) {
-					document = await runAbility(
-						`extrachill/get-${ identityType }-link-page`,
-						{ [ field ]: identityId }
-					);
+				if ( dirty.has( 'background' ) ) {
+					patch.background_image_id =
+						draft.page.backgroundImageId || 0;
 				}
+				const document = dirty.size
+					? await runAbility(
+							`extrachill/patch-${ identityType }-link-page`,
+							patch
+					  )
+					: await runAbility(
+							`extrachill/get-${ identityType }-link-page`,
+							{ [ field ]: identityId }
+					  );
 				return mapDocument( document );
 			},
 			onDirtyChange: ( value ) => dirtyChangeRef.current( value ),
@@ -204,7 +186,9 @@ export function SharedLinkPageEditor( {
 			window.ecLinkPageEditorPendingAdapters = (
 				window.ecLinkPageEditorPendingAdapters || []
 			).filter( ( [ name ] ) => name !== adapterKey );
-			delete window.ecLinkPageEditorAdapters[ adapterKey ];
+			if ( window.ecLinkPageEditorAdapters ) {
+				delete window.ecLinkPageEditorAdapters[ adapterKey ];
+			}
 		};
 	}, [ identityId, identityName, identityType, initialStatus, mountId ] );
 	return (

@@ -52,7 +52,7 @@ final class VenueLinkPagesCoordinatedRuntimeTest extends TestCase {
 	/** Every Events-owned ability is a deliberate core-runner contract. */
 	public function test_ability_inputs_outputs_and_rest_visibility_are_closed_and_deliberate(): void {
 		$contracts = $this->fixture( 'venue-link-pages-abilities.php' );
-		$this->assertCount( 7, $contracts );
+		$this->assertCount( 8, $contracts );
 		foreach ( $contracts as $contract ) {
 			$this->assertTrue( $contract['input_closed'] );
 			$this->assertTrue( $contract['output_closed'] );
@@ -79,6 +79,11 @@ final class VenueLinkPagesCoordinatedRuntimeTest extends TestCase {
 		$this->assertSame( 'the-royal-american', $result['slug'] );
 		$this->assertTrue( $result['read'] );
 		$this->assertTrue( $result['saved'] );
+		$this->assertSame( '', $result['atomic_patch']['error'] );
+		$this->assertSame( 'Atomic', $result['atomic_patch']['section_title'] );
+		$this->assertSame( '#000000', $result['atomic_patch']['background_color'] );
+		$this->assertTrue( $result['atomic_patch']['revision_changed'] );
+		$this->assertSame( 1, $result['atomic_patch']['save_hook_delta'] );
 		$this->assertSame( 'venue_link_page_revision_conflict', $result['stale_save']['error'] );
 		$this->assertSame( $result['stale_save']['bio_before'], $result['stale_save']['bio_after'] );
 		$this->assertTrue( $result['analytics'] );
@@ -122,8 +127,8 @@ final class VenueLinkPagesCoordinatedRuntimeTest extends TestCase {
 		$this->assertStringNotContainsString( 'Requires Plugins: data-machine, data-machine-events, extrachill-link-pages', $plugin );
 		$this->assertStringContainsString( 'Add the native plugin dependency after Link Pages PR #4', $provider );
 		$this->assertStringContainsString( "add_action( 'plugins_loaded', array( self::class, 'initialize' ), 30 )", $provider );
-		$this->assertSame( 7, substr_count( $abilities, "'extrachill/" ) );
-		$this->assertSame( 1, substr_count( $abilities, "'show_in_rest' => true" ) );
+		$this->assertSame( 8, substr_count( $abilities, "'extrachill/" ) );
+		$this->assertSame( 2, substr_count( $abilities, "'show_in_rest' => true" ) );
 		$this->assertStringNotContainsString( 'register_rest_route', $core . $abilities . $provider );
 		$this->assertStringNotContainsString( 'WP_CLI', $core . $abilities . $provider );
 		$this->assertStringNotContainsString( 'wp_remote_', $core . $abilities . $provider );

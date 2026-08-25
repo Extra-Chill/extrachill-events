@@ -114,9 +114,8 @@ final class VenueLinkPages {
 		if ( is_wp_error( $current ) ) {
 			return $current;
 		}
-		if ( isset( $data['expected_revision'] ) && ! hash_equals( self::persistence_revision( $current ), (string) $data['expected_revision'] ) ) {
-			return new \WP_Error( 'venue_link_page_revision_conflict', __( 'The Link Page changed before this save could be applied.', 'extrachill-events' ), array( 'status' => 409 ) );
-		}
+		$expected_revision = isset( $data['expected_revision'] ) ? (string) $data['expected_revision'] : '';
+		$lock_revision     = self::persistence_revision( $current );
 		unset( $data['expected_revision'] );
 		$snapshot = self::build_snapshot( (int) $resolved['owner']['object_id'], $resolved['owner_reference'] );
 		if ( is_wp_error( $snapshot ) ) {
@@ -125,8 +124,11 @@ final class VenueLinkPages {
 		$saved = ec_save_link_page_persistence_composed(
 			$link_page_id,
 			$data,
-			static function ( $finalized_link_page_id, $persistence ) use ( $snapshot, $resolved ) {
+			static function ( $finalized_link_page_id, $persistence ) use ( $snapshot, $resolved, $expected_revision, $lock_revision ) {
 				unset( $persistence );
+				if ( $expected_revision && ! hash_equals( $lock_revision, $expected_revision ) ) {
+					return new \WP_Error( 'venue_link_page_revision_conflict', __( 'The Link Page changed before this save could be applied.', 'extrachill-events' ), array( 'status' => 409 ) );
+				}
 				return self::finalize_owner_state( (int) $finalized_link_page_id, (string) $resolved['owner_reference'], $snapshot );
 			}
 		);

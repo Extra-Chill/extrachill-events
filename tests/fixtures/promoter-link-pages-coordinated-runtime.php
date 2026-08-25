@@ -273,6 +273,26 @@ $winner_hooks         = $hook_delta( $hooks_before_winner, $success_hook_counts(
 $read                 = $page_id ? ec_read_link_page( PromoterLinkPages::owner_reference( 30 ) ) : $created;
 $hooks_before_saved   = $success_hook_counts();
 $saved                = $page_id ? ec_save_link_page( PromoterLinkPages::owner_reference( 30 ), array( 'bio' => 'Promoter managed bio.' ) ) : $created;
+$atomic_patch         = $page_id ? $ability_registrar->patch(
+	array(
+		'promoter_term_id'  => 30,
+		'expected_revision' => $saved['link_page']['revision'] ?? '',
+		'links'             => array(
+			array(
+				'id'            => 'new',
+				'section_title' => 'Promoter Atomic',
+				'links'         => array(
+					array(
+						'id'        => 'new',
+						'link_text' => 'Atomic Link',
+						'link_url'  => 'https://promoter.example/atomic',
+					),
+				),
+			),
+		),
+		'css_vars'          => array( '--link-page-background-color' => '#111111' ),
+	)
+) : $created;
 $stale_save           = $page_id ? ec_save_link_page(
 	PromoterLinkPages::owner_reference( 30 ),
 	array(
@@ -280,7 +300,11 @@ $stale_save           = $page_id ? ec_save_link_page(
 		'bio'               => 'Stale promoter overwrite.',
 	)
 ) : $created;
-$stale_bio            = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
+$stale_bio            = $page_id ? ec_with_link_page_storage_blog(
+	static function () use ( $page_id ) {
+		return get_post_meta( $page_id, '_link_page_bio_text', true );
+	}
+) : '';
 $saved_hooks          = $hook_delta( $hooks_before_saved, $success_hook_counts() );
 $flat_saved           = $page_id ? ec_save_link_page(
 	PromoterLinkPages::owner_reference( 30 ),
@@ -494,6 +518,12 @@ echo wp_json_encode(
 		'owner'                      => ec_get_stored_link_page_owner_references( $page_id ),
 		'read'                       => ! is_wp_error( $read ) && 30 === $read['promoter']['term_id'],
 		'saved'                      => ! is_wp_error( $saved ) && 'Promoter managed bio.' === $saved['link_page']['bio'],
+		'atomic_patch'               => array(
+			'error'            => is_wp_error( $atomic_patch ) ? $atomic_patch->get_error_code() : '',
+			'section_title'    => is_wp_error( $atomic_patch ) ? '' : $atomic_patch['link_page']['links'][0]['section_title'],
+			'background_color' => is_wp_error( $atomic_patch ) ? '' : $atomic_patch['link_page']['css_vars']['--link-page-background-color'],
+			'revision_changed' => ! is_wp_error( $atomic_patch ) && $atomic_patch['link_page']['revision'] !== $saved['link_page']['revision'],
+		),
 		'stale_save'                 => array(
 			'error' => is_wp_error( $stale_save ) ? $stale_save->get_error_code() : '',
 			'bio'   => $stale_bio,

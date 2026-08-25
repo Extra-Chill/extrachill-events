@@ -213,17 +213,43 @@ $atomic_save_hooks_after  = count(
 		}
 	)
 );
-$stale_bio_before         = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
-$stale_save               = $page_id ? ec_save_link_page(
+$GLOBALS['venue_link_page_fixture']['revoke_on_page_lock'] = static function () use ( $page_id ) {
+	update_post_meta( $page_id, '_link_page_bio_text', 'Concurrent winner' );
+};
+$interleaved       = $page_id ? ( new VenueLinkPageAbilities() )->patch(
+	array(
+		'venue_term_id'     => 30,
+		'expected_revision' => $atomic_patch['link_page']['revision'] ?? '',
+		'links'             => array(
+			array(
+				'id'            => $atomic_patch['link_page']['links'][0]['id'],
+				'section_title' => 'Concurrent loser',
+				'links'         => $atomic_patch['link_page']['links'][0]['links'],
+			),
+		),
+	)
+) : $created;
+$interleaved_bio   = $page_id ? ec_with_link_page_storage_blog(
+	static function () use ( $page_id ) {
+		return get_post_meta( $page_id, '_link_page_bio_text', true );
+	}
+) : '';
+$interleaved_links = $page_id ? ec_with_link_page_storage_blog(
+	static function () use ( $page_id ) {
+		return get_post_meta( $page_id, '_link_page_links', true );
+	}
+) : array();
+$stale_bio_before  = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
+$stale_save        = $page_id ? ec_save_link_page(
 	VenueLinkPages::owner_reference( 30 ),
 	array(
 		'expected_revision' => $read['link_page']['revision'] ?? '',
 		'bio'               => 'Stale overwrite',
 	)
 ) : $created;
-$stale_bio_after          = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
-$analytics                = $page_id ? VenueLinkPages::analytics( 30 ) : $created;
-$caller_after             = get_current_blog_id();
+$stale_bio_after   = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
+$analytics         = $page_id ? VenueLinkPages::analytics( 30 ) : $created;
+$caller_after      = get_current_blog_id();
 
 add_action(
 	'ec_link_page_save',
@@ -370,6 +396,11 @@ echo wp_json_encode(
 			'background_color' => is_wp_error( $atomic_patch ) ? '' : $atomic_patch['link_page']['css_vars']['--link-page-background-color'],
 			'revision_changed' => ! is_wp_error( $atomic_patch ) && $atomic_patch['link_page']['revision'] !== $saved['link_page']['revision'],
 			'save_hook_delta'  => $atomic_save_hooks_after - $atomic_save_hooks_before,
+		),
+		'interleaved'        => array(
+			'error'         => is_wp_error( $interleaved ) ? $interleaved->get_error_code() : '',
+			'bio'           => $interleaved_bio,
+			'section_title' => $interleaved_links[0]['section_title'] ?? '',
 		),
 		'stale_save'         => array(
 			'error'      => is_wp_error( $stale_save ) ? $stale_save->get_error_code() : '',

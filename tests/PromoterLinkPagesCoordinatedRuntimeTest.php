@@ -72,6 +72,10 @@ final class PromoterLinkPagesCoordinatedRuntimeTest extends TestCase {
 		$this->assertSame( array( 'term:7:promoter:30' ), $result['owner'] );
 		$this->assertTrue( $result['read'] );
 		$this->assertTrue( $result['saved'] );
+		$this->assertSame( '', $result['atomic_patch']['error'] );
+		$this->assertSame( 'Promoter Atomic', $result['atomic_patch']['section_title'] );
+		$this->assertSame( '#111111', $result['atomic_patch']['background_color'] );
+		$this->assertTrue( $result['atomic_patch']['revision_changed'] );
 		$this->assertSame( 'promoter_link_page_revision_conflict', $result['stale_save']['error'] );
 		$this->assertSame( 'Promoter managed bio.', $result['stale_save']['bio'] );
 		$this->assertSame( array( 'legacy_save' => 1, 'generic_save' => 1, 'generic_create' => 0 ), $result['saved_hooks'] );

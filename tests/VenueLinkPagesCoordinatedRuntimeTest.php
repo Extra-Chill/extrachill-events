@@ -84,6 +84,9 @@ final class VenueLinkPagesCoordinatedRuntimeTest extends TestCase {
 		$this->assertSame( '#000000', $result['atomic_patch']['background_color'] );
 		$this->assertTrue( $result['atomic_patch']['revision_changed'] );
 		$this->assertSame( 1, $result['atomic_patch']['save_hook_delta'] );
+		$this->assertSame( 'venue_link_page_revision_conflict', $result['interleaved']['error'] );
+		$this->assertSame( 'Concurrent winner', $result['interleaved']['bio'] );
+		$this->assertSame( 'Atomic', $result['interleaved']['section_title'] );
 		$this->assertSame( 'venue_link_page_revision_conflict', $result['stale_save']['error'] );
 		$this->assertSame( $result['stale_save']['bio_before'], $result['stale_save']['bio_after'] );
 		$this->assertTrue( $result['analytics'] );

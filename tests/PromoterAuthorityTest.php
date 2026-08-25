@@ -649,7 +649,14 @@ final class PromoterAuthorityTest extends TestCase {
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 4, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
 
 		unset( $GLOBALS['promoter_test']['feature_access'][3] );
+		$venue_feature_available = $GLOBALS['venue_membership_test']['feature_available'] ?? null;
+		$GLOBALS['venue_membership_test']['feature_available'] = false;
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 3, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
+		if ( null === $venue_feature_available ) {
+			unset( $GLOBALS['venue_membership_test']['feature_available'] );
+		} else {
+			$GLOBALS['venue_membership_test']['feature_available'] = $venue_feature_available;
+		}
 		$GLOBALS['promoter_test']['feature_access'][3] = true;
 		$service->revoke_membership( 2, 100, 3, 1 );
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 3, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
@@ -659,10 +666,17 @@ final class PromoterAuthorityTest extends TestCase {
 		$service = new PromoterAuthorityService();
 		$service->verify( 1, 100, 2 );
 		unset( $GLOBALS['promoter_test']['feature_access'][2] );
+		$venue_feature_available = $GLOBALS['venue_membership_test']['feature_available'] ?? null;
+		$GLOBALS['venue_membership_test']['feature_available'] = false;
 
 		$authorization = new PromoterAuthorization();
 		$this->assertTrue( $authorization->authorize( 2, 100, PromoterAuthorization::ACTION_MANAGE_MEMBERS ) );
 		$this->assertSame( 'promoter_authority_forbidden', $authorization->authorize( 2, 100, PromoterAuthorization::ACTION_ACCESS_PROMOTER )->get_error_code() );
+		if ( null === $venue_feature_available ) {
+			unset( $GLOBALS['venue_membership_test']['feature_available'] );
+		} else {
+			$GLOBALS['venue_membership_test']['feature_available'] = $venue_feature_available;
+		}
 		$created = $service->create_membership( 2, 100, 5, false );
 		$this->assertIsArray( $created );
 		$this->assertSame( 5, $created['user_id'] );
@@ -1095,7 +1109,7 @@ final class PromoterAuthorityTest extends TestCase {
 
 	public function test_workspace_honors_effective_principal_without_treating_selection_as_authority(): void {
 		$this->bootstrap_promoter_workspace_fixtures();
-		$GLOBALS['promoter_test']['current_user_id'] = 1;
+		$this->set_current_user( 1 );
 		$GLOBALS['promoter_link_page_fixture']['principal_user_id'] = 3;
 		$workspace = new PromoterWorkspace();
 
@@ -1151,7 +1165,7 @@ final class PromoterAuthorityTest extends TestCase {
 
 	public function test_administrator_typed_venues_preserve_management_without_synthetic_access(): void {
 		$this->bootstrap_promoter_workspace_fixtures();
-		$GLOBALS['promoter_test']['current_user_id'] = 1;
+		$this->set_current_user( 1 );
 		$workspace = new PromoterWorkspace();
 		$listed    = $workspace->identities();
 		$venues    = array_values( array_filter( $listed['identities'], static function ( $identity ) { return 'venue' === $identity['type']; } ) );
@@ -1170,14 +1184,14 @@ final class PromoterAuthorityTest extends TestCase {
 		$workspace = new PromoterWorkspace();
 
 		foreach ( array( 2, 3 ) as $member_id ) {
-			$GLOBALS['promoter_test']['current_user_id'] = $member_id;
+			$this->set_current_user( $member_id );
 			$result = $workspace->resolve( 'promoter:100' );
 			$this->assertSame( 'active', $result['selection']['state'] );
 			$this->assertSame( array( 200, 201 ), array_column( $result['granted_venues'], 'id' ) );
 			$this->assertSame( array( 'promoter:100' ), array_values( array_filter( array_column( $result['identities'], 'reference' ), static function ( $reference ) { return 0 === strpos( $reference, 'promoter:' ); } ) ) );
 		}
 
-		$GLOBALS['promoter_test']['current_user_id'] = 6;
+		$this->set_current_user( 6 );
 		$result = $workspace->resolve( 'promoter:102' );
 		$this->assertSame( array( 'promoter:102' ), array_column( $result['identities'], 'reference' ) );
 		$this->assertSame( array( 200 ), array_column( $result['granted_venues'], 'id' ) );
@@ -1186,7 +1200,7 @@ final class PromoterAuthorityTest extends TestCase {
 
 	public function test_workspace_direct_venue_owner_sees_all_promoter_relationships(): void {
 		$this->bootstrap_promoter_workspace_fixtures();
-		$GLOBALS['promoter_test']['current_user_id'] = 4;
+		$this->set_current_user( 4 );
 		$result = ( new PromoterWorkspace() )->resolve( 'venue:200' );
 
 		$this->assertSame( 'active', $result['selection']['state'] );
@@ -1197,7 +1211,7 @@ final class PromoterAuthorityTest extends TestCase {
 
 	public function test_workspace_stale_cross_promoter_and_revoked_selections_fail_without_fallback(): void {
 		$this->bootstrap_promoter_workspace_fixtures();
-		$GLOBALS['promoter_test']['current_user_id'] = 3;
+		$this->set_current_user( 3 );
 		$workspace = new PromoterWorkspace();
 		$this->assertSame( 'denied', $workspace->resolve( 'promoter:102' )['selection']['state'] );
 		$this->assertSame( 'stale', $workspace->resolve( 'promoter:999' )['selection']['state'] );
@@ -1279,6 +1293,11 @@ final class PromoterAuthorityTest extends TestCase {
 		$promoters->verify( 1, 102, 6 );
 		$this->seed_venue_owner( 200, 4 );
 		$this->seed_venue_owner( 201, 5 );
+	}
+
+	private function set_current_user( int $user_id ): void {
+		$GLOBALS['promoter_test']['current_user_id']         = $user_id;
+		$GLOBALS['venue_membership_test']['current_user_id'] = $user_id;
 	}
 
 	private function bootstrap_promoter_workspace_fixtures(): void {

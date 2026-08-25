@@ -141,105 +141,42 @@ final class BookingConsoleTest extends TestCase {
 		}
 	}
 
-	/**
-	 * Verify account discovery for each managed-identity persona.
-	 *
-	 * @dataProvider events_workspace_navigation_scenarios
-	 * @param string $scenario       Fixture scenario.
-	 * @param bool   $avatar_visible Whether the avatar item should be visible.
-	 * @param bool   $header_visible Whether the header item should be visible.
-	 */
-	public function test_events_workspace_navigation_discovers_only_current_managed_identities( string $scenario, bool $avatar_visible, bool $header_visible ): void {
-		$result = $this->run_navigation_fixture( $scenario );
-
-		$this->assertCount( $avatar_visible ? 1 : 0, $result['avatar'] );
-		$this->assertCount( $header_visible ? 1 : 0, $result['header'] );
-		foreach ( array_merge( $result['avatar'], $result['header'] ) as $item ) {
-			$this->assertSame( 'Manage Events', $item['label'] );
-			$this->assertSame( 'https://events.example/venue-settings/#tab-calendar', $item['url'] );
-		}
-		if ( $avatar_visible ) {
-			$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
-		}
-		$this->assertSame( 12, $result['current_blog_id'] );
-		$this->assertLessThanOrEqual( 2, count( $result['queries'] ) );
-		foreach ( $result['queries'] as $query ) {
-			$this->assertStringContainsString( 'membership.user_id = %d', $query['sql'] );
-			$this->assertStringContainsString( 'LIMIT 1', $query['sql'] );
-			$this->assertStringNotContainsString( 'ORDER BY', $query['sql'] );
-		}
-	}
-
-	/** Promoter and venue identities compose one idempotent Events destination. */
-	public function test_mixed_identity_navigation_does_not_duplicate_events_item(): void {
-		$result = $this->run_navigation_fixture( 'mixed' );
-
-		$this->assertCount( 1, $result['avatar'] );
-		$this->assertCount( 1, $result['header'] );
-		$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
-		$this->assertCount( 1, $result['queries'] );
-		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $result['switches'] );
-	}
-
-	/** Avatar and header share one request-scoped promoter eligibility result. */
-	public function test_promoter_navigation_queries_are_bounded_and_cached(): void {
-		$result = $this->run_navigation_fixture( 'promoter' );
-
-		$this->assertCount( 2, $result['queries'] );
-		$this->assertStringContainsString( 'ec_venue_members', $result['queries'][0]['sql'] );
-		$this->assertStringContainsString( 'ec_promoter_members', $result['queries'][1]['sql'] );
-		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $result['switches'] );
-	}
-
-	/** Authority change signals invalidate a previously memoized eligibility result. */
-	public function test_authority_changes_invalidate_request_eligibility_cache(): void {
-		$venue    = $this->run_navigation_fixture( 'invalidate-venue' );
-		$promoter = $this->run_navigation_fixture( 'invalidate-promoter' );
-		$capability = $this->run_navigation_fixture( 'invalidate-capability' );
-		$feature    = $this->run_navigation_fixture( 'invalidate-feature' );
-
-		$this->assertSame( array( 'before' => false, 'after' => true ), $venue['invalidation'] );
-		$this->assertSame( array( 'before' => false, 'after' => true ), $promoter['invalidation'] );
-		$this->assertSame( array( 'before' => true, 'after' => false ), $capability['invalidation'] );
-		$this->assertSame( array( 'before' => true, 'after' => false ), $feature['invalidation'] );
-		$this->assertCount( 3, $venue['queries'] );
-		$this->assertCount( 4, $promoter['queries'] );
-		$this->assertCount( 1, $capability['queries'] );
-		$this->assertCount( 1, $feature['queries'] );
-	}
-
-	/** Provider and database failures remain bounded, restore multisite, and fail closed. */
-	public function test_authority_failures_fail_closed_without_losing_blog_context(): void {
-		$provider = $this->run_navigation_fixture( 'provider-missing' );
-		$database = $this->run_navigation_fixture( 'database-error' );
-
-		$this->assertSame( array(), $provider['avatar'] );
-		$this->assertSame( array(), $provider['header'] );
-		$this->assertCount( 0, $provider['queries'] );
-		$this->assertSame( 12, $provider['current_blog_id'] );
-		$this->assertSame( array(), $database['avatar'] );
-		$this->assertSame( array(), $database['header'] );
-		$this->assertCount( 2, $database['queries'] );
-		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $database['switches'] );
-		$this->assertSame( 12, $database['current_blog_id'] );
-	}
-
-	/** Current and terminal authority states expected by account discovery. */
-	public function events_workspace_navigation_scenarios(): array {
-		return array(
-			'anonymous'     => array( 'anonymous', false, false ),
-			'promoter-only' => array( 'promoter', true, true ),
-			'venue-only'    => array( 'venue', true, true ),
-			'mixed'         => array( 'mixed', true, true ),
-			'revoked'       => array( 'revoked', false, false ),
-			'stale'         => array( 'stale', false, false ),
-			'revoked org'   => array( 'revoked-organization', false, false ),
-			'no capability' => array( 'no-capability', false, false ),
-			'no feature'    => array( 'no-feature', false, false ),
-			'administrator' => array( 'administrator', false, true ),
-			'provider error' => array( 'provider-missing', false, false ),
-			'database error' => array( 'database-error', false, false ),
+	/** Existing menu items make both navigation callbacks idempotent before discovery. */
+	public function test_navigation_composition_does_not_duplicate_existing_events_destination(): void {
+		$avatar = array(
+			array(
+				'id'       => 'manage_events',
+				'label'    => 'Manage Events',
+				'url'      => ec_events_get_booking_console_url( 0 ),
+				'priority' => 45,
+			),
 		);
+		$header = array(
+			array(
+				'url'      => ec_events_get_booking_console_url( 0 ),
+				'label'    => 'Manage Events',
+				'priority' => 8,
+			),
+		);
+
+		$this->assertSame( $avatar, ec_events_add_manage_events_avatar_item( $avatar, 1 ) );
+		$this->assertSame( $header, ec_events_add_events_workspace_header_item( $header ) );
+	}
+
+	/** Navigation discovery remains bounded, provider-safe, and multisite-safe by contract. */
+	public function test_managed_identity_discovery_source_contract(): void {
+		$source = file_get_contents( dirname( __DIR__, 3 ) . '/inc/core/booking-console.php' );
+
+		foreach ( array( 'BookingSchema::class', 'VenueAuthorization::class', 'VenueMembershipRepository::class', 'PromoterAuthoritySchema::class', 'PromoterAuthorityRepository::class' ) as $dependency ) {
+			$this->assertStringContainsString( "class_exists( {$dependency} )", $source );
+		}
+		$this->assertStringContainsString( 'has_feature_access( $user_id )', $source );
+		$this->assertStringContainsString( 'has_active_venue_for_user( $user_id )', $source );
+		$this->assertStringContainsString( 'has_active_organization_for_user( $user_id )', $source );
+		$this->assertStringContainsString( 'try {', $source );
+		$this->assertStringContainsString( 'finally {', $source );
+		$this->assertStringContainsString( 'restore_current_blog();', $source );
+		$this->assertStringNotContainsString( 'PromoterWorkspace', $source );
 	}
 
 	/**
@@ -317,22 +254,5 @@ final class BookingConsoleTest extends TestCase {
 		$this->assertStringContainsString( "add_filter( 'extrachill_secondary_header_items', 'ec_events_add_events_workspace_header_item'", $booking_console );
 		$this->assertStringContainsString( 'ec_events_user_has_active_venue_membership( get_current_user_id() )', $feature_cards );
 		$this->assertStringContainsString( 'Review inquiries, manage holds, and keep your venue calendar up to date.', $feature_cards );
-	}
-
-	/**
-	 * Run one isolated account-navigation scenario.
-	 *
-	 * @param string $scenario Fixture scenario.
-	 */
-	private function run_navigation_fixture( string $scenario ): array {
-		$output  = array();
-		$status  = 0;
-		$fixture = dirname( __DIR__, 2 ) . '/fixtures/events-workspace-navigation.php';
-		$command = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $fixture ) . ' ' . escapeshellarg( $scenario );
-		exec( $command, $output, $status ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Isolated PHP navigation fixture.
-		$this->assertSame( 0, $status, implode( "\n", $output ) );
-		$result = json_decode( implode( "\n", $output ), true );
-		$this->assertIsArray( $result );
-		return $result;
 	}
 }

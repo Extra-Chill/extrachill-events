@@ -117,18 +117,12 @@ function ec_events_user_has_managed_identity( int $user_id ): bool {
 	if ( $user_id < 1 || ! function_exists( 'ec_get_blog_id' ) ) {
 		return false;
 	}
-	$eligibility =& ec_events_managed_identity_eligibility_cache();
-	if ( array_key_exists( $user_id, $eligibility ) ) {
-		return $eligibility[ $user_id ];
-	}
 	if ( ! class_exists( BookingSchema::class ) || ! class_exists( VenueAuthorization::class ) || ! class_exists( VenueMembershipRepository::class ) || ! class_exists( PromoterAuthoritySchema::class ) || ! class_exists( PromoterAuthorityRepository::class ) ) {
-		$eligibility[ $user_id ] = false;
-		return $eligibility[ $user_id ];
+		return false;
 	}
 	$events_blog_id = (int) ec_get_blog_id( 'events' );
 	if ( $events_blog_id < 1 ) {
-		$eligibility[ $user_id ] = false;
-		return $eligibility[ $user_id ];
+		return false;
 	}
 
 	$switched = get_current_blog_id() !== $events_blog_id;
@@ -137,40 +131,18 @@ function ec_events_user_has_managed_identity( int $user_id ): bool {
 	}
 	try {
 		if ( ! ( new VenueAuthorization() )->has_feature_access( $user_id ) ) {
-			$eligibility[ $user_id ] = false;
-			return $eligibility[ $user_id ];
+			return false;
 		}
 		if ( BookingSchema::is_ready() && true === ( new VenueMembershipRepository() )->has_active_venue_for_user( $user_id ) ) {
-			$eligibility[ $user_id ] = true;
-			return $eligibility[ $user_id ];
+			return true;
 		}
-		$has_promoter            = PromoterAuthoritySchema::is_ready() && true === ( new PromoterAuthorityRepository() )->has_active_organization_for_user( $user_id );
-		$eligibility[ $user_id ] = $has_promoter;
-		return $eligibility[ $user_id ];
+		return PromoterAuthoritySchema::is_ready() && true === ( new PromoterAuthorityRepository() )->has_active_organization_for_user( $user_id );
 	} finally {
 		if ( $switched ) {
 			restore_current_blog();
 		}
 	}
 }
-
-/** Return the request-scoped managed-identity eligibility memo. */
-function &ec_events_managed_identity_eligibility_cache(): array {
-	static $eligibility = array();
-	return $eligibility;
-}
-
-/** Invalidate navigation discovery after an in-request authority change. */
-function ec_events_invalidate_managed_identity_eligibility(): void {
-	$eligibility =& ec_events_managed_identity_eligibility_cache();
-	$eligibility = array();
-}
-add_action( 'extrachill_events_venue_membership_changed', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
-add_action( 'extrachill_events_promoter_authority_changed', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
-add_action( 'set_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
-add_action( 'add_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
-add_action( 'remove_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
-add_action( 'update_site_option_ec_feature_tier_venue_booking', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
 
 /**
  * Add one Events workspace to the shared avatar menu for active identities.

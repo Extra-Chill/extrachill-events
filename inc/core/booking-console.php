@@ -114,11 +114,15 @@ function ec_events_user_has_active_venue_membership( int $user_id ): bool {
  * @param int $user_id User ID.
  */
 function ec_events_user_has_managed_identity( int $user_id ): bool {
-	static $eligibility = array();
 	if ( $user_id < 1 || ! function_exists( 'ec_get_blog_id' ) ) {
 		return false;
 	}
+	$eligibility =& ec_events_managed_identity_eligibility_cache();
 	if ( array_key_exists( $user_id, $eligibility ) ) {
+		return $eligibility[ $user_id ];
+	}
+	if ( ! class_exists( BookingSchema::class ) || ! class_exists( VenueAuthorization::class ) || ! class_exists( VenueMembershipRepository::class ) || ! class_exists( PromoterAuthoritySchema::class ) || ! class_exists( PromoterAuthorityRepository::class ) ) {
+		$eligibility[ $user_id ] = false;
 		return $eligibility[ $user_id ];
 	}
 	$events_blog_id = (int) ec_get_blog_id( 'events' );
@@ -149,6 +153,24 @@ function ec_events_user_has_managed_identity( int $user_id ): bool {
 		}
 	}
 }
+
+/** Return the request-scoped managed-identity eligibility memo. */
+function &ec_events_managed_identity_eligibility_cache(): array {
+	static $eligibility = array();
+	return $eligibility;
+}
+
+/** Invalidate navigation discovery after an in-request authority change. */
+function ec_events_invalidate_managed_identity_eligibility(): void {
+	$eligibility =& ec_events_managed_identity_eligibility_cache();
+	$eligibility = array();
+}
+add_action( 'extrachill_events_venue_membership_changed', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
+add_action( 'extrachill_events_promoter_authority_changed', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
+add_action( 'set_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
+add_action( 'add_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
+add_action( 'remove_user_role', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
+add_action( 'update_site_option_ec_feature_tier_venue_booking', 'ec_events_invalidate_managed_identity_eligibility', 10, 0 );
 
 /**
  * Add one Events workspace to the shared avatar menu for active identities.

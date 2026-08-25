@@ -112,6 +112,7 @@ class VenueMembershipRepository {
 			return new \WP_Error( 'venue_membership_commit_uncertain', __( 'The venue membership transaction outcome could not be confirmed.', 'extrachill-events' ), array( 'database_error' => $database_error ) );
 		}
 
+		$this->domain_changed( $venue_term_id, $user_id, 'membership_created' );
 		return $this->get( $venue_term_id, $user_id );
 	}
 
@@ -363,7 +364,17 @@ class VenueMembershipRepository {
 			$database_error = $wpdb->last_error;
 			return new \WP_Error( 'venue_membership_commit_uncertain', __( 'The venue membership transaction outcome could not be confirmed.', 'extrachill-events' ), array( 'database_error' => $database_error ) );
 		}
+		$this->domain_changed( $venue_term_id, $user_id, VenueAuthorization::STATUS_REVOKED === $status ? 'membership_revoked' : 'membership_owner_updated' );
 		return $this->get( $venue_term_id, $user_id );
+	}
+
+	/** Emit a privacy-safe domain signal only after a confirmed commit. */
+	private function domain_changed( int $venue_term_id, int $user_id, string $change ): void {
+		try {
+			do_action( 'extrachill_events_venue_membership_changed', $venue_term_id, $user_id, $change );
+		} catch ( \Throwable $throwable ) {
+			error_log( sprintf( 'Extra Chill Events venue membership notification failed for %d (%s): %s', $venue_term_id, $change, get_class( $throwable ) ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- A committed domain notification failure must remain observable.
+		}
 	}
 
 	/** Hydrate rows held under the venue transaction lock. */

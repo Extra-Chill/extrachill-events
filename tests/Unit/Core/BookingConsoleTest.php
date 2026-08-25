@@ -186,9 +186,42 @@ final class BookingConsoleTest extends TestCase {
 		$result = $this->run_navigation_fixture( 'promoter' );
 
 		$this->assertCount( 2, $result['queries'] );
-		$this->assertStringContainsString( 'ec_venue_memberships', $result['queries'][0]['sql'] );
+		$this->assertStringContainsString( 'ec_venue_members', $result['queries'][0]['sql'] );
 		$this->assertStringContainsString( 'ec_promoter_members', $result['queries'][1]['sql'] );
 		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $result['switches'] );
+	}
+
+	/** Authority change signals invalidate a previously memoized eligibility result. */
+	public function test_authority_changes_invalidate_request_eligibility_cache(): void {
+		$venue    = $this->run_navigation_fixture( 'invalidate-venue' );
+		$promoter = $this->run_navigation_fixture( 'invalidate-promoter' );
+		$capability = $this->run_navigation_fixture( 'invalidate-capability' );
+		$feature    = $this->run_navigation_fixture( 'invalidate-feature' );
+
+		$this->assertSame( array( 'before' => false, 'after' => true ), $venue['invalidation'] );
+		$this->assertSame( array( 'before' => false, 'after' => true ), $promoter['invalidation'] );
+		$this->assertSame( array( 'before' => true, 'after' => false ), $capability['invalidation'] );
+		$this->assertSame( array( 'before' => true, 'after' => false ), $feature['invalidation'] );
+		$this->assertCount( 3, $venue['queries'] );
+		$this->assertCount( 4, $promoter['queries'] );
+		$this->assertCount( 1, $capability['queries'] );
+		$this->assertCount( 1, $feature['queries'] );
+	}
+
+	/** Provider and database failures remain bounded, restore multisite, and fail closed. */
+	public function test_authority_failures_fail_closed_without_losing_blog_context(): void {
+		$provider = $this->run_navigation_fixture( 'provider-missing' );
+		$database = $this->run_navigation_fixture( 'database-error' );
+
+		$this->assertSame( array(), $provider['avatar'] );
+		$this->assertSame( array(), $provider['header'] );
+		$this->assertCount( 0, $provider['queries'] );
+		$this->assertSame( 12, $provider['current_blog_id'] );
+		$this->assertSame( array(), $database['avatar'] );
+		$this->assertSame( array(), $database['header'] );
+		$this->assertCount( 2, $database['queries'] );
+		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $database['switches'] );
+		$this->assertSame( 12, $database['current_blog_id'] );
 	}
 
 	/** Current and terminal authority states expected by account discovery. */
@@ -204,6 +237,8 @@ final class BookingConsoleTest extends TestCase {
 			'no capability' => array( 'no-capability', false, false ),
 			'no feature'    => array( 'no-feature', false, false ),
 			'administrator' => array( 'administrator', false, true ),
+			'provider error' => array( 'provider-missing', false, false ),
+			'database error' => array( 'database-error', false, false ),
 		);
 	}
 

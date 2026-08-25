@@ -10,6 +10,7 @@
 namespace {
 	define( 'ABSPATH', __DIR__ . '/' );
 	define( 'ARRAY_A', 'ARRAY_A' );
+	$GLOBALS['events_workspace_scenario'] = $argv[1] ?? 'anonymous';
 
 	final class WP_Error {
 		public function __construct( $code = '', $message = '', $data = null ) {
@@ -34,8 +35,13 @@ namespace {
 				'sql'  => $query,
 				'args' => $this->prepared,
 			);
+			if ( $GLOBALS['events_workspace_navigation']['database_error'] ) {
+				$this->last_error = 'Simulated authority read failure.';
+				return null;
+			}
+			$this->last_error = '';
 			$user_id = (int) ( false !== strpos( $query, 'ec_promoter_members' ) ? $this->prepared[2] : $this->prepared[1] );
-			if ( false !== strpos( $query, 'ec_venue_memberships' ) ) {
+			if ( false !== strpos( $query, 'ec_venue_members' ) ) {
 				foreach ( $GLOBALS['events_workspace_navigation']['venue_memberships'] as $membership ) {
 					if ( $user_id === $membership['user_id'] && 'active' === $membership['status'] && 'venue' === ( $GLOBALS['events_workspace_navigation']['terms'][ $membership['venue_term_id'] ] ?? '' ) ) {
 						return '1';
@@ -60,19 +66,21 @@ namespace ExtraChillEvents\Core {
 			return true;
 		}
 		public static function memberships_table(): string {
-			return 'wp_7_ec_venue_memberships';
+			return 'wp_7_ec_venue_members';
 		}
 	}
 
-	final class PromoterAuthoritySchema {
-		public static function is_ready(): bool {
-			return true;
-		}
-		public static function memberships_table(): string {
-			return 'wp_7_ec_promoter_members';
-		}
-		public static function organizations_table(): string {
-			return 'wp_7_ec_promoter_organizations';
+	if ( 'provider-missing' !== $GLOBALS['events_workspace_scenario'] ) {
+		final class PromoterAuthoritySchema {
+			public static function is_ready(): bool {
+				return true;
+			}
+			public static function memberships_table(): string {
+				return 'wp_7_ec_promoter_members';
+			}
+			public static function organizations_table(): string {
+				return 'wp_7_ec_promoter_organizations';
+			}
 		}
 	}
 }
@@ -85,6 +93,7 @@ namespace {
 		'admin'                  => false,
 		'capability'             => true,
 		'feature'                => true,
+		'database_error'         => false,
 		'venue_memberships'      => array(),
 		'promoter_memberships'   => array(),
 		'organizations'          => array(),
@@ -93,8 +102,20 @@ namespace {
 	);
 	$GLOBALS['wpdb'] = new EventsWorkspaceNavigationDatabase();
 
-	function add_filter() {}
-	function add_action() {}
+	$GLOBALS['events_workspace_actions'] = array();
+	function add_filter( $hook, $callback, $priority = 10, $accepted_args = 1 ) {
+		$GLOBALS['events_workspace_actions'][ $hook ][ $priority ][] = array( $callback, $accepted_args );
+	}
+	function add_action( $hook, $callback, $priority = 10, $accepted_args = 1 ) {
+		add_filter( $hook, $callback, $priority, $accepted_args );
+	}
+	function do_action( $hook, ...$args ): void {
+		foreach ( $GLOBALS['events_workspace_actions'][ $hook ] ?? array() as $callbacks ) {
+			foreach ( $callbacks as $callback ) {
+				call_user_func_array( $callback[0], array_slice( $args, 0, $callback[1] ) );
+			}
+		}
+	}
 	function __( $text ) {
 		return $text;
 	}
@@ -141,13 +162,13 @@ namespace {
 		return 'venue_booking' === $feature && 9 === (int) $user_id && $GLOBALS['events_workspace_navigation']['feature'];
 	}
 
-	$scenario = $argv[1] ?? 'anonymous';
+	$scenario = $GLOBALS['events_workspace_scenario'];
 	if ( 'promoter' === $scenario || 'mixed' === $scenario ) {
 		$GLOBALS['events_workspace_navigation']['promoter_memberships'][] = array( 'promoter_term_id' => 30, 'user_id' => 9, 'status' => 'active' );
 		$GLOBALS['events_workspace_navigation']['organizations'][30]      = 'active';
 		$GLOBALS['events_workspace_navigation']['terms'][30]              = 'promoter';
 	}
-	if ( 'venue' === $scenario || 'mixed' === $scenario || 'no-capability' === $scenario || 'no-feature' === $scenario ) {
+	if ( 'venue' === $scenario || 'mixed' === $scenario || 'no-capability' === $scenario || 'no-feature' === $scenario || 'invalidate-capability' === $scenario || 'invalidate-feature' === $scenario ) {
 		$GLOBALS['events_workspace_navigation']['venue_memberships'][] = array( 'venue_term_id' => 40, 'user_id' => 9, 'status' => 'active' );
 		$GLOBALS['events_workspace_navigation']['terms'][40]           = 'venue';
 	}
@@ -166,6 +187,8 @@ namespace {
 		$GLOBALS['events_workspace_navigation']['terms'][30]              = 'promoter';
 	} elseif ( 'administrator' === $scenario ) {
 		$GLOBALS['events_workspace_navigation']['admin'] = true;
+	} elseif ( 'database-error' === $scenario ) {
+		$GLOBALS['events_workspace_navigation']['database_error'] = true;
 	} elseif ( 'no-capability' === $scenario ) {
 		$GLOBALS['events_workspace_navigation']['capability'] = false;
 	} elseif ( 'no-feature' === $scenario ) {
@@ -174,13 +197,39 @@ namespace {
 		$GLOBALS['events_workspace_navigation']['logged_in'] = false;
 	}
 
-	require dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
-	require dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
-	require dirname( __DIR__, 2 ) . '/inc/Core/PromoterAuthorityRepository.php';
+	if ( 'provider-missing' !== $scenario ) {
+		require dirname( __DIR__, 2 ) . '/inc/Core/VenueMembershipRepository.php';
+		require dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
+		require dirname( __DIR__, 2 ) . '/inc/Core/PromoterAuthorityRepository.php';
+	}
 	require dirname( __DIR__, 2 ) . '/inc/core/booking-console.php';
 
 	$avatar = ec_events_add_manage_events_avatar_item( array(), get_current_user_id() );
 	$header = ec_events_add_events_workspace_header_item( array() );
+	$avatar = ec_events_add_manage_events_avatar_item( $avatar, get_current_user_id() );
+	$header = ec_events_add_events_workspace_header_item( $header );
+
+	$invalidation = null;
+	if ( in_array( $scenario, array( 'invalidate-venue', 'invalidate-promoter', 'invalidate-capability', 'invalidate-feature' ), true ) ) {
+		$before = ec_events_user_has_managed_identity( 9 );
+		if ( 'invalidate-venue' === $scenario ) {
+			$GLOBALS['events_workspace_navigation']['venue_memberships'][] = array( 'venue_term_id' => 40, 'user_id' => 9, 'status' => 'active' );
+			$GLOBALS['events_workspace_navigation']['terms'][40]           = 'venue';
+			do_action( 'extrachill_events_venue_membership_changed', 40, 9, 'membership_created' );
+		} elseif ( 'invalidate-promoter' === $scenario ) {
+			$GLOBALS['events_workspace_navigation']['promoter_memberships'][] = array( 'promoter_term_id' => 30, 'user_id' => 9, 'status' => 'active' );
+			$GLOBALS['events_workspace_navigation']['organizations'][30]      = 'active';
+			$GLOBALS['events_workspace_navigation']['terms'][30]              = 'promoter';
+			do_action( 'extrachill_events_promoter_authority_changed', 30, 'membership_created' );
+		} elseif ( 'invalidate-capability' === $scenario ) {
+			$GLOBALS['events_workspace_navigation']['capability'] = false;
+			do_action( 'set_user_role', 9, 'subscriber', array( 'extra_chill_team' ) );
+		} else {
+			$GLOBALS['events_workspace_navigation']['feature'] = false;
+			do_action( 'update_site_option_ec_feature_tier_venue_booking', 'team', 'admin', 'ec_feature_tier_venue_booking' );
+		}
+		$invalidation = array( 'before' => $before, 'after' => ec_events_user_has_managed_identity( 9 ) );
+	}
 
 	echo json_encode(
 		array(
@@ -189,6 +238,7 @@ namespace {
 			'queries'         => $GLOBALS['wpdb']->queries,
 			'switches'        => $GLOBALS['events_workspace_navigation']['switches'],
 			'current_blog_id' => $GLOBALS['events_workspace_navigation']['current_blog_id'],
+			'invalidation'    => $invalidation,
 		)
 	);
 }

@@ -160,10 +160,14 @@ final class BookingConsoleTest extends TestCase {
 		}
 		if ( $avatar_visible ) {
 			$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
-			$this->assertFalse( $result['uses_principal'] );
-			$this->assertNotEmpty( $result['queried_users'] );
 		}
-		$this->assertSame( 1, $result['current_blog_id'] );
+		$this->assertSame( 12, $result['current_blog_id'] );
+		$this->assertLessThanOrEqual( 2, count( $result['queries'] ) );
+		foreach ( $result['queries'] as $query ) {
+			$this->assertStringContainsString( 'membership.user_id = %d', $query['sql'] );
+			$this->assertStringContainsString( 'LIMIT 1', $query['sql'] );
+			$this->assertStringNotContainsString( 'ORDER BY', $query['sql'] );
+		}
 	}
 
 	/** Promoter and venue identities compose one idempotent Events destination. */
@@ -173,7 +177,18 @@ final class BookingConsoleTest extends TestCase {
 		$this->assertCount( 1, $result['avatar'] );
 		$this->assertCount( 1, $result['header'] );
 		$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
-		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 1 ), array( 'to', 7 ), array( 'restore', 1 ) ), $result['switches'] );
+		$this->assertCount( 1, $result['queries'] );
+		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $result['switches'] );
+	}
+
+	/** Avatar and header share one request-scoped promoter eligibility result. */
+	public function test_promoter_navigation_queries_are_bounded_and_cached(): void {
+		$result = $this->run_navigation_fixture( 'promoter' );
+
+		$this->assertCount( 2, $result['queries'] );
+		$this->assertStringContainsString( 'ec_venue_memberships', $result['queries'][0]['sql'] );
+		$this->assertStringContainsString( 'ec_promoter_members', $result['queries'][1]['sql'] );
+		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 12 ) ), $result['switches'] );
 	}
 
 	/** Current and terminal authority states expected by account discovery. */
@@ -185,6 +200,9 @@ final class BookingConsoleTest extends TestCase {
 			'mixed'         => array( 'mixed', true, true ),
 			'revoked'       => array( 'revoked', false, false ),
 			'stale'         => array( 'stale', false, false ),
+			'revoked org'   => array( 'revoked-organization', false, false ),
+			'no capability' => array( 'no-capability', false, false ),
+			'no feature'    => array( 'no-feature', false, false ),
 			'administrator' => array( 'administrator', false, true ),
 		);
 	}

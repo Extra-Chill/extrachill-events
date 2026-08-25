@@ -6,8 +6,10 @@
  */
 
 use ExtraChillEvents\Core\BookingSchema;
-use ExtraChillEvents\Core\PromoterWorkspace;
+use ExtraChillEvents\Core\PromoterAuthorityRepository;
+use ExtraChillEvents\Core\PromoterAuthoritySchema;
 use ExtraChillEvents\Core\VenueAuthorization;
+use ExtraChillEvents\Core\VenueMembershipRepository;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -112,12 +114,17 @@ function ec_events_user_has_active_venue_membership( int $user_id ): bool {
  * @param int $user_id User ID.
  */
 function ec_events_user_has_managed_identity( int $user_id ): bool {
-	if ( $user_id < 1 || ! function_exists( 'ec_get_blog_id' ) || ! class_exists( PromoterWorkspace::class ) ) {
+	static $eligibility = array();
+	if ( $user_id < 1 || ! function_exists( 'ec_get_blog_id' ) ) {
 		return false;
+	}
+	if ( array_key_exists( $user_id, $eligibility ) ) {
+		return $eligibility[ $user_id ];
 	}
 	$events_blog_id = (int) ec_get_blog_id( 'events' );
 	if ( $events_blog_id < 1 ) {
-		return false;
+		$eligibility[ $user_id ] = false;
+		return $eligibility[ $user_id ];
 	}
 
 	$switched = get_current_blog_id() !== $events_blog_id;
@@ -125,8 +132,17 @@ function ec_events_user_has_managed_identity( int $user_id ): bool {
 		switch_to_blog( $events_blog_id );
 	}
 	try {
-		$workspace = ( new PromoterWorkspace( null, null, null, false ) )->identities_for_user( $user_id );
-		return is_array( $workspace ) && ! empty( $workspace['identities'] );
+		if ( ! ( new VenueAuthorization() )->has_feature_access( $user_id ) ) {
+			$eligibility[ $user_id ] = false;
+			return $eligibility[ $user_id ];
+		}
+		if ( BookingSchema::is_ready() && true === ( new VenueMembershipRepository() )->has_active_venue_for_user( $user_id ) ) {
+			$eligibility[ $user_id ] = true;
+			return $eligibility[ $user_id ];
+		}
+		$has_promoter            = PromoterAuthoritySchema::is_ready() && true === ( new PromoterAuthorityRepository() )->has_active_organization_for_user( $user_id );
+		$eligibility[ $user_id ] = $has_promoter;
+		return $eligibility[ $user_id ];
 	} finally {
 		if ( $switched ) {
 			restore_current_blog();

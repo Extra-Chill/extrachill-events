@@ -271,8 +271,8 @@ $hooks_before_winner  = $success_hook_counts();
 $winner               = PromoterLinkPages::provision( 30 );
 $winner_hooks         = $hook_delta( $hooks_before_winner, $success_hook_counts() );
 $read                 = $page_id ? ec_read_link_page( PromoterLinkPages::owner_reference( 30 ) ) : $created;
-$hooks_before_saved   = $success_hook_counts();
 $saved                = $page_id ? ec_save_link_page( PromoterLinkPages::owner_reference( 30 ), array( 'bio' => 'Promoter managed bio.' ) ) : $created;
+$hooks_before_saved   = $success_hook_counts();
 $atomic_patch         = $page_id ? $ability_registrar->patch(
 	array(
 		'promoter_term_id'  => 30,

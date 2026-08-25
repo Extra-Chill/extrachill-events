@@ -195,8 +195,8 @@ final class PromoterLinkPages {
 				if ( is_wp_error( $provisioned ) ) {
 					return $provisioned;
 				}
-				$link_page_id = (int) $provisioned['link_page_id'];
-				$created      = ! empty( $provisioned['created'] );
+				$link_page_id        = (int) $provisioned['link_page_id'];
+				$created             = ! empty( $provisioned['created'] );
 				$response            = self::compose_response( ec_read_link_page_persistence( $link_page_id ), $snapshot );
 				$response['created'] = $created;
 				return $response;

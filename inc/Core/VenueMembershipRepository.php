@@ -251,7 +251,7 @@ class VenueMembershipRepository {
 		foreach ( array( 'id', 'venue_term_id', 'user_id', 'version', 'created_by_user_id' ) as $field ) {
 			$row[ $field ] = (int) $row[ $field ];
 		}
-		$row['is_owner']   = (bool) (int) ( $row['is_owner'] ?? 0 );
+		$row['is_owner']   = (bool) (int) $row['is_owner'];
 		$row['revoked_at'] = empty( $row['revoked_at'] ) ? null : (string) $row['revoked_at'];
 		return $row;
 	}

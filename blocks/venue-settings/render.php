@@ -23,7 +23,7 @@ $wrapper_attributes = get_block_wrapper_attributes(
 
 // phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only venue selection; Ability authorization remains authoritative.
 $requested_venue_id         = isset( $_GET['venue_id'] ) && is_scalar( $_GET['venue_id'] ) ? absint( wp_unslash( $_GET['venue_id'] ) ) : 0;
-$requested_identity         = isset( $_GET['identity'] ) && is_scalar( $_GET['identity'] ) ? sanitize_text_field( wp_unslash( $_GET['identity'] ) ) : '';
+$requested_identity         = isset( $_GET['identity'] ) && is_scalar( $_GET['identity'] ) ? sanitize_text_field( (string) wp_unslash( $_GET['identity'] ) ) : '';
 $requested_booking_id       = isset( $_GET['booking_id'] ) && is_scalar( $_GET['booking_id'] ) ? absint( wp_unslash( $_GET['booking_id'] ) ) : 0;
 $requested_booking_venue_id = isset( $_GET['booking_venue_id'] ) && is_scalar( $_GET['booking_venue_id'] ) ? absint( wp_unslash( $_GET['booking_venue_id'] ) ) : 0;
 // phpcs:enable WordPress.Security.NonceVerification.Recommended

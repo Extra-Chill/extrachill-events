@@ -95,8 +95,8 @@ final class BookingConsoleTest extends TestCase {
 		);
 	}
 
-	/** Ensure administrators receive one canonical venue workspace link. */
-	public function test_administrator_receives_one_manage_venue_header_action(): void {
+	/** Ensure administrators retain one canonical Events workspace link. */
+	public function test_administrator_receives_one_manage_events_header_action(): void {
 		$previous_user_id = get_current_user_id();
 		$test_user_id     = 0;
 		$events_blog_id   = (int) ec_get_blog_id( 'events' );
@@ -122,11 +122,11 @@ final class BookingConsoleTest extends TestCase {
 				array(
 					array(
 						'url'      => ec_events_get_booking_console_url( 0 ),
-						'label'    => 'Manage Venue',
+						'label'    => 'Manage Events',
 						'priority' => 8,
 					),
 				),
-				ec_events_add_venue_workspace_header_item( array() )
+				ec_events_add_events_workspace_header_item( array() )
 			);
 		} finally {
 			if ( $test_user_id > 0 ) {
@@ -139,6 +139,54 @@ final class BookingConsoleTest extends TestCase {
 				restore_current_blog();
 			}
 		}
+	}
+
+	/**
+	 * Verify account discovery for each managed-identity persona.
+	 *
+	 * @dataProvider events_workspace_navigation_scenarios
+	 * @param string $scenario       Fixture scenario.
+	 * @param bool   $avatar_visible Whether the avatar item should be visible.
+	 * @param bool   $header_visible Whether the header item should be visible.
+	 */
+	public function test_events_workspace_navigation_discovers_only_current_managed_identities( string $scenario, bool $avatar_visible, bool $header_visible ): void {
+		$result = $this->run_navigation_fixture( $scenario );
+
+		$this->assertCount( $avatar_visible ? 1 : 0, $result['avatar'] );
+		$this->assertCount( $header_visible ? 1 : 0, $result['header'] );
+		foreach ( array_merge( $result['avatar'], $result['header'] ) as $item ) {
+			$this->assertSame( 'Manage Events', $item['label'] );
+			$this->assertSame( 'https://events.example/venue-settings/#tab-calendar', $item['url'] );
+		}
+		if ( $avatar_visible ) {
+			$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
+			$this->assertFalse( $result['uses_principal'] );
+			$this->assertNotEmpty( $result['queried_users'] );
+		}
+		$this->assertSame( 1, $result['current_blog_id'] );
+	}
+
+	/** Promoter and venue identities compose one idempotent Events destination. */
+	public function test_mixed_identity_navigation_does_not_duplicate_events_item(): void {
+		$result = $this->run_navigation_fixture( 'mixed' );
+
+		$this->assertCount( 1, $result['avatar'] );
+		$this->assertCount( 1, $result['header'] );
+		$this->assertSame( 'manage_events', $result['avatar'][0]['id'] );
+		$this->assertSame( array( array( 'to', 7 ), array( 'restore', 1 ), array( 'to', 7 ), array( 'restore', 1 ) ), $result['switches'] );
+	}
+
+	/** Current and terminal authority states expected by account discovery. */
+	public function events_workspace_navigation_scenarios(): array {
+		return array(
+			'anonymous'     => array( 'anonymous', false, false ),
+			'promoter-only' => array( 'promoter', true, true ),
+			'venue-only'    => array( 'venue', true, true ),
+			'mixed'         => array( 'mixed', true, true ),
+			'revoked'       => array( 'revoked', false, false ),
+			'stale'         => array( 'stale', false, false ),
+			'administrator' => array( 'administrator', false, true ),
+		);
 	}
 
 	/**
@@ -212,9 +260,26 @@ final class BookingConsoleTest extends TestCase {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reading local source contracts.
 		$feature_cards = file_get_contents( $plugin_root . '/inc/home/feature-cards.php' );
 
-		$this->assertStringContainsString( "add_filter( 'ec_avatar_menu_items', 'ec_events_add_manage_venue_avatar_item'", $booking_console );
-		$this->assertStringContainsString( "add_filter( 'extrachill_secondary_header_items', 'ec_events_add_venue_workspace_header_item'", $booking_console );
+		$this->assertStringContainsString( "add_filter( 'ec_avatar_menu_items', 'ec_events_add_manage_events_avatar_item'", $booking_console );
+		$this->assertStringContainsString( "add_filter( 'extrachill_secondary_header_items', 'ec_events_add_events_workspace_header_item'", $booking_console );
 		$this->assertStringContainsString( 'ec_events_user_has_active_venue_membership( get_current_user_id() )', $feature_cards );
 		$this->assertStringContainsString( 'Review inquiries, manage holds, and keep your venue calendar up to date.', $feature_cards );
+	}
+
+	/**
+	 * Run one isolated account-navigation scenario.
+	 *
+	 * @param string $scenario Fixture scenario.
+	 */
+	private function run_navigation_fixture( string $scenario ): array {
+		$output  = array();
+		$status  = 0;
+		$fixture = dirname( __DIR__, 2 ) . '/fixtures/events-workspace-navigation.php';
+		$command = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( $fixture ) . ' ' . escapeshellarg( $scenario );
+		exec( $command, $output, $status ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- Isolated PHP navigation fixture.
+		$this->assertSame( 0, $status, implode( "\n", $output ) );
+		$result = json_decode( implode( "\n", $output ), true );
+		$this->assertIsArray( $result );
+		return $result;
 	}
 }

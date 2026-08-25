@@ -55,6 +55,7 @@ const documentResponse = ( type ) => ( {
 		bio: '',
 		background_image_id: 0,
 		background_image_url: '',
+		revision: 'a'.repeat( 64 ),
 	},
 } );
 
@@ -71,6 +72,9 @@ describe( 'managed identity workspace', () => {
 		runAbility.mockReset();
 		window.ecLinkPageEditorAdapters = {};
 		window.ExtraChillLinkPageEditor = {
+			registerAdapter: jest.fn( ( name, adapter ) => {
+				window.ecLinkPageEditorAdapters[ name ] = adapter;
+			} ),
 			mount: jest.fn( ( target, configuration ) => {
 				mounted = { target, configuration };
 				return jest.fn();
@@ -129,20 +133,56 @@ describe( 'managed identity workspace', () => {
 				`extrachill/get-${ type }-link-page`,
 				{ [ `${ type }_term_id` ]: 10 }
 			);
-			await adapter.save( 10, {
-				page: {
-					links: [],
-					styles: {},
-					settings: {},
-					bio: '',
-					backgroundImageId: 0,
+			runAbility.mockClear();
+			await adapter.save(
+				10,
+				{
+					page: {
+						links: [],
+						styles: { '--link-page-background-color': '#000000' },
+						settings: { redirect_enabled: false },
+						backgroundImageId: 0,
+					},
 				},
-			} );
+				{ dirtyAreas: [ 'styles' ] }
+			);
+			expect( runAbility ).toHaveBeenCalledWith(
+				`extrachill/save-${ type }-link-page-styles`,
+				expect.objectContaining( {
+					css_vars: { '--link-page-background-color': '#000000' },
+				} )
+			);
+			expect(
+				runAbility.mock.calls.some(
+					( [ name ] ) =>
+						name === `extrachill/save-${ type }-link-page`
+				)
+			).toBe( false );
+			await adapter.save(
+				10,
+				{
+					page: {
+						links: [],
+						styles: {},
+						settings: {},
+						bio: '',
+						backgroundImageId: 0,
+					},
+				},
+				{ dirtyAreas: [ 'links' ] }
+			);
 			expect( runAbility ).toHaveBeenLastCalledWith(
-				`extrachill/save-${ type }-link-page`,
+				`extrachill/save-${ type }-link-page-links`,
 				expect.objectContaining( {
 					[ `${ type }_term_id` ]: 10,
 					links: [],
+				} )
+			);
+			expect( mounted.configuration.capabilities ).toEqual(
+				expect.objectContaining( {
+					identity: false,
+					bio: false,
+					socials: false,
 				} )
 			);
 			adapter.onDirtyChange( true );
@@ -150,6 +190,29 @@ describe( 'managed identity workspace', () => {
 			await act( async () => root.unmount() );
 		}
 	);
+
+	it( 'waits for either script order then fails closed after a bounded timeout', async () => {
+		jest.useFakeTimers();
+		delete window.ExtraChillLinkPageEditor;
+		const { container, root } = await render(
+			<SharedLinkPageEditor
+				identityType="venue"
+				identityId={ 10 }
+				identityName="Example identity"
+				initialStatus="available"
+			/>
+		);
+		expect( container.textContent ).toContain( 'Loading Link Page editor' );
+		await act( async () => {
+			jest.advanceTimersByTime( 3100 );
+			await Promise.resolve();
+		} );
+		expect( container.textContent ).toContain(
+			'Link Page management is unavailable'
+		);
+		await act( async () => root.unmount() );
+		jest.useRealTimers();
+	} );
 
 	it( 'keeps restricted workspace resources out of promoter mode', async () => {
 		const { container, root } = await render(

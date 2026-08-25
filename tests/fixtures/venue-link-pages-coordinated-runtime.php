@@ -181,8 +181,31 @@ $saved        = $page_id ? ec_save_link_page(
 		),
 	)
 ) : $created;
+$stale_bio_before = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
+$stale_save       = $page_id ? ec_save_link_page(
+	VenueLinkPages::owner_reference( 30 ),
+	array(
+		'expected_revision' => $read['link_page']['revision'] ?? '',
+		'bio'               => 'Stale overwrite',
+	)
+) : $created;
+$stale_bio_after  = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
 $analytics    = $page_id ? VenueLinkPages::analytics( 30 ) : $created;
 $caller_after = get_current_blog_id();
+
+add_action(
+	'ec_link_page_save',
+	static function () {
+		if ( ! empty( $GLOBALS['venue_link_page_fixture']['throw_final_hook'] ) ) {
+			throw new RuntimeException( 'Final hook failed.' );
+		}
+	}
+);
+$final_hook_bio_before                                  = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
+$GLOBALS['venue_link_page_fixture']['throw_final_hook'] = true;
+$final_hook_failure                                     = $page_id ? ec_save_link_page( VenueLinkPages::owner_reference( 30 ), array( 'bio' => 'Must compensate final hook' ) ) : $created;
+$GLOBALS['venue_link_page_fixture']['throw_final_hook'] = false;
+$final_hook_bio_after                                   = $page_id ? get_post_meta( $page_id, '_link_page_bio_text', true ) : '';
 
 restore_current_blog();
 ec_create_owned_link_page( 'term:7:place:90', 'Collision One', 'other-venue' );
@@ -309,6 +332,11 @@ echo wp_json_encode(
 		'slug'            => $page_id ? get_post_field( 'post_name', $page_id ) : '',
 		'read'            => ! is_wp_error( $read ) && 30 === $read['venue']['term_id'],
 		'saved'           => ! is_wp_error( $saved ) && 'Calendar' === $saved['link_page']['links'][0]['links'][0]['link_text'],
+		'stale_save'      => array(
+			'error'      => is_wp_error( $stale_save ) ? $stale_save->get_error_code() : '',
+			'bio_before' => $stale_bio_before,
+			'bio_after'  => $stale_bio_after,
+		),
 		'analytics'       => ! is_wp_error( $analytics ) && 12 === $analytics['summary']['total_views'],
 		'analytics_blog'  => $GLOBALS['venue_link_page_fixture']['analytics_blog'] ?? 0,
 		'denied'          => is_wp_error( $denied ) ? $denied->get_error_code() : '',
@@ -319,6 +347,11 @@ echo wp_json_encode(
 			'bio'         => $bio_after_failure,
 			'final_delta' => $final_after_failure - $final_before_failure,
 			'cache_delta' => $cache_after_failure - $cache_before_failure,
+		),
+		'final_hook_failure' => array(
+			'error'      => is_wp_error( $final_hook_failure ) ? $final_hook_failure->get_error_code() : '',
+			'bio_before' => $final_hook_bio_before,
+			'bio_after'  => $final_hook_bio_after,
 		),
 		'refresh'         => array(
 			'version' => is_wp_error( $refreshed ) ? $refreshed->get_error_code() : $refreshed['venue']['snapshot']['source']['version'],

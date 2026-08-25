@@ -41,23 +41,36 @@ final class PromoterLinkPageAbilities {
 	public function register(): void {
 		$this->register_management( 'extrachill/provision-promoter-link-page', __( 'Provision Promoter Link Page', 'extrachill-events' ), array(), array( $this, 'provision' ), false, true );
 		$this->register_management( 'extrachill/get-promoter-link-page', __( 'Get Promoter Link Page', 'extrachill-events' ), array(), array( $this, 'get' ), true, true );
-		$this->register_management( 'extrachill/save-promoter-link-page-links', __( 'Save Promoter Link Page Links', 'extrachill-events' ), array( 'links' => $this->links_input_schema() ), array( $this, 'save_links' ), false, false );
-		$this->register_management( 'extrachill/save-promoter-link-page-styles', __( 'Save Promoter Link Page Styles', 'extrachill-events' ), array( 'css_vars' => $this->styles_schema() ), array( $this, 'save_styles' ), false, false );
-		$this->register_management( 'extrachill/save-promoter-link-page-settings', __( 'Save Promoter Link Page Settings', 'extrachill-events' ), array( 'settings' => $this->settings_schema() ), array( $this, 'save_settings' ), false, false );
 		$this->register_management(
-			'extrachill/save-promoter-link-page',
-			__( 'Save Promoter Link Page', 'extrachill-events' ),
+			'extrachill/save-promoter-link-page-links',
+			__( 'Save Promoter Link Page Links', 'extrachill-events' ),
 			array(
-				'links'               => $this->links_input_schema(),
-				'css_vars'            => $this->styles_schema(),
-				'settings'            => $this->settings_schema(),
-				'bio'                 => array( 'type' => 'string' ),
-				'background_image_id' => array(
-					'type'    => 'integer',
-					'minimum' => 0,
-				),
+				'links'             => $this->links_input_schema(),
+				'expected_revision' => $this->revision_schema(),
 			),
-			array( $this, 'save_document' ),
+			array( $this, 'save_links' ),
+			false,
+			false
+		);
+		$this->register_management(
+			'extrachill/save-promoter-link-page-styles',
+			__( 'Save Promoter Link Page Styles', 'extrachill-events' ),
+			array(
+				'css_vars'          => $this->styles_schema(),
+				'expected_revision' => $this->revision_schema(),
+			),
+			array( $this, 'save_styles' ),
+			false,
+			false
+		);
+		$this->register_management(
+			'extrachill/save-promoter-link-page-settings',
+			__( 'Save Promoter Link Page Settings', 'extrachill-events' ),
+			array(
+				'settings'          => $this->settings_schema(),
+				'expected_revision' => $this->revision_schema(),
+			),
+			array( $this, 'save_settings' ),
 			false,
 			false
 		);
@@ -134,7 +147,7 @@ final class PromoterLinkPageAbilities {
 			$properties
 		);
 		$required   = array( 'promoter_term_id' );
-		foreach ( array( 'links', 'css_vars', 'settings', 'bio', 'background_image_id' ) as $field ) {
+		foreach ( array( 'links', 'css_vars', 'settings', 'expected_revision' ) as $field ) {
 			if ( isset( $properties[ $field ] ) ) {
 				$required[] = $field;
 			}
@@ -209,7 +222,13 @@ final class PromoterLinkPageAbilities {
 		if ( true !== $valid ) {
 			return $valid;
 		}
-		return $this->save( $input, array( 'links' => $input['links'] ) );
+		return $this->save(
+			$input,
+			array(
+				'links'             => $input['links'],
+				'expected_revision' => $input['expected_revision'],
+			)
+		);
 	}
 
 	/**
@@ -218,7 +237,13 @@ final class PromoterLinkPageAbilities {
 	 * @param array $input Ability input.
 	 */
 	public function save_styles( array $input ) {
-		return $this->save( $input, array( 'css_vars' => $input['css_vars'] ) );
+		return $this->save(
+			$input,
+			array(
+				'css_vars'          => $input['css_vars'],
+				'expected_revision' => $input['expected_revision'],
+			)
+		);
 	}
 
 	/**
@@ -227,31 +252,7 @@ final class PromoterLinkPageAbilities {
 	 * @param array $input Ability input.
 	 */
 	public function save_settings( array $input ) {
-		return $this->save( $input, $input['settings'] );
-	}
-
-	/**
-	 * Save the portable editor document through one authorized mutation.
-	 *
-	 * @param array $input Ability input.
-	 */
-	public function save_document( array $input ) {
-		$valid = $this->validate_links( $input['links'] ?? null );
-		if ( true !== $valid ) {
-			return $valid;
-		}
-		return $this->save(
-			$input,
-			array_merge(
-				$input['settings'],
-				array(
-					'links'               => $input['links'],
-					'css_vars'            => $input['css_vars'],
-					'bio'                 => $input['bio'],
-					'background_image_id' => $input['background_image_id'],
-				)
-			)
-		);
+		return $this->save( $input, array_merge( $input['settings'], array( 'expected_revision' => $input['expected_revision'] ) ) );
 	}
 
 	/**
@@ -435,6 +436,16 @@ final class PromoterLinkPageAbilities {
 		);
 	}
 
+	/** Closed optimistic concurrency token. */
+	private function revision_schema(): array {
+		return array(
+			'type'      => 'string',
+			'minLength' => 64,
+			'maxLength' => 64,
+			'pattern'   => '^[a-f0-9]{64}$',
+		);
+	}
+
 	/** Closed composed management response. */
 	private function document_schema(): array {
 		$link                           = $this->link_schema( true );
@@ -555,8 +566,9 @@ final class PromoterLinkPageAbilities {
 						'background_image_id'  => array( 'type' => 'integer' ),
 						'background_image_url' => array( 'type' => 'string' ),
 						'public_url'           => array( 'type' => 'string' ),
+						'revision'             => $this->revision_schema(),
 					),
-					'required'             => array( 'link_page_id', 'css_vars', 'links', 'link_sections', 'bio', 'settings', 'background_image_id', 'background_image_url', 'public_url' ),
+					'required'             => array( 'link_page_id', 'css_vars', 'links', 'link_sections', 'bio', 'settings', 'background_image_id', 'background_image_url', 'public_url', 'revision' ),
 					'additionalProperties' => false,
 				),
 			),

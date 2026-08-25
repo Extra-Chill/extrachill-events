@@ -1,7 +1,7 @@
 /**
  * WordPress dependencies
  */
-import { useEffect } from '@wordpress/element';
+import { useEffect, useRef, useState } from '@wordpress/element';
 
 /**
  * External dependencies
@@ -28,11 +28,19 @@ export function SharedLinkPageEditor( {
 	onDirtyChange,
 } ) {
 	const dirtyChange = onDirtyChange || noop;
+	const dirtyChangeRef = useRef( dirtyChange );
+	dirtyChangeRef.current = dirtyChange;
+	const [ runtimeReady, setRuntimeReady ] = useState(
+		Boolean(
+			window.ExtraChillLinkPageEditor?.mount &&
+				window.ExtraChillLinkPageEditor?.registerAdapter
+		)
+	);
+	const [ runtimeExpired, setRuntimeExpired ] = useState( false );
 	const mountId = `ec-events-link-page-${ identityType }-${ identityId }`;
 	useEffect( () => {
-		const runtime = window.ExtraChillLinkPageEditor;
 		const target = document.getElementById( mountId );
-		if ( ! runtime?.mount || ! target ) {
+		if ( ! target ) {
 			return undefined;
 		}
 		const field = `${ identityType }_term_id`;
@@ -46,7 +54,7 @@ export function SharedLinkPageEditor( {
 			link_page: document.link_page,
 			socials: document[ identityType ]?.snapshot?.social_links || [],
 		} );
-		window.ecLinkPageEditorAdapters[ adapterKey ] = {
+		const adapter = {
 			read: async () =>
 				mapDocument(
 					await runAbility(
@@ -65,7 +73,9 @@ export function SharedLinkPageEditor( {
 						}
 					)
 				),
-			save: async ( ignored, draft ) => {
+			save: async ( ignored, draft, { dirtyAreas = [] } = {} ) => {
+				const dirty = new Set( dirtyAreas );
+				let revision = draft.page.revision;
 				const settings = {};
 				[
 					'link_expiration_enabled',
@@ -87,47 +97,128 @@ export function SharedLinkPageEditor( {
 						settings[ key ] = draft.page.settings[ key ];
 					}
 				} );
-				const document = await runAbility(
-					`extrachill/save-${ identityType }-link-page`,
-					{
-						[ field ]: identityId,
-						links: draft.page.links,
-						css_vars: draft.page.styles,
-						settings,
-						bio: draft.page.bio,
-						background_image_id: draft.page.backgroundImageId || 0,
-					}
-				);
+				if ( dirty.has( 'background' ) ) {
+					settings.background_image_id =
+						draft.page.backgroundImageId || 0;
+				}
+				let document;
+				if ( dirty.has( 'links' ) ) {
+					document = await runAbility(
+						`extrachill/save-${ identityType }-link-page-links`,
+						{
+							[ field ]: identityId,
+							links: draft.page.links,
+							expected_revision: revision,
+						}
+					);
+					revision = document.link_page.revision;
+				}
+				if ( dirty.has( 'styles' ) ) {
+					document = await runAbility(
+						`extrachill/save-${ identityType }-link-page-styles`,
+						{
+							[ field ]: identityId,
+							css_vars: draft.page.styles,
+							expected_revision: revision,
+						}
+					);
+					revision = document.link_page.revision;
+				}
+				if ( dirty.has( 'settings' ) || dirty.has( 'background' ) ) {
+					document = await runAbility(
+						`extrachill/save-${ identityType }-link-page-settings`,
+						{
+							[ field ]: identityId,
+							settings,
+							expected_revision: revision,
+						}
+					);
+				}
+				if ( ! document ) {
+					document = await runAbility(
+						`extrachill/get-${ identityType }-link-page`,
+						{ [ field ]: identityId }
+					);
+				}
 				return mapDocument( document );
 			},
-			onDirtyChange: dirtyChange,
+			onDirtyChange: ( value ) => dirtyChangeRef.current( value ),
 		};
-		const unmount = runtime.mount( target, {
+		const editorConfiguration = {
 			adapter: adapterKey,
 			identities: [ { id: identityId, label: identityName } ],
 			initialIdentity: identityId,
 			status: initialStatus,
-		} );
+			limits: {
+				sections: 10,
+				linksPerSection: 25,
+				sectionTitleLength: 200,
+				linkTextLength: 200,
+				urlLength: 2048,
+				bioLength: 5000,
+				displayNameLength: 200,
+			},
+			capabilities: {
+				identity: false,
+				bio: false,
+				socials: false,
+				backgroundMedia: false,
+				subscriptions: false,
+			},
+		};
+		let unmount;
+		let expiry = 0;
+		const registerAndMount = () => {
+			const runtime = window.ExtraChillLinkPageEditor;
+			if ( ! runtime?.mount || ! runtime?.registerAdapter ) {
+				return false;
+			}
+			runtime.registerAdapter( adapterKey, adapter );
+			unmount = runtime.mount( target, editorConfiguration );
+			setRuntimeReady( true );
+			window.clearTimeout( expiry );
+			return true;
+		};
+		let interval = 0;
+		if ( ! registerAndMount() ) {
+			window.ecLinkPageEditorPendingAdapters =
+				window.ecLinkPageEditorPendingAdapters || [];
+			window.ecLinkPageEditorPendingAdapters.push( [
+				adapterKey,
+				adapter,
+			] );
+			interval = window.setInterval( () => {
+				if ( registerAndMount() ) {
+					window.clearInterval( interval );
+				}
+			}, 50 );
+			expiry = window.setTimeout( () => {
+				window.clearInterval( interval );
+				setRuntimeExpired( true );
+			}, 3000 );
+		}
 		return () => {
+			window.clearInterval( interval );
+			window.clearTimeout( expiry );
 			unmount?.();
+			window.ecLinkPageEditorPendingAdapters = (
+				window.ecLinkPageEditorPendingAdapters || []
+			).filter( ( [ name ] ) => name !== adapterKey );
 			delete window.ecLinkPageEditorAdapters[ adapterKey ];
 		};
-	}, [
-		dirtyChange,
-		identityId,
-		identityName,
-		identityType,
-		initialStatus,
-		mountId,
-	] );
-	if ( ! window.ExtraChillLinkPageEditor?.mount ) {
-		return (
-			<InlineStatus tone="warning">
-				Link Page management is unavailable.
-			</InlineStatus>
-		);
-	}
-	return <div id={ mountId } className="ec-events-link-page-editor" />;
+	}, [ identityId, identityName, identityType, initialStatus, mountId ] );
+	return (
+		<div className="ec-events-link-page-editor-status">
+			{ ! runtimeReady && (
+				<InlineStatus tone={ runtimeExpired ? 'warning' : 'info' }>
+					{ runtimeExpired
+						? 'Link Page management is unavailable.'
+						: 'Loading Link Page editor...' }
+				</InlineStatus>
+			) }
+			<div id={ mountId } className="ec-events-link-page-editor" />
+		</div>
+	);
 }
 
 export function ManagedIdentitySelector( {

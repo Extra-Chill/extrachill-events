@@ -57,7 +57,9 @@ export function VenueSettingsApp( { context } ) {
 	const [ configStatuses, setConfigStatuses ] = useState( {} );
 	const [ savingProfiles, setSavingProfiles ] = useState( {} );
 	const [ savingConfigs, setSavingConfigs ] = useState( {} );
-	const [ linkPageDirty, setLinkPageDirty ] = useState( false );
+	const [ linkPageDirtyByIdentity, setLinkPageDirtyByIdentity ] = useState(
+		{}
+	);
 	const profileRequestIds = useRef( {} );
 	const configRequestIds = useRef( {} );
 	const teamRequestIds = useRef( {} );
@@ -100,7 +102,15 @@ export function VenueSettingsApp( { context } ) {
 			)
 		);
 	} );
+	const linkPageDirty = Object.values( linkPageDirtyByIdentity ).some(
+		Boolean
+	);
 	const dirty = linkPageDirty || venueDirty;
+	const setLinkPageDirty = ( reference, value ) =>
+		setLinkPageDirtyByIdentity( ( current ) => ( {
+			...current,
+			[ reference ]: value,
+		} ) );
 
 	const loadTeam = async ( venue ) => {
 		if ( ! canManage( venue ) ) {
@@ -361,7 +371,9 @@ export function VenueSettingsApp( { context } ) {
 					identityId={ venue.id }
 					identityName={ venue.name }
 					initialStatus={ venue.link_page?.status || 'unavailable' }
-					onDirtyChange={ setLinkPageDirty }
+					onDirtyChange={ ( value ) =>
+						setLinkPageDirty( `venue:${ venue.id }`, value )
+					}
 				/>
 			);
 		}
@@ -543,7 +555,12 @@ export function VenueSettingsApp( { context } ) {
 			return (
 				<PromoterWorkspacePanel
 					workspace={ workspace }
-					onLinkPageDirtyChange={ setLinkPageDirty }
+					onLinkPageDirtyChange={ ( value ) =>
+						setLinkPageDirty(
+							`promoter:${ workspace.promoter?.id || 0 }`,
+							value
+						)
+					}
 				/>
 			);
 		}

@@ -197,6 +197,13 @@ class LocalSupportAuthorization {
 			'membership' => null,
 			'scope'      => $scope,
 		);
+		$binding_ready = $this->after_artist_binding_lock_acquired( $scope, $artist_term_id, $user_id );
+		if ( true !== $binding_ready ) {
+			$cause = is_wp_error( $binding_ready )
+				? $binding_ready
+				: new \WP_Error( 'local_support_artist_binding_lock_failed', __( 'Artist binding authority could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
+			return $this->finish_failed_prepare( $scope, $cause );
+		}
 		$profile_id = $this->artist_profile_id( $artist_term_id );
 		if ( is_wp_error( $profile_id ) ) {
 			return $this->finish_failed_prepare( $scope, $profile_id );
@@ -297,8 +304,15 @@ class LocalSupportAuthorization {
 	}
 
 	/** Expose the injected venue policy only to the Events-local venue provider. */
-	public function venue_policy(): VenueAuthorization {
-		return $this->venues;
+	public function venue_policy() {
+		$usable = $this->assert_usable();
+		return true === $usable ? $this->venues : $usable;
+	}
+
+	/** Test seam after the canonical binding lock is held and tracked. */
+	protected function after_artist_binding_lock_acquired( object $scope, int $artist_term_id, int $user_id ) {
+		unset( $scope, $artist_term_id, $user_id );
+		return true;
 	}
 
 	/** Lock exact venue authority for the Events-local venue provider. */

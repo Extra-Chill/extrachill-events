@@ -399,6 +399,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'local_support_artist_authorization_quarantined', $authorization->prepare_artist_transaction( 101, 30 )->get_error_code() );
 		$this->assertSame( 'local_support_artist_authorization_quarantined', $authorization->event_context( 900 )->get_error_code() );
 		$this->assertSame( 'local_support_artist_authorization_quarantined', $authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_OPEN, array( 'event_id' => 900, 'venue_term_id' => 55 ), 12, array( 'type' => 'promoter', 'id' => 30 ) )->get_error_code() );
+		$this->assertSame( 'local_support_artist_authorization_quarantined', $authorization->venue_policy()->get_error_code() );
 		$this->assertSame( $query_count, count( $wpdb->queries ) + count( $wpdb->row_queries ) + count( $wpdb->lock_sequence ) );
 
 		$wpdb = new LocalSupportAuthorityWpdb();

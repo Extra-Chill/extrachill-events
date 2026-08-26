@@ -203,7 +203,11 @@ final class LocalSupportVenueOrganizerProvider implements LocalSupportOrganizerP
 				return is_wp_error( $context ) ? $context : $authorization->denied();
 			}
 		}
-		return $locked ? $authorization->authorize_venue_locked( $user_id, (int) $identity['id'], $scope ) : $authorization->venue_policy()->authorize( $user_id, (int) $identity['id'], VenueAuthorization::ACTION_ACCESS_VENUE );
+		if ( $locked ) {
+			return $authorization->authorize_venue_locked( $user_id, (int) $identity['id'], $scope );
+		}
+		$policy = $authorization->venue_policy();
+		return is_wp_error( $policy ) ? $policy : $policy->authorize( $user_id, (int) $identity['id'], VenueAuthorization::ACTION_ACCESS_VENUE );
 	}
 
 	public function choices( int $event_id, int $user_id, LocalSupportAuthorization $authorization ) {

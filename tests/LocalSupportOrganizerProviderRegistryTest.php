@@ -8,8 +8,13 @@
 use ExtraChillEvents\Core\LocalSupportAuthorization;
 use ExtraChillEvents\Core\LocalSupportOrganizerProvider;
 use ExtraChillEvents\Core\LocalSupportOrganizerProviderRegistry;
+use ExtraChillEvents\Core\LocalSupportPromoterOrganizerProvider;
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
+require_once dirname( __DIR__ ) . '/inc/Core/PromoterAuthoritySchema.php';
+require_once dirname( __DIR__ ) . '/inc/Core/PromoterAuthorityRepository.php';
+require_once dirname( __DIR__ ) . '/inc/Core/PromoterVenueGrantRepository.php';
+require_once dirname( __DIR__ ) . '/inc/Core/PromoterVenueAuthorization.php';
 
 final class LocalSupportOrganizerProviderRegistryTest extends BookingTestCase {
 	protected function setUp(): void {
@@ -76,6 +81,28 @@ final class LocalSupportOrganizerProviderRegistryTest extends BookingTestCase {
 		$this->assertSame( array(), $GLOBALS['ec_artist_test']['stack'] );
 	}
 
+	public function test_production_promoter_recipient_projection_reauthorizes_revocation_and_errors(): void {
+		$previous = $GLOBALS['wpdb'] ?? null;
+		$wpdb = new LocalSupportPromoterRecipientWpdb();
+		$GLOBALS['wpdb'] = $wpdb;
+		$states = array( 77 => true, 78 => true );
+		$provider = new LocalSupportPromoterOrganizerProvider( static function ( int $user_id ) use ( &$states ) { return $states[ $user_id ] ?? new WP_Error( 'promoter_provider_failed' ); } );
+		$authorization = new LocalSupportAuthorization();
+		$request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'venue', 'organizer_id' => 55 );
+		$this->assertSame( array( 77, 78 ), $provider->recipient_ids( $request, $authorization ) );
+		$states[78] = new WP_Error( 'local_support_forbidden' );
+		$this->assertSame( array( 77 ), $provider->recipient_ids( $request, $authorization ) );
+		$states[77] = new WP_Error( 'promoter_provider_failed' );
+		$this->assertSame( 'promoter_provider_failed', $provider->recipient_ids( $request, $authorization )->get_error_code() );
+		$wpdb->last_error = 'read failed';
+		$this->assertSame( 'local_support_promoter_recipient_read_failed', $provider->recipient_ids( $request, $authorization )->get_error_code() );
+		if ( null === $previous ) {
+			unset( $GLOBALS['wpdb'] );
+		} else {
+			$GLOBALS['wpdb'] = $previous;
+		}
+	}
+
 	private function request(): array {
 		return array(
 			'event_id'       => 900,
@@ -83,6 +110,16 @@ final class LocalSupportOrganizerProviderRegistryTest extends BookingTestCase {
 			'organizer_type' => 'audit-source',
 			'organizer_id'   => 4,
 		);
+	}
+}
+
+final class LocalSupportPromoterRecipientWpdb {
+	public $prefix = 'wp_7_';
+	public $last_error = '';
+	public function prepare( $query, ...$args ) { unset( $args ); return $query; }
+	public function get_results( $query, $output = null ) {
+		unset( $query, $output );
+		return array( array( 'user_id' => 77, 'promoter_term_id' => 30 ), array( 'user_id' => 78, 'promoter_term_id' => 30 ) );
 	}
 }
 

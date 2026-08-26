@@ -78,7 +78,13 @@ class LocalSupportService {
 			'organizer_id'   => $organizer_id,
 		);
 		$identity = $this->input_identity( $input );
-		$allowed  = $identity
+		if ( is_wp_error( $identity ) ) {
+			return $identity;
+		}
+		if ( is_array( $identity ) && ( $organizer !== $identity['type'] || $organizer_id !== $identity['id'] ) ) {
+			return new \WP_Error( 'local_support_organizer_provenance_mismatch', __( 'Request provenance must match the selected organizer identity.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$allowed = $identity
 			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_OPEN, $request, $actor_id, $identity )
 			: $this->authorization->authorize_organizer( $request, $actor_id );
 		if ( true !== $allowed ) {
@@ -98,6 +104,11 @@ class LocalSupportService {
 		if ( is_array( $existing ) ) {
 			return $this->replay( $existing, $key, $hash );
 		}
+		$acting_identity = $identity ? $identity : $this->provenance_identity( $request );
+		$pre_scope       = $this->authorization->prepare_organizer_transaction( LocalSupportAuthorization::ACTION_OPEN, $request, $actor_id, $acting_identity );
+		if ( is_wp_error( $pre_scope ) ) {
+			return $pre_scope;
+		}
 
 		$created = $this->transaction(
 			function ( object $scope ) use ( $request, $actor_id, $key, $hash, $identity ) {
@@ -113,7 +124,8 @@ class LocalSupportService {
 				}
 				$activity = $this->record( $created['id'], null, 'request_opened', $actor_id, $key, $hash, 1, array( 'status' => 'open' ), $identity ? $identity : $this->provenance_identity( $request ) );
 				return is_wp_error( $activity ) ? $activity : $created;
-			}
+			},
+			$pre_scope
 		);
 		if ( is_wp_error( $created ) ) {
 			if ( 'local_support_request_create_failed' !== $created->get_error_code() ) {
@@ -209,6 +221,10 @@ class LocalSupportService {
 			$replayed = $this->replay( $request, $key, $hash );
 			return is_wp_error( $replayed ) ? $replayed : $existing;
 		}
+		$pre_scope = $this->authorization->prepare_artist_transaction( $artist_term_id, $actor_id );
+		if ( is_wp_error( $pre_scope ) ) {
+			return $pre_scope;
+		}
 		$interest = $this->transaction(
 			function ( object $scope ) use ( $request_id, $artist_term_id, $actor_id, $key, $hash ) {
 				$locked_request = $this->repository->get_request( $request_id, true );
@@ -248,7 +264,8 @@ class LocalSupportService {
 					)
 				);
 				return is_wp_error( $activity ) ? $activity : $interest;
-			}
+			},
+			$pre_scope
 		);
 		if ( is_wp_error( $interest ) ) {
 			if ( 'local_support_interest_create_failed' !== $interest->get_error_code() ) {
@@ -425,6 +442,11 @@ class LocalSupportService {
 		if ( $request['version'] !== $expected_version ) {
 			return $this->conflict( $request['version'] );
 		}
+		$acting_identity = $identity ? $identity : $this->provenance_identity( $request );
+		$pre_scope       = $this->authorization->prepare_organizer_transaction( LocalSupportAuthorization::ACTION_TRANSITION_REQUEST, $request, $actor_id, $acting_identity );
+		if ( is_wp_error( $pre_scope ) ) {
+			return $pre_scope;
+		}
 		$updated = $this->transaction(
 			function ( object $scope ) use ( $request, $expected_version, $actor_id, $changes, $kind, $key, $hash, $payload, $identity ) {
 				$locked = $this->repository->get_request( $request['id'], true );
@@ -440,7 +462,8 @@ class LocalSupportService {
 				$updated = $this->repository->update_request( $locked['id'], $expected_version, $changes );
 				$event   = is_wp_error( $updated ) ? $updated : $this->record( $locked['id'], null, $kind, $actor_id, $key, $hash, $updated['version'], $payload, $identity ? $identity : $this->provenance_identity( $locked ) );
 				return is_wp_error( $event ) ? $event : $updated;
-			}
+			},
+			$pre_scope
 		);
 		if ( is_wp_error( $updated ) ) {
 			return 'local_support_version_conflict' === $updated->get_error_code() ? $this->concurrent_replay( $request['id'], $key, $hash, $updated, 'request', $request['id'] ) : $updated;
@@ -474,6 +497,12 @@ class LocalSupportService {
 		if ( $interest['version'] !== $expected_version ) {
 			return $this->conflict( $interest['version'] );
 		}
+		$pre_scope = $artist_owned
+			? $this->authorization->prepare_artist_transaction( (int) $interest['artist_term_id'], $actor_id )
+			: $this->authorization->prepare_organizer_transaction( LocalSupportAuthorization::ACTION_SELECT_INTEREST, $request, $actor_id, $identity ? $identity : $this->provenance_identity( $request ) );
+		if ( is_wp_error( $pre_scope ) ) {
+			return $pre_scope;
+		}
 		$updated = $this->transaction(
 			function ( object $scope ) use ( $request, $interest, $expected_version, $artist_owned, $actor_id, $changes, $kind, $key, $hash, $payload, $identity ) {
 				$locked_request = $this->repository->get_request( $request['id'], true );
@@ -499,7 +528,8 @@ class LocalSupportService {
 				) : $this->provenance_identity( $locked_request ) );
 				$event           = is_wp_error( $updated ) ? $updated : $this->record( $request['id'], $locked['id'], $kind, $actor_id, $key, $hash, $updated['version'], $payload, $acting_identity );
 				return is_wp_error( $event ) ? $event : $updated;
-			}
+			},
+			$pre_scope
 		);
 		if ( is_wp_error( $updated ) ) {
 			return 'local_support_version_conflict' === $updated->get_error_code() ? $this->concurrent_replay( $request['id'], $key, $hash, $updated, 'interest', $interest['id'] ) : $updated;
@@ -618,19 +648,21 @@ class LocalSupportService {
 	}
 
 	/** Strict explicit identity input; absence selects the concrete legacy path. */
-	private function input_identity( array $input ): ?array {
-		if ( ! array_key_exists( 'acting_organizer_type', $input ) && ! array_key_exists( 'acting_organizer_id', $input ) ) {
+	private function input_identity( array $input ) {
+		$has_type = array_key_exists( 'acting_organizer_type', $input );
+		$has_id   = array_key_exists( 'acting_organizer_id', $input );
+		if ( ! $has_type && ! $has_id ) {
 			return null;
+		}
+		if ( $has_type !== $has_id ) {
+			return new \WP_Error( 'local_support_organizer_identity_incomplete', __( 'Both organizer identity fields are required together.', 'extrachill-events' ), array( 'status' => 400 ) );
 		}
 		$type = sanitize_key( (string) ( $input['acting_organizer_type'] ?? '' ) );
 		$id   = absint( $input['acting_organizer_id'] ?? 0 );
 		return '' !== $type && $id > 0 ? array(
 			'type' => $type,
 			'id'   => $id,
-		) : array(
-			'type' => '',
-			'id'   => 0,
-		);
+		) : new \WP_Error( 'local_support_organizer_identity_invalid', __( 'A valid organizer identity is required.', 'extrachill-events' ), array( 'status' => 400 ) );
 	}
 
 	private function provenance_identity( array $request ): array {
@@ -653,12 +685,14 @@ class LocalSupportService {
 	}
 
 	/** Execute one service-owned transaction and always close its lock scope. */
-	private function transaction( callable $callback ) {
+	private function transaction( callable $callback, $pre_scope = null ) {
 		if ( is_wp_error( $this->transaction_owner_error ) ) {
+			$this->authorization->close_pretransaction_scope( $pre_scope );
 			return $this->transaction_owner_error;
 		}
 		$started = $this->begin();
 		if ( is_wp_error( $started ) ) {
+			$this->authorization->close_pretransaction_scope( $pre_scope );
 			return $started;
 		}
 		try {
@@ -667,10 +701,13 @@ class LocalSupportService {
 			if ( $this->transaction_active ) {
 				$this->rollback_transaction( new \WP_Error( 'local_support_transaction_interrupted', __( 'The local support transaction was interrupted.', 'extrachill-events' ) ) );
 			}
+			$this->authorization->close_pretransaction_scope( $pre_scope );
 			throw $throwable;
 		}
 		if ( is_wp_error( $scope ) ) {
-			return $this->rollback_transaction( $scope );
+			$result = $this->rollback_transaction( $scope );
+			$this->authorization->close_pretransaction_scope( $pre_scope );
+			return $result;
 		}
 
 		$result    = null;
@@ -709,6 +746,16 @@ class LocalSupportService {
 					'extrachill_events_local_support_authority_release_failed',
 					array(
 						'code'      => 'local_support_artist_authority_release_threw',
+						'committed' => $committed,
+					)
+				);
+			}
+			$pre_released = $this->authorization->close_pretransaction_scope( $pre_scope );
+			if ( is_wp_error( $pre_released ) ) {
+				do_action(
+					'extrachill_events_local_support_authority_release_failed',
+					array(
+						'code'      => $pre_released->get_error_code(),
 						'committed' => $committed,
 					)
 				);

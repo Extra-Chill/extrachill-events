@@ -81,7 +81,12 @@ if ( ! function_exists( 'home_url' ) ) {
 }
 if ( ! function_exists( 'add_query_arg' ) ) {
 	function add_query_arg( $key, $value = null, $url = '' ) {
-		$args = is_array( $key ) ? $key : array( $key => $value );
+		if ( is_array( $key ) ) {
+			$args = $key;
+			$url  = is_string( $value ) ? $value : $url;
+		} else {
+			$args = array( $key => $value );
+		}
 		return $url . ( false === strpos( $url, '?' ) ? '?' : '&' ) . http_build_query( $args );
 	}
 }
@@ -249,7 +254,7 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 
 		$html = $this->render( 'extrachill_events_render_local_support_artist_index', 202, $model );
 		$this->assertStringContainsString( 'data-local-support-artist-index="202"', $html );
-		$this->assertStringContainsString( '/local-support/1/?artist_id=202', $html );
+		$this->assertStringContainsString( '/local-support/1/?mode=artist&artist_id=202&identity=artist%3A202', $html );
 		$this->assertStringContainsString( 'No eligible organizer events', $html );
 		$this->assertStringContainsString( 'Taxonomy attachment alone never grants access', $html );
 	}

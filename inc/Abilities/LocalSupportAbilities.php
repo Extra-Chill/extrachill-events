@@ -53,12 +53,14 @@ class LocalSupportAbilities {
 
 	/** Execute organizer request read. */
 	public function get_request( array $input ) {
-		return $this->service->get_request( (int) $input['request_id'], get_current_user_id(), $this->identity( $input ) );
+		$identity = $this->identity( $input );
+		return is_wp_error( $identity ) ? $identity : $this->service->get_request( (int) $input['request_id'], get_current_user_id(), $identity );
 	}
 
 	/** Execute request transition. */
 	public function transition_request( array $input ) {
-		return $this->service->transition_request( (int) $input['request_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $this->identity( $input ) );
+		$identity = $this->identity( $input );
+		return is_wp_error( $identity ) ? $identity : $this->service->transition_request( (int) $input['request_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $identity );
 	}
 
 	/** Execute interest creation. */
@@ -68,7 +70,8 @@ class LocalSupportAbilities {
 
 	/** Execute interest transition. */
 	public function transition_interest( array $input ) {
-		return $this->service->transition_interest( (int) $input['interest_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $this->identity( $input ) );
+		$identity = $this->identity( $input );
+		return is_wp_error( $identity ) ? $identity : $this->service->transition_interest( (int) $input['interest_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $identity );
 	}
 
 	/** Execute request-scoped contact consent. */
@@ -78,7 +81,8 @@ class LocalSupportAbilities {
 
 	/** Execute organizer shortlist read. */
 	public function list_interests( array $input ) {
-		return $this->service->list_interests( (int) $input['request_id'], get_current_user_id(), (int) ( $input['limit'] ?? 100 ), $this->identity( $input ) );
+		$identity = $this->identity( $input );
+		return is_wp_error( $identity ) ? $identity : $this->service->list_interests( (int) $input['request_id'], get_current_user_id(), (int) ( $input['limit'] ?? 100 ), $identity );
 	}
 
 	/** Require an authenticated actor; domain authorization remains in the service. */
@@ -278,13 +282,23 @@ class LocalSupportAbilities {
 		);
 	}
 
-	private function identity( array $input ): ?array {
-		if ( ! isset( $input['acting_organizer_type'], $input['acting_organizer_id'] ) ) {
+	private function identity( array $input ) {
+		$has_type = array_key_exists( 'acting_organizer_type', $input );
+		$has_id   = array_key_exists( 'acting_organizer_id', $input );
+		if ( ! $has_type && ! $has_id ) {
 			return null;
 		}
+		if ( $has_type !== $has_id ) {
+			return new \WP_Error( 'local_support_organizer_identity_incomplete', __( 'Both organizer identity fields are required together.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$type = sanitize_key( (string) $input['acting_organizer_type'] );
+		$id   = absint( $input['acting_organizer_id'] );
+		if ( '' === $type || $id < 1 ) {
+			return new \WP_Error( 'local_support_organizer_identity_invalid', __( 'A valid organizer identity is required.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
 		return array(
-			'type' => sanitize_key( (string) $input['acting_organizer_type'] ),
-			'id'   => absint( $input['acting_organizer_id'] ),
+			'type' => $type,
+			'id'   => $id,
 		);
 	}
 

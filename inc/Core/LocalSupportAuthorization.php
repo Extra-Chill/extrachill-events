@@ -46,6 +46,9 @@ class LocalSupportAuthorization {
 	/** @var string[] Events mapping advisory locks held through commit/rollback. */
 	private $mapping_locks = array();
 
+	/** @var array<int,array{binding:string,membership:string}> Pre-transaction Artist lock scopes. */
+	private $artist_pre_scopes = array();
+
 	/** @var \SplObjectStorage Active service-owned transaction scopes. */
 	private $transaction_scopes;
 
@@ -137,6 +140,55 @@ class LocalSupportAuthorization {
 		return $this->organizers->authorize( $action, $request, $identity, $user_id, $this, true, $scope );
 	}
 
+	public function prepare_organizer_transaction( string $action, array $request, int $user_id, array $identity ) {
+		return $this->organizers->prepare( $action, $request, $identity, $user_id, $this );
+	}
+
+	public function organizer_choice( int $event_id, int $user_id, array $identity ) {
+		return $this->organizers->choice( $event_id, $user_id, $identity, $this );
+	}
+
+	/** Acquire Artist writer advisory locks in canonical order before START TRANSACTION. */
+	public function prepare_artist_transaction( int $artist_term_id, int $user_id ) {
+		global $wpdb;
+		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( get_class( $wpdb ) ) ) ) {
+			return new \WP_Error( 'local_support_artist_advisory_locks_unsupported', __( 'Artist mutation authorization requires MySQL advisory locks.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		$binding = 'ec_artist_binding_v1';
+		if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $binding, 5 ) ) ) {
+			return new \WP_Error( 'local_support_artist_binding_lock_failed', __( 'Artist binding authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		$profile_id = $this->artist_profile_id( $artist_term_id );
+		if ( is_wp_error( $profile_id ) ) {
+			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $binding ) );
+			return $profile_id;
+		}
+		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $profile_id );
+		if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $membership, 5 ) ) ) {
+			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $binding ) );
+			return new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		$scope = new \stdClass();
+		$this->artist_pre_scopes[ spl_object_id( $scope ) ] = compact( 'binding', 'membership', 'scope' );
+		return $scope;
+	}
+
+	/** Release Artist writer locks only after transaction completion. */
+	public function close_pretransaction_scope( $scope ) {
+		global $wpdb;
+		if ( ! is_object( $scope ) || ! isset( $this->artist_pre_scopes[ spl_object_id( $scope ) ] ) ) {
+			return true;
+		}
+		$locks = $this->artist_pre_scopes[ spl_object_id( $scope ) ];
+		foreach ( array( $locks['membership'], $locks['binding'] ) as $name ) {
+			if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) ) ) {
+				return new \WP_Error( 'local_support_artist_authority_release_failed', __( 'Artist authority lock cleanup failed.', 'extrachill-events' ), array( 'status' => 503 ) );
+			}
+		}
+		unset( $this->artist_pre_scopes[ spl_object_id( $scope ) ] );
+		return true;
+	}
+
 	/** Lock canonical event venue context within one provider-owned sequence. */
 	public function event_context_locked_for_provider( int $event_id, object $scope ) {
 		$valid = $this->validate_scope( $scope );
@@ -211,16 +263,14 @@ class LocalSupportAuthorization {
 		if ( $user_id < 1 || ! get_userdata( $user_id ) ) {
 			return $this->denied();
 		}
-		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( get_class( $wpdb ) ) ) ) {
-			return new \WP_Error( 'local_support_artist_advisory_locks_unsupported', __( 'Artist mutation authorization requires MySQL advisory locks.', 'extrachill-events' ), array( 'status' => 503 ) );
-		}
-
 		$lock_name = sprintf( 'ec_artist_membership_%d_%d', $user_id, $profile_id );
-		$acquired  = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $lock_name, 5 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Matches the canonical artist membership writer lock.
-		if ( '1' !== (string) $acquired ) {
-			return new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
+		$held      = false;
+		foreach ( $this->artist_pre_scopes as $locks ) {
+			$held = $held || $lock_name === $locks['membership'];
 		}
-		$this->artist_locks[] = $lock_name;
+		if ( ! $held ) {
+			return new \WP_Error( 'local_support_artist_pretransaction_scope_required', __( 'Artist authority requires its canonical pre-transaction locks.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
 
 		$artist_blog_id = (int) ec_get_blog_id( 'artist' );
 		$main_blog_id   = (int) ec_get_blog_id( 'main' );
@@ -291,9 +341,7 @@ class LocalSupportAuthorization {
 	/** Release relationship advisory locks after the owning transaction ends. */
 	public function close_transaction_scope( object $scope ) {
 		global $wpdb;
-		if ( ! $this->transaction_scopes->contains( $scope ) ) {
-			return true;
-		}
+		$has_transaction_scope = $this->transaction_scopes->contains( $scope );
 		for ( $index = count( $this->artist_locks ) - 1; $index >= 0; --$index ) {
 			$lock_name = $this->artist_locks[ $index ];
 			$released  = $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock_name ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Releases the canonical relationship lock after transaction completion.
@@ -309,7 +357,17 @@ class LocalSupportAuthorization {
 			}
 			array_splice( $this->mapping_locks, $index, 1 );
 		}
-		$this->transaction_scopes->detach( $scope );
+		if ( $has_transaction_scope ) {
+			$this->transaction_scopes->detach( $scope );
+		}
+		foreach ( $this->artist_pre_scopes as $locks ) {
+			if ( isset( $locks['scope'] ) ) {
+				$released = $this->close_pretransaction_scope( $locks['scope'] );
+				if ( is_wp_error( $released ) ) {
+					return $released;
+				}
+			}
+		}
 		return true;
 	}
 
@@ -556,10 +614,7 @@ class LocalSupportAuthorization {
 	private function default_organizers(): LocalSupportOrganizerProviderRegistry {
 		$registry = new LocalSupportOrganizerProviderRegistry();
 		foreach ( array( new LocalSupportVenueOrganizerProvider(), new LocalSupportArtistOrganizerProvider(), new LocalSupportPromoterOrganizerProvider() ) as $provider ) {
-			$registered = $registry->register( $provider );
-			if ( is_wp_error( $registered ) ) {
-				throw new \RuntimeException( $registered->get_error_message() );
-			}
+			$registry->register( $provider );
 		}
 		return $registry;
 	}

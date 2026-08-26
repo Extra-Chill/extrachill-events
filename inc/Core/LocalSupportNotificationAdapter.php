@@ -212,7 +212,7 @@ class LocalSupportNotificationAdapter {
 			return is_wp_error( $request ) ? $request : new \WP_Error( 'local_support_request_missing', __( 'The local-support request could not be resolved.', 'extrachill-events' ) );
 		}
 		$identity = null;
-		$allowed = 'organizer_interest_changed' === ( $intent['kind'] ?? '' )
+		$allowed  = 'organizer_interest_changed' === ( $intent['kind'] ?? '' )
 			? $this->notification_identity( $request, $recipient_id )
 			: ( get_userdata( $recipient_id ) ? true : new \WP_Error( 'local_support_workspace_forbidden', __( 'The local-support workspace is not authorized.', 'extrachill-events' ) ) );
 		if ( true !== $allowed ) {

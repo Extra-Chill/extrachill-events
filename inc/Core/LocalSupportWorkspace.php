@@ -67,15 +67,15 @@ class LocalSupportWorkspace {
 	 * @param int $user_id Acting user ID.
 	 * @return array|\WP_Error Workspace model or denial.
 	 */
-	public function read( int $request_id, int $artist_term_id, int $user_id, ?array $organizer_identity = null ) {
+	public function read( int $request_id, int $artist_term_id, int $user_id, ?array $organizer_identity = null, string $mode = 'auto' ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : $this->denied();
 		}
 
-		$organizer_allowed = $organizer_identity
+		$organizer_allowed = 'artist' === $mode ? $this->denied() : ( $organizer_identity
 			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_VIEW, $request, $user_id, $organizer_identity )
-			: $this->authorization->authorize_organizer( $request, $user_id );
+			: $this->authorization->authorize_organizer( $request, $user_id ) );
 		if ( true === $organizer_allowed ) {
 			$interests = $this->service->list_interests( $request_id, $user_id, 100, $organizer_identity );
 			if ( is_wp_error( $interests ) ) {
@@ -88,6 +88,9 @@ class LocalSupportWorkspace {
 				'interests'        => array_map( array( $this, 'interest_card' ), $interests ),
 				'acting_organizer' => $organizer_identity,
 			);
+		}
+		if ( null !== $organizer_identity && 'artist' !== $mode ) {
+			return is_wp_error( $organizer_allowed ) ? $organizer_allowed : $this->denied();
 		}
 
 		if ( $artist_term_id < 1 ) {
@@ -143,6 +146,9 @@ class LocalSupportWorkspace {
 		$artist_id          = absint( $input['artist_term_id'] ?? 0 );
 		$key                = sanitize_key( (string) ( $input['idempotency_key'] ?? '' ) );
 		$organizer_identity = $this->organizer_identity( $input );
+		if ( is_wp_error( $organizer_identity ) ) {
+			return $organizer_identity;
+		}
 		switch ( $action ) {
 			case 'open':
 				$booking_id = absint( $input['booking_id'] ?? 0 );
@@ -189,13 +195,23 @@ class LocalSupportWorkspace {
 	}
 
 	/** Parse one explicit managed organizer identity without inference. */
-	private function organizer_identity( array $input ): ?array {
-		if ( ! isset( $input['acting_organizer_type'], $input['acting_organizer_id'] ) ) {
+	private function organizer_identity( array $input ) {
+		$has_type = array_key_exists( 'acting_organizer_type', $input );
+		$has_id   = array_key_exists( 'acting_organizer_id', $input );
+		if ( ! $has_type && ! $has_id ) {
 			return null;
 		}
+		if ( $has_type !== $has_id ) {
+			return new \WP_Error( 'local_support_organizer_identity_incomplete', __( 'Both organizer identity fields are required together.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+		$type = sanitize_key( (string) $input['acting_organizer_type'] );
+		$id   = absint( $input['acting_organizer_id'] );
+		if ( '' === $type || $id < 1 ) {
+			return new \WP_Error( 'local_support_organizer_identity_invalid', __( 'A valid organizer identity is required.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
 		return array(
-			'type' => sanitize_key( (string) $input['acting_organizer_type'] ),
-			'id'   => absint( $input['acting_organizer_id'] ),
+			'type' => $type,
+			'id'   => $id,
 		);
 	}
 
@@ -233,26 +249,40 @@ class LocalSupportWorkspace {
 		if ( true !== $authorized ) {
 			return is_wp_error( $authorized ) ? $authorized : $this->denied();
 		}
-		$requests = $this->repository->list_participation_requests( 100 );
-		if ( ! is_array( $requests ) ) {
-			return $requests;
-		}
-		$opportunities = array();
-		foreach ( $requests as $request ) {
-			$model = $this->read(
-				(int) $request['id'],
-				$artist_term_id,
-				$user_id,
-				array(
-					'type' => 'artist',
-					'id'   => $artist_term_id,
-				)
-			);
-			if ( is_array( $model ) && 'artist' === ( $model['role'] ?? '' ) ) {
-				$opportunities[] = $model;
+		$opportunities     = array();
+		$before_id         = 0;
+		$scanned           = 0;
+		$opportunity_count = 0;
+		while ( $scanned < 500 && $opportunity_count < 100 ) {
+			$requests = $this->repository->list_participation_requests( min( 101, 501 - $scanned ), $before_id );
+			if ( ! is_array( $requests ) ) {
+				return $requests;
 			}
+			$page = array_slice( $requests, 0, min( 100, 500 - $scanned ) );
+			foreach ( $page as $request ) {
+				++$scanned;
+				$model = $this->read( (int) $request['id'], $artist_term_id, $user_id, null, 'artist' );
+				if ( is_array( $model ) && 'artist' === ( $model['role'] ?? '' ) ) {
+					$opportunities[] = $model;
+					++$opportunity_count;
+				}
+			}
+			if ( count( $requests ) <= count( $page ) ) {
+				return $opportunities;
+			}
+			$last      = end( $page );
+			$before_id = (int) $last['id'];
 		}
-		return $opportunities;
+		return $scanned >= 500
+			? new \WP_Error(
+				'local_support_artist_opportunity_scan_overflow',
+				__( 'Artist opportunity discovery exceeded its safe scan bound.', 'extrachill-events' ),
+				array(
+					'status'  => 503,
+					'maximum' => 500,
+				)
+			)
+			: $opportunities;
 	}
 
 	/**

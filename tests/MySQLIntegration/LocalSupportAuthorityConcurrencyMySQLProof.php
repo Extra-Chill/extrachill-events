@@ -45,6 +45,44 @@ final class LocalSupportMySQLProbeAuthorization extends LocalSupportAuthorizatio
 
 /** Prove both deterministic orders through an actual LocalSupportService mutation. */
 final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
+	/** Artist binding writers and Local Support acquire binding before membership. */
+	private function prove_local_support_artist_binding_and_membership_lock_order_serialize(): void {
+		global $wpdb;
+		$main_blog_id   = (int) ec_get_blog_id( 'main' );
+		$artist_blog_id = (int) ec_get_blog_id( 'artist' );
+		switch_to_blog( $main_blog_id );
+		$term = wp_insert_term( 'Local Support Lock Artist', 'artist' );
+		$artist_term_id = (int) $term['term_id'];
+		restore_current_blog();
+		switch_to_blog( $artist_blog_id );
+		$profile_id = self::factory()->post->create( array( 'post_type' => 'artist_profile', 'post_status' => 'publish', 'post_title' => 'Local Support Lock Artist' ) );
+		update_post_meta( $profile_id, '_artist_term_id', $artist_term_id );
+		update_post_meta( $profile_id, '_artist_member_ids', array( $this->actor_id ) );
+		restore_current_blog();
+		switch_to_blog( $main_blog_id );
+		update_term_meta( $artist_term_id, '_artist_profile_id', $profile_id );
+		restore_current_blog();
+		update_user_meta( $this->actor_id, '_artist_profile_ids', array( $profile_id ) );
+		self::commit_transaction();
+		$wpdb->query( 'SET autocommit = 1' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exposes fixture and advisory locks outside the test wrapper.
+
+		$authorization = new LocalSupportAuthorization();
+		$scope = $authorization->prepare_artist_transaction( $artist_term_id, $this->actor_id );
+		$this->assertIsObject( $scope, is_wp_error( $scope ) ? $scope->get_error_code() : '' );
+		$this->assertSame( '0', (string) $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" )->fetch_row()[0], 'Artist binding writer did not wait behind Local Support.' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Exact fixed test lock.
+		$this->assertTrue( $authorization->close_pretransaction_scope( $scope ) );
+
+		$result = $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Simulates canonical Artist binding writer.
+		$this->assertSame( '1', (string) $result->fetch_row()[0] );
+		$blocked = $authorization->prepare_artist_transaction( $artist_term_id, $this->actor_id );
+		$this->assertWPError( $blocked );
+		$this->assertSame( 'local_support_artist_binding_lock_failed', $blocked->get_error_code() );
+		$this->contender->query( "SELECT RELEASE_LOCK('ec_artist_binding_v1')" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Releases simulated writer.
+		$scope = $authorization->prepare_artist_transaction( $artist_term_id, $this->actor_id );
+		$this->assertIsObject( $scope );
+		$this->assertTrue( $authorization->close_pretransaction_scope( $scope ) );
+	}
+
 	/** Remove disposable Local Support state before the parent drops booking tables. */
 	public function tear_down(): void {
 		global $wpdb;
@@ -100,5 +138,6 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		$this->assertWPError( $denied );
 		$this->assertSame( 'venue_action_forbidden', $denied->get_error_code() );
 		$this->assertSame( 2, ( new ExtraChillEvents\Core\LocalSupportRepository() )->get_request( $request['id'] )['version'] );
+		$this->prove_local_support_artist_binding_and_membership_lock_order_serialize();
 	}
 }

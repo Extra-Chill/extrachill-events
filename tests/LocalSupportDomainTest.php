@@ -126,6 +126,29 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertNull( $interest['contact'] );
 	}
 
+	public function test_explicit_identity_rejects_forged_provenance_and_records_exact_attribution(): void {
+		foreach ( array( array( 'artist', 55 ), array( 'promoter', 55 ), array( 'venue', 56 ) ) as $forged ) {
+			$error = $this->service->open_request( array( 'event_id' => 900, 'organizer_type' => $forged[0], 'organizer_id' => $forged[1], 'acting_organizer_type' => 'venue', 'acting_organizer_id' => 55, 'idempotency_key' => 'forged-' . $forged[0] . '-' . $forged[1] ), 12 );
+			$this->assertSame( 'local_support_organizer_provenance_mismatch', $error->get_error_code() );
+		}
+		$request = $this->service->open_request( array( 'event_id' => 900, 'organizer_type' => 'venue', 'organizer_id' => 55, 'acting_organizer_type' => 'venue', 'acting_organizer_id' => 55, 'idempotency_key' => 'explicit-attribution' ), 12 );
+		$this->assertSame( 'venue', $request['organizer_type'] );
+		$this->assertSame( array( 'type' => 'venue', 'id' => 55 ), end( $this->repository->activity )['payload']['acting_identity'] );
+	}
+
+	public function test_partial_identity_and_explicit_denial_never_fall_through_to_artist_mode(): void {
+		$error = $this->service->open_request( array( 'event_id' => 900, 'organizer_type' => 'venue', 'organizer_id' => 55, 'acting_organizer_type' => 'venue', 'idempotency_key' => 'partial' ), 12 );
+		$this->assertSame( 'local_support_organizer_identity_incomplete', $error->get_error_code() );
+		$request = $this->open_request();
+		$this->authorization->organizer_allowed = false;
+		$workspace = new LocalSupportWorkspace( $this->repository, $this->authorization, $this->service, static function (): array { return array( array( 'artist_term_id' => 202 ) ); } );
+		$denied = $workspace->read( $request['id'], 202, 20, array( 'type' => 'venue', 'id' => 55 ) );
+		$this->assertSame( 'local_support_forbidden', $denied->get_error_code() );
+		$this->authorization->organizer_error = new WP_Error( 'provider_unavailable' );
+		$failed = $workspace->read( $request['id'], 202, 20, array( 'type' => 'venue', 'id' => 55 ) );
+		$this->assertSame( 'provider_unavailable', $failed->get_error_code() );
+	}
+
 	/** Legacy calls retain their shipped hash while explicit identities are bound. */
 	public function test_explicit_identity_hashing_preserves_legacy_receipts(): void {
 		$method = new ReflectionMethod( LocalSupportService::class, 'request_hash' );
@@ -203,24 +226,24 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb->artist_rows = array( array( 'meta_id' => 1, 'meta_value' => serialize( array( 30 ) ) ) );
 		$wpdb->user_rows   = array( array( 'umeta_id' => 2, 'meta_value' => serialize( array( 501 ) ) ) );
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 
 		$this->assertTrue( $authorization->authorize_artist_locked( 101, 30, $scope ) );
 		$this->assertSame( 7, get_current_blog_id() );
-		$this->assertSame( array( 'membership-advisory', 'profile-binding', 'term-binding', 'artist', 'user' ), $wpdb->lock_sequence );
+		$this->assertSame( array( 'binding-advisory', 'membership-advisory', 'profile-binding', 'term-binding', 'artist', 'user' ), $wpdb->lock_sequence );
 		$this->assertStringContainsString( 'post_id = 501', $wpdb->queries[0] );
 		$this->assertStringContainsString( 'term_id = 101', $wpdb->queries[1] );
 		$this->assertStringContainsString( 'user_id = 30', $wpdb->queries[3] );
 		$authorization->close_transaction_scope( $scope );
-		$this->assertSame( 'membership-release', end( $wpdb->lock_sequence ) );
+		$this->assertSame( 'binding-release', end( $wpdb->lock_sequence ) );
 
 		$wpdb->lock_sequence = array();
 		$wpdb->user_rows = array( array( 'umeta_id' => 2, 'meta_value' => serialize( array( 999 ) ) ) );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$this->assertSame( 'local_support_forbidden', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
 		$wpdb->user_rows = array_fill( 0, 2, array( 'umeta_id' => 2, 'meta_value' => serialize( array( 501 ) ) ) );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$this->assertSame( 'local_support_artist_authority_rows_corrupt', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
 	}
@@ -232,12 +255,12 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb->artist_rows = array( array( 'meta_id' => 1, 'meta_value' => serialize( array( 30 ) ) ) );
 		$wpdb->user_rows   = array( array( 'umeta_id' => 2, 'meta_value' => serialize( range( 1, 101 ) ) ) );
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$this->assertSame( 'local_support_artist_authority_corrupt', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
 
 		$wpdb->fail_results = true;
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$this->assertSame( 'local_support_artist_authority_read_failed', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$this->assertSame( 7, get_current_blog_id() );
 		$authorization->close_transaction_scope( $scope );
@@ -251,7 +274,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb->artist_rows = array( array( 'meta_id' => 1, 'meta_value' => serialize( array( 30 ) ) ) );
 		$wpdb->user_rows = array( array( 'umeta_id' => 2, 'meta_value' => serialize( array( 501 ) ) ) );
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$venue_request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'venue', 'organizer_id' => 55 );
 		$artist_request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'artist', 'organizer_id' => 101 );
 
@@ -261,24 +284,24 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb->mapping_rows[0]['meta_value'] = '999';
 		$this->assertSame( 'local_support_artist_mapping_changed', $authorization->artist_attached_to_event_locked( 900, 101, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$wpdb->mapping_rows[0]['meta_value'] = '1001';
 		$GLOBALS['ec_artist_test']['artist_mappings'][102] = 1001;
 		$this->assertSame( 'local_support_artist_mapping_claims_invalid', $authorization->artist_attached_to_event_locked( 900, 101, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		unset( $GLOBALS['ec_artist_test']['artist_mappings'][102] );
 		$wpdb->event_artist_rows = array();
 		$this->assertFalse( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
 		$authorization->close_transaction_scope( $scope );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$wpdb->event_artist_rows = array( array( 'term_id' => 1001, 'term_taxonomy_id' => 10001 ) );
 		$wpdb->profile_binding_rows[0]['meta_value'] = '999';
 		$this->assertTrue( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
 		$this->assertSame( 'invalid_local_support_artist', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
-		$this->assertSame( array( 'membership-advisory', 'profile-binding', 'term-binding' ), array_slice( $wpdb->lock_sequence, -3 ) );
+		$this->assertSame( array( 'artist-mapping', 'profile-binding', 'term-binding' ), array_slice( $wpdb->lock_sequence, -3 ) );
 		$authorization->close_transaction_scope( $scope );
-		$this->assertSame( array( 'membership-release', 'mapping-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
+		$this->assertSame( array( 'membership-release', 'binding-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
 	}
 
 	public function test_mapping_release_failure_is_distinct_and_retains_tracking(): void {
@@ -288,7 +311,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb->artist_rows = array( array( 'meta_id' => 1, 'meta_value' => serialize( array( 30 ) ) ) );
 		$wpdb->user_rows = array( array( 'umeta_id' => 2, 'meta_value' => serialize( array( 501 ) ) ) );
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'artist', 'organizer_id' => 101 );
 		$this->assertTrue( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
 		$this->assertTrue( $authorization->authorize_artist_locked( 101, 30, $scope ) );
@@ -297,7 +320,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'events_artist_mapping_release_failed', $authorization->close_transaction_scope( $scope )->get_error_code() );
 		$wpdb->mapping_release_result = 1;
 		$this->assertTrue( $authorization->close_transaction_scope( $scope ) );
-		$this->assertSame( array( 'membership-release', 'mapping-release', 'mapping-release' ), array_slice( $wpdb->lock_sequence, -3 ) );
+		$this->assertSame( array( 'mapping-release', 'membership-release', 'binding-release' ), array_slice( $wpdb->lock_sequence, -3 ) );
 	}
 
 	public function test_artist_binding_rows_are_exact_and_release_failure_retains_tracking(): void {
@@ -310,7 +333,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 			$wpdb->binding_change_waited = true;
 		};
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$this->assertTrue( $authorization->authorize_artist_locked( 101, 30, $scope ) );
 		$this->assertTrue( $wpdb->binding_change_waited, 'A binding writer arriving after the profile lock must wait behind authorization.' );
 
@@ -318,13 +341,13 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'local_support_artist_authority_release_failed', $authorization->close_transaction_scope( $scope )->get_error_code() );
 		$wpdb->membership_release_result = 1;
 		$this->assertTrue( $authorization->close_transaction_scope( $scope ) );
-		$this->assertSame( array( 'membership-release', 'membership-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
+		$this->assertSame( array( 'membership-release', 'binding-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
 
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$wpdb->profile_binding_rows = array();
 		$this->assertSame( 'local_support_artist_binding_corrupt', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
-		$scope = $this->open_authorization_scope( $authorization );
+		$scope = $this->open_authorization_scope( $authorization, true );
 		$wpdb->profile_binding_rows = array_fill( 0, 2, array( 'meta_id' => 10, 'meta_value' => '101' ) );
 		$this->assertSame( 'local_support_artist_binding_corrupt', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
@@ -346,9 +369,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$wpdb = new LocalSupportSqliteAuthorityWpdb();
 		$GLOBALS['wpdb'] = $wpdb;
 		$authorization = new LocalSupportAuthorization();
-		$scope = $this->open_authorization_scope( $authorization );
-		$this->assertSame( 'local_support_artist_advisory_locks_unsupported', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
-		$authorization->close_transaction_scope( $scope );
+		$this->assertSame( 'local_support_artist_advisory_locks_unsupported', $authorization->prepare_artist_transaction( 101, 30 )->get_error_code() );
 	}
 
 	public function test_repeatable_read_boundary_succeeds_and_restores_error_suppression(): void {
@@ -523,6 +544,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 
 		$abilities = new LocalSupportAbilities( $this->service );
 		$abilities->register();
+		$this->assertSame( 'local_support_organizer_identity_incomplete', $abilities->get_request( array( 'request_id' => $request['id'], 'acting_organizer_type' => 'venue' ) )->get_error_code() );
 		$this->assertArrayHasKey( 'extrachill-events/open-local-support-request', $GLOBALS['ec_artist_test']['abilities'] );
 		foreach ( $GLOBALS['ec_artist_test']['abilities'] as $name => $definition ) {
 			if ( 0 === strpos( $name, 'extrachill-events/' ) && false !== strpos( $name, 'local-support' ) ) {
@@ -554,6 +576,21 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'local_support_forbidden', $denied->get_error_code() );
 	}
 
+	public function test_artist_opportunity_keyset_scan_finds_older_match_and_fails_on_overflow(): void {
+		for ( $id = 1; $id <= 150; ++$id ) {
+			$this->repository->requests[ $id ] = array( 'id' => $id, 'event_id' => 1000 + $id, 'venue_term_id' => 55, 'organizer_type' => 'venue', 'organizer_id' => 55, 'status' => 'open', 'version' => 1 );
+		}
+		$workspace = new LocalSupportWorkspace( $this->repository, $this->authorization, $this->service, static function ( array $request ): array { return 1001 === $request['event_id'] ? array( array( 'artist_term_id' => 202, 'name' => 'Eligible Artist' ) ) : array(); } );
+		$opportunities = $workspace->artist_opportunities( 202, 20 );
+		$this->assertSame( array( 1 ), array_column( array_column( $opportunities, 'request' ), 'id' ) );
+
+		for ( $id = 151; $id <= 501; ++$id ) {
+			$this->repository->requests[ $id ] = array( 'id' => $id, 'event_id' => 1000 + $id, 'venue_term_id' => 55, 'organizer_type' => 'venue', 'organizer_id' => 55, 'status' => 'open', 'version' => 1 );
+		}
+		$overflow = ( new LocalSupportWorkspace( $this->repository, $this->authorization, $this->service, static function (): array { return array(); } ) )->artist_opportunities( 202, 20 );
+		$this->assertSame( 'local_support_artist_opportunity_scan_overflow', $overflow->get_error_code() );
+	}
+
 	public function test_withdrawal_atomically_revokes_active_contact_consent(): void {
 		$request  = $this->open_request();
 		$interest = $this->service->express_interest( $request['id'], 202, 'interest-with-contact', 20 );
@@ -579,11 +616,15 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		);
 	}
 
-	private function open_authorization_scope( LocalSupportAuthorization $authorization ): object {
+	private function open_authorization_scope( LocalSupportAuthorization $authorization, bool $artist = false ): object {
 		$id = spl_object_id( $authorization );
 		if ( ! isset( $this->authorization_tokens[ $id ] ) ) {
 			$this->authorization_tokens[ $id ] = new stdClass();
 			$this->assertTrue( $authorization->claim_transaction_owner( $this->authorization_tokens[ $id ] ) );
+		}
+		if ( $artist ) {
+			$prepared = $authorization->prepare_artist_transaction( 101, 30 );
+			$this->assertIsObject( $prepared );
 		}
 		$scope = $authorization->open_transaction_scope( $this->authorization_tokens[ $id ] );
 		$this->assertIsObject( $scope );
@@ -671,13 +712,14 @@ final class LocalSupportMemoryRepository extends LocalSupportRepository {
 		return null;
 	}
 
-	public function list_participation_requests( int $limit = 100 ) {
+	public function list_participation_requests( int $limit = 100, int $before_id = 0 ) {
 		$rows = array_filter(
 			$this->requests,
-			static function ( array $request ): bool {
-				return in_array( $request['status'], array( 'open', 'paused' ), true );
+			static function ( array $request ) use ( $before_id ): bool {
+				return in_array( $request['status'], array( 'open', 'paused' ), true ) && ( $before_id < 1 || (int) $request['id'] < $before_id );
 			}
 		);
+		krsort( $rows );
 		return array_slice( array_values( $rows ), 0, $limit );
 	}
 
@@ -775,6 +817,7 @@ final class LocalSupportTestAuthorization extends LocalSupportAuthorization {
 	public $scope_closes      = 0;
 	public $close_failure     = false;
 	public $use_advisory_scope = false;
+	public $organizer_error;
 	private $advisory_scopes = array();
 
 	public function __construct() {
@@ -797,6 +840,11 @@ final class LocalSupportTestAuthorization extends LocalSupportAuthorization {
 		return true;
 	}
 
+	public function authorize_organizer_action( string $action, array $request, int $user_id, array $identity ) {
+		unset( $action, $identity );
+		return $this->organizer_error ? $this->organizer_error : $this->authorize_organizer( $request, $user_id );
+	}
+
 	public function authorize_artist( int $artist_term_id, int $user_id ) {
 		unset( $artist_term_id, $user_id );
 		return $this->artist_allowed ? true : new WP_Error( 'local_support_forbidden' );
@@ -806,6 +854,11 @@ final class LocalSupportTestAuthorization extends LocalSupportAuthorization {
 		unset( $scope );
 		$this->lock_sequence[] = 'organizer-authority';
 		return $this->locked_organizer_allowed ? $this->authorize_organizer( $request, $user_id ) : new WP_Error( 'local_support_forbidden' );
+	}
+
+	public function authorize_organizer_action_locked( string $action, array $request, int $user_id, array $identity, object $scope ) {
+		unset( $action, $identity );
+		return $this->authorize_organizer_locked( $request, $user_id, $scope );
 	}
 
 	public function authorize_artist_locked( int $artist_term_id, int $user_id, object $scope ) {
@@ -821,6 +874,21 @@ final class LocalSupportTestAuthorization extends LocalSupportAuthorization {
 	public function artist_attached_to_event_locked( int $event_id, int $artist_term_id, object $scope ) {
 		unset( $scope );
 		return $this->artist_attached_to_event( $event_id, $artist_term_id );
+	}
+
+	public function prepare_artist_transaction( int $artist_term_id, int $user_id ) {
+		unset( $artist_term_id, $user_id );
+		return new stdClass();
+	}
+
+	public function prepare_organizer_transaction( string $action, array $request, int $user_id, array $identity ) {
+		unset( $action, $request, $user_id, $identity );
+		return null;
+	}
+
+	public function close_pretransaction_scope( $scope ) {
+		unset( $scope );
+		return true;
 	}
 
 	public function open_transaction_scope( object $owner ) {
@@ -899,12 +967,13 @@ class LocalSupportAuthorityWpdb {
 	public function get_var( $query ) {
 		$this->last_error = '';
 		if ( false !== strpos( $query, 'GET_LOCK' ) ) {
-			$this->lock_sequence[] = false !== strpos( $query, 'ec_events_artist_mapping_' ) ? 'mapping-advisory' : 'membership-advisory';
+			$this->lock_sequence[] = false !== strpos( $query, 'ec_artist_binding_v1' ) ? 'binding-advisory' : ( false !== strpos( $query, 'ec_events_artist_mapping_' ) ? 'mapping-advisory' : 'membership-advisory' );
 			return 1;
 		}
 		if ( false !== strpos( $query, 'RELEASE_LOCK' ) ) {
 			$is_mapping = false !== strpos( $query, 'ec_events_artist_mapping_' );
-			$this->lock_sequence[] = $is_mapping ? 'mapping-release' : 'membership-release';
+			$is_binding = false !== strpos( $query, 'ec_artist_binding_v1' );
+			$this->lock_sequence[] = $is_binding ? 'binding-release' : ( $is_mapping ? 'mapping-release' : 'membership-release' );
 			return $is_mapping ? $this->mapping_release_result : $this->membership_release_result;
 		}
 		return null;

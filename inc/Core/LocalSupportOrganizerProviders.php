@@ -9,6 +9,8 @@ namespace ExtraChillEvents\Core;
 
 defined( 'ABSPATH' ) || exit;
 
+// phpcs:disable Generic.Files.OneObjectStructurePerFile.MultipleFound -- Cohesive provider contract, registry, and built-in implementations.
+
 /** Action-specific organizer authority contract. */
 interface LocalSupportOrganizerProvider {
 	public function type(): string;
@@ -23,7 +25,7 @@ final class LocalSupportOrganizerProviderRegistry {
 	private $providers = array();
 
 	public function register( LocalSupportOrganizerProvider $provider ) {
-		$type = sanitize_key( $provider->type() );
+		$type = $this->type_key( $provider->type() );
 		if ( '' === $type || isset( $this->providers[ $type ] ) ) {
 			return new \WP_Error( 'local_support_organizer_provider_duplicate', __( 'A Local Support organizer provider claimed a duplicate or invalid identity type.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
@@ -32,7 +34,7 @@ final class LocalSupportOrganizerProviderRegistry {
 	}
 
 	public function authorize( string $action, array $request, array $identity, int $user_id, LocalSupportAuthorization $authorization, bool $locked = false, ?object $scope = null ) {
-		$type = sanitize_key( (string) ( $identity['type'] ?? '' ) );
+		$type = $this->type_key( (string) ( $identity['type'] ?? '' ) );
 		$id   = absint( $identity['id'] ?? 0 );
 		if ( $id < 1 || ! isset( $this->providers[ $type ] ) ) {
 			return new \WP_Error( 'local_support_organizer_identity_unknown', __( 'The selected Local Support organizer identity is unavailable.', 'extrachill-events' ), array( 'status' => 403 ) );
@@ -42,6 +44,68 @@ final class LocalSupportOrganizerProviderRegistry {
 			'id'   => $id,
 		);
 		return $this->invoke( $this->providers[ $type ], 'authorize', array( $action, $request, $identity, $user_id, $authorization, $locked, $scope ) );
+	}
+
+	/** Prepare provider advisory locks before the service transaction starts. */
+	public function prepare( string $action, array $request, array $identity, int $user_id, LocalSupportAuthorization $authorization ) {
+		$type = $this->type_key( (string) ( $identity['type'] ?? '' ) );
+		$id   = absint( $identity['id'] ?? 0 );
+		if ( $id < 1 || ! isset( $this->providers[ $type ] ) ) {
+			return new \WP_Error( 'local_support_organizer_identity_unknown', __( 'The selected Local Support organizer identity is unavailable.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
+		$provider = $this->providers[ $type ];
+		return method_exists( $provider, 'prepare_transaction' )
+			? $this->invoke(
+				$provider,
+				'prepare_transaction',
+				array(
+					$action,
+					$request,
+					array(
+						'type' => $type,
+						'id'   => $id,
+					),
+					$user_id,
+					$authorization,
+				)
+			)
+			: null;
+	}
+
+	/** Resolve choices from only the explicitly selected provider. */
+	public function choice( int $event_id, int $user_id, array $identity, LocalSupportAuthorization $authorization ) {
+		$type = $this->type_key( (string) ( $identity['type'] ?? '' ) );
+		$id   = absint( $identity['id'] ?? 0 );
+		if ( $id < 1 || ! isset( $this->providers[ $type ] ) ) {
+			return new \WP_Error( 'local_support_organizer_identity_unknown', __( 'The selected Local Support organizer identity is unavailable.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
+		$provider = $this->providers[ $type ];
+		$rows     = method_exists( $provider, 'choice' )
+			? $this->invoke(
+				$provider,
+				'choice',
+				array(
+					$event_id,
+					$user_id,
+					array(
+						'type' => $type,
+						'id'   => $id,
+					),
+					$authorization,
+				)
+			)
+			: $this->invoke( $provider, 'choices', array( $event_id, $user_id, $authorization ) );
+		if ( is_wp_error( $rows ) ) {
+			return $rows;
+		}
+		return array_values(
+			array_filter(
+				(array) $rows,
+				static function ( array $row ) use ( $type, $id ): bool {
+					return ( $row['type'] ?? '' ) === $type && (int) ( $row['id'] ?? 0 ) === $id;
+				}
+			)
+		);
 	}
 
 	public function choices( int $event_id, int $user_id, LocalSupportAuthorization $authorization ) {
@@ -97,9 +161,11 @@ final class LocalSupportOrganizerProviderRegistry {
 		}
 		$context_leaked = get_current_blog_id() !== $blog_id || count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) ) !== $depth;
 		$attempts       = 0;
-		while ( ( count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) ) > $depth || get_current_blog_id() !== $blog_id ) && $attempts < 100 ) {
+		$current_depth  = count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) );
+		while ( ( $current_depth > $depth || get_current_blog_id() !== $blog_id ) && $attempts < 100 ) {
 			restore_current_blog();
 			++$attempts;
+			$current_depth = count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) );
 		}
 		if ( $context_leaked || get_current_blog_id() !== $blog_id || count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) ) !== $depth ) {
 			return new \WP_Error(
@@ -112,6 +178,11 @@ final class LocalSupportOrganizerProviderRegistry {
 			);
 		}
 		return $result;
+	}
+
+	private function type_key( string $type ): string {
+		$type = strtolower( $type );
+		return preg_match( '/^[a-z][a-z0-9_-]{0,31}$/', $type ) ? $type : '';
 	}
 }
 
@@ -186,7 +257,7 @@ final class LocalSupportVenueOrganizerProvider implements LocalSupportOrganizerP
 				'type' => $this->type(),
 				'id'   => (int) $request['venue_term_id'],
 			);
-			$allowed = $this->authorize( LocalSupportAuthorization::ACTION_NOTIFY, $request, $identity, (int) $member['user_id'], $authorization );
+			$allowed  = $this->authorize( LocalSupportAuthorization::ACTION_NOTIFY, $request, $identity, (int) $member['user_id'], $authorization );
 			if ( true === $allowed ) {
 				$ids[] = (int) $member['user_id'];
 			} elseif ( ! $authorization->is_denial( $allowed ) ) {
@@ -228,6 +299,11 @@ final class LocalSupportArtistOrganizerProvider implements LocalSupportOrganizer
 		return $locked ? $authorization->authorize_artist_locked( $artist_id, $user_id, $scope ) : $authorization->authorize_artist( $artist_id, $user_id );
 	}
 
+	public function prepare_transaction( string $action, array $request, array $identity, int $user_id, LocalSupportAuthorization $authorization ) {
+		unset( $action, $request );
+		return $authorization->prepare_artist_transaction( (int) $identity['id'], $user_id );
+	}
+
 	public function choices( int $event_id, int $user_id, LocalSupportAuthorization $authorization ) {
 		$context = $authorization->event_context( $event_id );
 		if ( is_wp_error( $context ) ) {
@@ -249,7 +325,7 @@ final class LocalSupportArtistOrganizerProvider implements LocalSupportOrganizer
 				'organizer_id'   => $identity['id'],
 			)
 		);
-		$allowed = $this->authorize( LocalSupportAuthorization::ACTION_OPEN, $request, $identity, $user_id, $authorization );
+		$allowed  = $this->authorize( LocalSupportAuthorization::ACTION_OPEN, $request, $identity, $user_id, $authorization );
 		if ( true !== $allowed ) {
 			return $authorization->is_denial( $allowed ) ? array() : $allowed;
 		}
@@ -307,6 +383,13 @@ final class LocalSupportArtistOrganizerProvider implements LocalSupportOrganizer
 
 /** Exact current promoter organization, membership, and delegated venue grant. */
 final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganizerProvider {
+	/** @var callable|null Deterministic authorization seam. */
+	private $authorization_resolver;
+
+	public function __construct( ?callable $authorization_resolver = null ) {
+		$this->authorization_resolver = $authorization_resolver;
+	}
+
 	public function type(): string {
 		return 'promoter';
 	}
@@ -324,6 +407,9 @@ final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganiz
 		}
 		if ( $locked ) {
 			return $this->authorize_locked( $user_id, (int) $identity['id'], (int) $request['venue_term_id'] );
+		}
+		if ( $this->authorization_resolver ) {
+			return call_user_func( $this->authorization_resolver, $user_id, (int) $identity['id'], (int) $request['venue_term_id'] );
 		}
 		return ( new PromoterVenueAuthorization() )->authorize( $user_id, (int) $identity['id'], (int) $request['venue_term_id'], PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT );
 	}
@@ -353,7 +439,7 @@ final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganiz
 					'organizer_id'   => $identity['id'],
 				)
 			);
-			$allowed = $this->authorize( LocalSupportAuthorization::ACTION_OPEN, $request, $identity, $user_id, $authorization );
+			$allowed  = $this->authorize( LocalSupportAuthorization::ACTION_OPEN, $request, $identity, $user_id, $authorization );
 			if ( true !== $allowed && $authorization->is_denial( $allowed ) ) {
 				continue;
 			} elseif ( true !== $allowed ) {
@@ -371,8 +457,34 @@ final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganiz
 		return $rows;
 	}
 
+	/** Resolve one explicitly selected promoter without listing other identities. */
+	public function choice( int $event_id, int $user_id, array $identity, LocalSupportAuthorization $authorization ) {
+		$context = $authorization->event_context( $event_id );
+		if ( is_wp_error( $context ) ) {
+			return $context;
+		}
+		$request = array_merge(
+			$context,
+			array(
+				'organizer_type' => $this->type(),
+				'organizer_id'   => (int) $identity['id'],
+			)
+		);
+		$allowed = $this->authorize( LocalSupportAuthorization::ACTION_OPEN, $request, $identity, $user_id, $authorization );
+		if ( true !== $allowed ) {
+			return $authorization->is_denial( $allowed ) ? array() : $allowed;
+		}
+		$term = $authorization->organizer_term( (int) $identity['id'], $this->type() );
+		return $term instanceof \WP_Term ? array(
+			array(
+				'type'  => $this->type(),
+				'id'    => (int) $identity['id'],
+				'label' => $term->name,
+			),
+		) : array();
+	}
+
 	public function recipient_ids( array $request, LocalSupportAuthorization $authorization ) {
-		unset( $authorization );
 		if ( ! class_exists( PromoterAuthoritySchema::class ) ) {
 			return array();
 		}
@@ -393,7 +505,7 @@ final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganiz
 				'type' => $this->type(),
 				'id'   => (int) $row['promoter_term_id'],
 			);
-			$allowed = $this->authorize( LocalSupportAuthorization::ACTION_NOTIFY, $request, $identity, (int) $row['user_id'], $authorization );
+			$allowed  = $this->authorize( LocalSupportAuthorization::ACTION_NOTIFY, $request, $identity, (int) $row['user_id'], $authorization );
 			if ( true === $allowed ) {
 				$recipients[] = (int) $row['user_id'];
 			} elseif ( ! $authorization->is_denial( $allowed ) ) {
@@ -408,14 +520,16 @@ final class LocalSupportPromoterOrganizerProvider implements LocalSupportOrganiz
 		$organizations = PromoterAuthoritySchema::organizations_table();
 		$memberships   = PromoterAuthoritySchema::memberships_table();
 		$grants        = PromoterAuthoritySchema::venue_grants_table();
-		$organization  = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$organizations} WHERE promoter_term_id = %d FOR UPDATE", $promoter_id ), ARRAY_A );
-		$membership    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$memberships} WHERE promoter_term_id = %d AND user_id = %d FOR UPDATE", $promoter_id, $user_id ), ARRAY_A );
-		$grant         = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$grants} WHERE promoter_term_id = %d AND venue_term_id = %d AND action = %s FOR UPDATE", $promoter_id, $venue_id, PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT ), ARRAY_A );
+		$organization  = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$organizations} WHERE promoter_term_id = %d FOR UPDATE", $promoter_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted current-site schema table.
+		$membership    = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$memberships} WHERE promoter_term_id = %d AND user_id = %d FOR UPDATE", $promoter_id, $user_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted current-site schema table.
+		$grant         = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$grants} WHERE promoter_term_id = %d AND venue_term_id = %d AND action = %s FOR UPDATE", $promoter_id, $venue_id, PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Trusted current-site schema table.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'local_support_promoter_authority_read_failed', __( 'Promoter Local Support authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		$active  = PromoterAuthorityRepository::STATUS_ACTIVE;
 		$ceiling = PromoterAuthorization::user_can( $user_id, VenueAuthorization::ACCESS_CAPABILITY ) && function_exists( 'ec_feature_available' ) && ec_feature_available( VenueAuthorization::FEATURE, $user_id );
-		return $ceiling && $active === ( $organization['status'] ?? '' ) && $active === ( $membership['status'] ?? '' ) && $active === ( $grant['status'] ?? '' ) ? true : new \WP_Error( 'local_support_forbidden', __( 'You are not authorized for this Local Support request.', 'extrachill-events' ), array( 'status' => 403 ) );
+		if ( ! $ceiling || PromoterAuthorityRepository::STATUS_ACTIVE !== ( $organization['status'] ?? '' ) || PromoterAuthorityRepository::STATUS_ACTIVE !== ( $membership['status'] ?? '' ) || PromoterAuthorityRepository::STATUS_ACTIVE !== ( $grant['status'] ?? '' ) ) {
+			return new \WP_Error( 'local_support_forbidden', __( 'You are not authorized for this Local Support request.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
+		return true;
 	}
 }

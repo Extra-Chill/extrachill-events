@@ -285,7 +285,14 @@ final class PromoterWorkspace {
 		}
 		if ( function_exists( 'extrachill_events_local_support_organizer_events' ) ) {
 			$granted_ids = array_column( $result['granted_venues'], 'id' );
-			$events      = extrachill_events_local_support_organizer_events( $user_id );
+			$events      = extrachill_events_local_support_organizer_events(
+				$user_id,
+				0,
+				array(
+					'type' => 'promoter',
+					'id'   => $term_id,
+				)
+			);
 			foreach ( $events as $event ) {
 				if ( ! in_array( (int) $event['venue_term_id'], $granted_ids, true ) ) {
 					continue;

@@ -73,11 +73,13 @@ class LocalSupportRepository {
 	}
 
 	/** List bounded active requests for exact Artist participation checks. */
-	public function list_participation_requests( int $limit = 100 ) {
+	public function list_participation_requests( int $limit = 100, int $before_id = 0 ) {
 		global $wpdb;
 		$table = LocalSupportSchema::requests_table();
-		$limit = max( 1, min( 100, $limit ) );
-		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE status IN ('open', 'paused') ORDER BY updated_at DESC, id DESC LIMIT %d", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded private participation candidates reauthorized by the workspace.
+		$limit = max( 1, min( 101, $limit ) );
+		$where = $before_id > 0 ? ' AND id < %d' : '';
+		$args  = $before_id > 0 ? array( $before_id, $limit ) : array( $limit );
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE status IN ('open', 'paused'){$where} ORDER BY id DESC LIMIT %d", $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded keyset page reauthorized by the workspace.
 		if ( '' !== (string) $wpdb->last_error ) {
 			return new \WP_Error( 'local_support_request_list_failed', __( 'Local support requests could not be read.', 'extrachill-events' ) );
 		}

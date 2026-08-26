@@ -28,6 +28,18 @@ namespace {
 		return $text;
 	}
 
+	function sanitize_key( $value ) {
+		return strtolower( preg_replace( '/[^a-z0-9_\-]/', '', (string) $value ) );
+	}
+
+	function absint( $value ) {
+		return abs( (int) $value );
+	}
+
+	function is_wp_error( $value ) {
+		return $value instanceof \WP_Error;
+	}
+
 	function wp_register_ability() {}
 
 	function get_option( $option, $default = false ) {

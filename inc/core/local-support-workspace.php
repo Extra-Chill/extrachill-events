@@ -265,13 +265,29 @@ function extrachill_events_local_support_exact_artist_scope( int $user_id, int $
 	);
 }
 
+/** Resolve only one promoter identity and its active Local Support venue grants. */
+function extrachill_events_local_support_exact_promoter_scope( int $user_id, int $promoter_id ) {
+	if ( ! class_exists( '\ExtraChillEvents\Core\PromoterVenueAuthorization' ) ) {
+		return new WP_Error( 'local_support_promoter_scope_unavailable', __( 'Promoter Local Support authority is unavailable.', 'extrachill-events' ) );
+	}
+	$venues = ( new ExtraChillEvents\Core\PromoterVenueAuthorization() )->effective_venue_ids( $user_id, $promoter_id, ExtraChillEvents\Core\PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT );
+	if ( is_wp_error( $venues ) ) {
+		return $venues;
+	}
+	return array(
+		'venues'    => array_values( array_unique( array_map( 'intval', $venues ) ) ),
+		'artists'   => array(),
+		'promoters' => array( $promoter_id => array_values( array_unique( array_map( 'intval', $venues ) ) ) ),
+	);
+}
+
 /**
  * List bounded upcoming events the user explicitly represents.
  *
  * Request absence is the canonical "not seeking" state. Existing request
  * rows remain the sole source of all active and terminal workflow states.
  *
- * @param int $user_id Acting user ID.
+ * @param int        $user_id Acting user ID.
  * @param int        $venue_term_id Optional exact venue scope.
  * @param array|null $identity Optional exact managed identity scope.
  * @return array[] Private organizer event cards.
@@ -285,9 +301,13 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 
 	$identity_type = null === $identity ? '' : sanitize_key( (string) ( $identity['type'] ?? '' ) );
 	$identity_id   = null === $identity ? 0 : absint( $identity['id'] ?? 0 );
-	$scope         = null !== $identity && 'artist' === $identity_type && $identity_id > 0
-		? extrachill_events_local_support_exact_artist_scope( $user_id, $identity_id )
-		: extrachill_events_local_support_organizer_scope( $user_id );
+	if ( null !== $identity && 'artist' === $identity_type && $identity_id > 0 ) {
+		$scope = extrachill_events_local_support_exact_artist_scope( $user_id, $identity_id );
+	} elseif ( null !== $identity && 'promoter' === $identity_type && $identity_id > 0 ) {
+		$scope = extrachill_events_local_support_exact_promoter_scope( $user_id, $identity_id );
+	} else {
+		$scope = extrachill_events_local_support_organizer_scope( $user_id );
+	}
 	if ( is_wp_error( $scope ) ) {
 		return array();
 	}
@@ -299,12 +319,20 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 		$scope['artists'] = array();
 	}
 	if ( null !== $identity ) {
-		if ( 'artist' !== $identity_type || $identity_id < 1 || ! isset( $scope['artists'][ $identity_id ] ) ) {
+		$valid_artist   = 'artist' === $identity_type && isset( $scope['artists'][ $identity_id ] );
+		$valid_promoter = 'promoter' === $identity_type && isset( $scope['promoters'][ $identity_id ] );
+		if ( $identity_id < 1 || ( ! $valid_artist && ! $valid_promoter ) ) {
 			return array();
 		}
-		$scope['venues']    = array();
-		$scope['artists']   = array( $identity_id => (int) $scope['artists'][ $identity_id ] );
-		$scope['promoters'] = array();
+		if ( $valid_artist ) {
+			$scope['venues']    = array();
+			$scope['artists']   = array( $identity_id => (int) $scope['artists'][ $identity_id ] );
+			$scope['promoters'] = array();
+		} else {
+			$scope['venues']    = $scope['promoters'][ $identity_id ];
+			$scope['artists']   = array();
+			$scope['promoters'] = array( $identity_id => $scope['venues'] );
+		}
 	}
 	if ( empty( $scope['venues'] ) && empty( $scope['artists'] ) ) {
 		return array();
@@ -362,7 +390,9 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 		foreach ( $page_rows as $row ) {
 			++$scanned;
 			$event_id = (int) $row['ID'];
-			$options  = extrachill_events_local_support_resolve_organizer_options( $event_id, $user_id, $scope );
+			$options  = null !== $identity
+				? ( new LocalSupportAuthorization() )->organizer_choice( $event_id, $user_id, $identity )
+				: extrachill_events_local_support_resolve_organizer_options( $event_id, $user_id, $scope );
 			if ( is_wp_error( $options ) ) {
 				if ( in_array( $options->get_error_code(), array( 'invalid_local_support_event', 'invalid_local_support_event_venue' ), true ) ) {
 					continue;
@@ -384,6 +414,9 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 				if ( 1 !== count( $options ) ) {
 					continue;
 				}
+			}
+			if ( 1 !== count( $options ) ) {
+				continue;
 			}
 			$request = $repository->get_request_by_event( $event_id );
 			if ( is_wp_error( $request ) ) {
@@ -503,13 +536,19 @@ function extrachill_events_render_local_support_workspace(): void {
 		}
 		return;
 	}
-	$organizer_identity = preg_match( '/^([a-z][a-z0-9_-]{0,31}):([1-9][0-9]{0,9})$/', $identity_reference, $identity_matches )
+	$identity_valid = 1 === preg_match( '/^([a-z][a-z0-9_-]{0,31}):([1-9][0-9]{0,9})$/', $identity_reference, $identity_matches );
+	if ( '' !== $identity_reference && ! $identity_valid && 'artist' !== $mode ) {
+		status_header( 404 );
+		extrachill_events_render_local_support_unavailable();
+		return;
+	}
+	$organizer_identity = $identity_valid
 		? array(
 			'type' => $identity_matches[1],
 			'id'   => (int) $identity_matches[2],
 		)
 		: null;
-	$model              = ( new LocalSupportWorkspace() )->read( $request_id, $artist_id, get_current_user_id(), $organizer_identity );
+	$model              = ( new LocalSupportWorkspace() )->read( $request_id, $artist_id, get_current_user_id(), 'artist' === $mode ? null : $organizer_identity, $mode );
 	if ( is_wp_error( $model ) ) {
 		status_header( in_array( $model->get_error_code(), array( 'local_support_forbidden', 'local_support_not_found' ), true ) ? 404 : 503 );
 		extrachill_events_render_local_support_unavailable();
@@ -550,7 +589,20 @@ function extrachill_events_render_local_support_artist_index( int $artist_id, ?a
 			<div class="ec-local-support__empty"><strong><?php esc_html_e( 'No open opportunities', 'extrachill-events' ); ?></strong><p><?php esc_html_e( 'No current request matches this Artist availability and Local Scene.', 'extrachill-events' ); ?></p></div>
 		<?php else : ?>
 			<div class="ec-local-support__cards"><?php foreach ( $model['opportunities'] as $opportunity ) : ?>
-				<article class="ec-local-support__artist-card"><div><h3><?php echo esc_html( $opportunity['event']['title'] ); ?></h3><p><?php echo esc_html( $opportunity['event']['venue'] ); ?></p></div><a class="button-2" href="<?php echo esc_url( add_query_arg( 'artist_id', (int) $model['artist_id'], home_url( '/local-support/' . (int) $opportunity['request']['id'] . '/' ) ) ); ?>"><?php esc_html_e( 'View opportunity', 'extrachill-events' ); ?></a></article>
+				<article class="ec-local-support__artist-card"><div><h3><?php echo esc_html( $opportunity['event']['title'] ); ?></h3><p><?php echo esc_html( $opportunity['event']['venue'] ); ?></p></div><a class="button-2" href="
+				<?php
+				echo esc_url(
+					add_query_arg(
+						array(
+							'mode'      => 'artist',
+							'artist_id' => (int) $model['artist_id'],
+							'identity'  => 'artist:' . (int) $model['artist_id'],
+						),
+						home_url( '/local-support/' . (int) $opportunity['request']['id'] . '/' )
+					)
+				);
+				?>
+																		"><?php esc_html_e( 'View opportunity', 'extrachill-events' ); ?></a></article>
 			<?php endforeach; ?></div>
 		<?php endif; ?></section>
 		<section class="ec-local-support__section"><h2><?php esc_html_e( 'Eligible organizer events', 'extrachill-events' ); ?></h2>
@@ -611,7 +663,20 @@ function extrachill_events_render_local_support_artist_selection( array $model )
 		<p><?php esc_html_e( 'Respond for one exact artist you manage. Each artist controls availability through Artist Manager.', 'extrachill-events' ); ?></p>
 		<div class="ec-local-support__cards">
 			<?php foreach ( $model['candidates'] as $candidate ) : ?>
-				<a class="ec-local-support__artist-card" href="<?php echo esc_url( add_query_arg( 'artist_id', (int) $candidate['artist_term_id'], home_url( '/local-support/' . (int) $model['request']['id'] . '/' ) ) ); ?>">
+				<a class="ec-local-support__artist-card" href="
+				<?php
+				echo esc_url(
+					add_query_arg(
+						array(
+							'mode'      => 'artist',
+							'artist_id' => (int) $candidate['artist_term_id'],
+							'identity'  => 'artist:' . (int) $candidate['artist_term_id'],
+						),
+						home_url( '/local-support/' . (int) $model['request']['id'] . '/' )
+					)
+				);
+				?>
+																">
 					<?php
 					if ( ! empty( $candidate['profile_image_url'] ) ) :
 						?>

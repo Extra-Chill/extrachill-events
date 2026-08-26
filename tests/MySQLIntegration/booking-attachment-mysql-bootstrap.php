@@ -17,9 +17,16 @@ if ( ! function_exists( 'ec_feature_available' ) ) {
 	}
 }
 
+if ( ! function_exists( 'ec_get_artists_for_user' ) ) {
+	/** Read the canonical reciprocal Artist roster in the disposable runtime. */
+	function ec_get_artists_for_user( int $user_id ): array {
+		return array_values( array_unique( array_map( 'absint', (array) get_user_meta( $user_id, '_artist_profile_ids', true ) ) ) );
+	}
+}
+
 if ( ! function_exists( 'ec_get_blog_id' ) ) {
-	/** Map the isolated disposable site to the logical Events site. */
+	/** Map all logical sites to the isolated disposable site. */
 	function ec_get_blog_id( string $site ): ?int {
-		return 'events' === $site ? get_current_blog_id() : null;
+		return in_array( $site, array( 'main', 'artist', 'events' ), true ) ? get_current_blog_id() : null;
 	}
 }

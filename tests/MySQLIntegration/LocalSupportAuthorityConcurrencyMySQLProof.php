@@ -53,25 +53,26 @@ final class LocalSupportMySQLProbeAuthorization extends LocalSupportAuthorizatio
 }
 
 final class LocalSupportArtistMySQLAuthorization extends LocalSupportAuthorization {
+	private $contender;
 	private $profile_id;
-	public function __construct( int $profile_id ) {
+	private $probe = false;
+	public $binding_waited = false;
+	public function __construct( mysqli $contender, int $profile_id ) {
 		parent::__construct();
+		$this->contender = $contender;
 		$this->profile_id = $profile_id; }
-	protected function artist_profile_id( int $artist_term_id ) {
-		unset( $artist_term_id );
-		return $this->profile_id; }
-	public function artist_attached_to_event( int $event_id, int $artist_term_id ) {
-		unset( $event_id, $artist_term_id );
-		return true; }
-	public function artist_attached_to_event_locked( int $event_id, int $artist_term_id, object $scope ) {
-		unset( $event_id, $artist_term_id, $scope );
-		return true; }
-	public function authorize_artist( int $artist_term_id, int $user_id ) {
-		unset( $artist_term_id, $user_id );
-		return true; }
-	public function authorize_artist_locked( int $artist_term_id, int $user_id, object $scope ) {
-		unset( $artist_term_id, $user_id, $scope );
-		return true; }
+	public function enable_probe(): void { $this->probe = true; }
+	protected function after_artist_binding_lock_acquired( object $scope, int $artist_term_id, int $user_id ) {
+		unset( $scope, $artist_term_id );
+		if ( ! $this->probe ) { return true; }
+		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $this->profile_id );
+		$this->contender->query( "SELECT GET_LOCK('{$membership}', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Deterministic test lock identity.
+		$result = $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Proves binding is already held.
+		$this->binding_waited = '0' === (string) $result->fetch_row()[0];
+		$this->contender->query( "SELECT RELEASE_LOCK('{$membership}')" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Allows production membership acquisition to continue.
+		$this->probe = false;
+		return true;
+	}
 }
 
 /** Prove both deterministic orders through an actual LocalSupportService mutation. */
@@ -110,7 +111,7 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		self::commit_transaction();
 		$wpdb->query( 'SET autocommit = 1' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exposes fixture and advisory locks outside the test wrapper.
 
-		$authorization = new LocalSupportArtistMySQLAuthorization( $profile_id );
+		$authorization = new LocalSupportArtistMySQLAuthorization( $this->contender, $profile_id );
 		$scope         = $authorization->prepare_artist_transaction( $artist_term_id, $this->actor_id );
 		$this->assertNotWPError( $scope );
 		$this->assertSame( '0', (string) $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" )->fetch_row()[0], 'Artist binding writer did not wait behind Local Support.' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Exact fixed test lock.
@@ -162,6 +163,7 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		$booking_id = (int) $wpdb->insert_id;
 		$this->assertGreaterThan( 0, $booking_id );
 		$service = new LocalSupportService( new LocalSupportRepository(), $authorization );
+		$authorization->enable_probe();
 		$request = $service->open_request(
 			array(
 				'event_id'              => $event_id,
@@ -175,6 +177,7 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 			$this->actor_id
 		);
 		$this->assertIsArray( $request, is_wp_error( $request ) ? $request->get_error_code() : '' );
+		$this->assertTrue( $authorization->binding_waited, 'Service did not acquire Artist binding before membership.' );
 		$this->assertSame( 'artist', $request['organizer_type'] );
 		$activity = ( new LocalSupportRepository() )->find_activity( $request['id'], 'mysql-artist-local-support-open' );
 		$this->assertIsArray( $activity );

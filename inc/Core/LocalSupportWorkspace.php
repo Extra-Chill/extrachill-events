@@ -145,9 +145,10 @@ class LocalSupportWorkspace {
 		$organizer_identity = $this->organizer_identity( $input );
 		switch ( $action ) {
 			case 'open':
+				$booking_id = absint( $input['booking_id'] ?? 0 );
 				$open_input = array(
 					'event_id'        => absint( $input['event_id'] ?? 0 ),
-					'booking_id'      => absint( $input['booking_id'] ?? 0 ) ?: null,
+					'booking_id'      => $booking_id > 0 ? $booking_id : null,
 					'organizer_type'  => sanitize_key( (string) ( $input['organizer_type'] ?? '' ) ),
 					'organizer_id'    => absint( $input['organizer_id'] ?? 0 ),
 					'idempotency_key' => $key,
@@ -218,6 +219,40 @@ class LocalSupportWorkspace {
 				}
 			)
 		);
+	}
+
+	/**
+	 * Return active opportunities visible to one exact managed Artist.
+	 *
+	 * @param int $artist_term_id Canonical Artist term ID.
+	 * @param int $user_id Acting manager user ID.
+	 * @return array|\WP_Error Exact Artist participation cards or denial.
+	 */
+	public function artist_opportunities( int $artist_term_id, int $user_id ) {
+		$authorized = $this->authorization->authorize_artist( $artist_term_id, $user_id );
+		if ( true !== $authorized ) {
+			return is_wp_error( $authorized ) ? $authorized : $this->denied();
+		}
+		$requests = $this->repository->list_participation_requests( 100 );
+		if ( ! is_array( $requests ) ) {
+			return $requests;
+		}
+		$opportunities = array();
+		foreach ( $requests as $request ) {
+			$model = $this->read(
+				(int) $request['id'],
+				$artist_term_id,
+				$user_id,
+				array(
+					'type' => 'artist',
+					'id'   => $artist_term_id,
+				)
+			);
+			if ( is_array( $model ) && 'artist' === ( $model['role'] ?? '' ) ) {
+				$opportunities[] = $model;
+			}
+		}
+		return $opportunities;
 	}
 
 	/**

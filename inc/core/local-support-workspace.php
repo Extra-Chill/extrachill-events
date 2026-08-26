@@ -227,6 +227,44 @@ function extrachill_events_local_support_organizer_scope( int $user_id ) {
 	);
 }
 
+/** Resolve only one canonical Artist identity without loading unrelated resources. */
+function extrachill_events_local_support_exact_artist_scope( int $user_id, int $artist_id ) {
+	$authorization = new LocalSupportAuthorization();
+	$authorized    = $authorization->authorize_artist( $artist_id, $user_id );
+	if ( true !== $authorized ) {
+		return is_wp_error( $authorized ) ? $authorized : new WP_Error( 'local_support_forbidden', __( 'This private local support workspace is unavailable.', 'extrachill-events' ) );
+	}
+	if ( ! function_exists( 'extrachill_events_resolve_artist_term' ) || ! function_exists( 'extrachill_events_read_artist_mapping_claims' ) ) {
+		return new WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical Artist mapping is unavailable.', 'extrachill-events' ) );
+	}
+	$mapped = extrachill_events_resolve_artist_term( $artist_id );
+	if ( is_wp_error( $mapped ) || empty( $mapped['term_id'] ) ) {
+		return is_wp_error( $mapped ) ? $mapped : new WP_Error( 'local_support_artist_scope_corrupt', __( 'The organizer Artist mapping is invalid.', 'extrachill-events' ) );
+	}
+	$main_blog_id = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'main' ) : 0;
+	if ( $main_blog_id < 1 ) {
+		return new WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical Artist mapping is unavailable.', 'extrachill-events' ) );
+	}
+	switch_to_blog( $main_blog_id );
+	try {
+		$claims = extrachill_events_read_artist_mapping_claims( (int) $mapped['term_id'] );
+	} finally {
+		restore_current_blog();
+	}
+	if ( is_wp_error( $claims ) ) {
+		return $claims;
+	}
+	$claims = array_values( array_unique( array_map( 'intval', (array) $claims ) ) );
+	if ( array( $artist_id ) !== $claims ) {
+		return new WP_Error( 'local_support_artist_mapping_claims_invalid', __( 'Canonical Artist mapping has conflicting claims.', 'extrachill-events' ), array( 'status' => 409 ) );
+	}
+	return array(
+		'venues'    => array(),
+		'artists'   => array( $artist_id => (int) $mapped['term_id'] ),
+		'promoters' => array(),
+	);
+}
+
 /**
  * List bounded upcoming events the user explicitly represents.
  *
@@ -234,17 +272,22 @@ function extrachill_events_local_support_organizer_scope( int $user_id ) {
  * rows remain the sole source of all active and terminal workflow states.
  *
  * @param int $user_id Acting user ID.
- * @param int $venue_term_id Optional exact venue scope.
+ * @param int        $venue_term_id Optional exact venue scope.
+ * @param array|null $identity Optional exact managed identity scope.
  * @return array[] Private organizer event cards.
  */
-function extrachill_events_local_support_organizer_events( int $user_id, int $venue_term_id = 0 ): array {
+function extrachill_events_local_support_organizer_events( int $user_id, int $venue_term_id = 0, ?array $identity = null ): array {
 	global $wpdb;
 
 	if ( $user_id < 1 ) {
 		return array();
 	}
 
-	$scope = extrachill_events_local_support_organizer_scope( $user_id );
+	$identity_type = null === $identity ? '' : sanitize_key( (string) ( $identity['type'] ?? '' ) );
+	$identity_id   = null === $identity ? 0 : absint( $identity['id'] ?? 0 );
+	$scope         = null !== $identity && 'artist' === $identity_type && $identity_id > 0
+		? extrachill_events_local_support_exact_artist_scope( $user_id, $identity_id )
+		: extrachill_events_local_support_organizer_scope( $user_id );
 	if ( is_wp_error( $scope ) ) {
 		return array();
 	}
@@ -254,6 +297,14 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 		}
 		$scope['venues']  = array( $venue_term_id );
 		$scope['artists'] = array();
+	}
+	if ( null !== $identity ) {
+		if ( 'artist' !== $identity_type || $identity_id < 1 || ! isset( $scope['artists'][ $identity_id ] ) ) {
+			return array();
+		}
+		$scope['venues']    = array();
+		$scope['artists']   = array( $identity_id => (int) $scope['artists'][ $identity_id ] );
+		$scope['promoters'] = array();
 	}
 	if ( empty( $scope['venues'] ) && empty( $scope['artists'] ) ) {
 		return array();
@@ -321,6 +372,19 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 			if ( empty( $options ) ) {
 				continue;
 			}
+			if ( null !== $identity ) {
+				$options = array_values(
+					array_filter(
+						$options,
+						static function ( array $option ) use ( $identity ): bool {
+							return (string) $option['type'] === (string) $identity['type'] && (int) $option['id'] === (int) $identity['id'];
+						}
+					)
+				);
+				if ( 1 !== count( $options ) ) {
+					continue;
+				}
+			}
 			$request = $repository->get_request_by_event( $event_id );
 			if ( is_wp_error( $request ) ) {
 				return array();
@@ -370,6 +434,49 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 	return $events;
 }
 
+/**
+ * Build the exact Artist-scoped index without falling back to other identities.
+ *
+ * @param int                        $artist_id Canonical Artist term ID.
+ * @param int                        $user_id Acting manager user ID.
+ * @param LocalSupportWorkspace|null $workspace Optional deterministic workspace.
+ * @return array|WP_Error Artist index model or denial.
+ */
+function extrachill_events_local_support_artist_index_model( int $artist_id, int $user_id, ?LocalSupportWorkspace $workspace = null ) {
+	$workspace     = $workspace ? $workspace : new LocalSupportWorkspace();
+	$opportunities = $workspace->artist_opportunities( $artist_id, $user_id );
+	if ( is_wp_error( $opportunities ) ) {
+		return $opportunities;
+	}
+	$main_blog_id = function_exists( 'ec_get_blog_id' ) ? absint( ec_get_blog_id( 'main' ) ) : 0;
+	if ( $main_blog_id < 1 ) {
+		return new WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical Artist identity is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
+	}
+	switch_to_blog( $main_blog_id );
+	try {
+		$artist = get_term( $artist_id, 'artist' );
+	} finally {
+		restore_current_blog();
+	}
+	if ( ! $artist instanceof WP_Term || 'artist' !== $artist->taxonomy ) {
+		return new WP_Error( 'local_support_forbidden', __( 'This private local support workspace is unavailable.', 'extrachill-events' ), array( 'status' => 403 ) );
+	}
+
+	return array(
+		'artist_id'        => $artist_id,
+		'artist_name'      => $artist->name,
+		'organizer_events' => extrachill_events_local_support_organizer_events(
+			$user_id,
+			0,
+			array(
+				'type' => 'artist',
+				'id'   => $artist_id,
+			)
+		),
+		'opportunities'    => $opportunities,
+	);
+}
+
 /** Render the current private workspace or a non-enumerating denial. */
 function extrachill_events_render_local_support_workspace(): void {
 	wp_enqueue_style( 'extrachill-events-local-support', EXTRACHILL_EVENTS_PLUGIN_URL . 'assets/css/local-support.css', array(), EXTRACHILL_EVENTS_VERSION );
@@ -384,10 +491,13 @@ function extrachill_events_render_local_support_workspace(): void {
 	$event_id           = isset( $_GET['event_id'] ) ? absint( wp_unslash( $_GET['event_id'] ) ) : 0;
 	$notice             = isset( $_GET['notice'] ) ? sanitize_key( wp_unslash( $_GET['notice'] ) ) : '';
 	$identity_reference = isset( $_GET['identity'] ) ? sanitize_text_field( wp_unslash( $_GET['identity'] ) ) : '';
+	$mode               = isset( $_GET['mode'] ) ? sanitize_key( wp_unslash( $_GET['mode'] ) ) : '';
 	// phpcs:enable WordPress.Security.NonceVerification.Recommended
 	if ( ! $request_id ) {
 		if ( $event_id ) {
 			extrachill_events_render_local_support_open( $event_id, $identity_reference );
+		} elseif ( 'artist' === $mode && $artist_id > 0 ) {
+			extrachill_events_render_local_support_artist_index( $artist_id );
 		} else {
 			extrachill_events_render_local_support_index();
 		}
@@ -418,6 +528,40 @@ function extrachill_events_render_local_support_workspace(): void {
 			extrachill_events_render_local_support_artist( $model );
 		}
 		?>
+	</section>
+	<?php
+}
+
+/** Render exact Artist opportunities and booking-backed organizer events. */
+function extrachill_events_render_local_support_artist_index( int $artist_id, ?array $model = null ): void {
+	$model = null === $model ? extrachill_events_local_support_artist_index_model( $artist_id, get_current_user_id() ) : $model;
+	if ( is_wp_error( $model ) ) {
+		status_header( 'local_support_forbidden' === $model->get_error_code() ? 404 : 503 );
+		extrachill_events_render_local_support_unavailable();
+		return;
+	}
+	?>
+	<section class="ec-local-support ec-block-shell" data-local-support-artist-index="<?php echo esc_attr( (string) $model['artist_id'] ); ?>">
+		<p class="ec-local-support__eyebrow"><?php esc_html_e( 'Private Artist workspace', 'extrachill-events' ); ?></p>
+		<h1><?php echo esc_html( $model['artist_name'] ); ?> <?php esc_html_e( 'Local Support', 'extrachill-events' ); ?></h1>
+		<p><?php esc_html_e( 'Availability is managed on Artist Platform. Events below remain scoped to this exact Artist.', 'extrachill-events' ); ?></p>
+		<section class="ec-local-support__section"><h2><?php esc_html_e( 'Open opportunities', 'extrachill-events' ); ?></h2>
+		<?php if ( empty( $model['opportunities'] ) ) : ?>
+			<div class="ec-local-support__empty"><strong><?php esc_html_e( 'No open opportunities', 'extrachill-events' ); ?></strong><p><?php esc_html_e( 'No current request matches this Artist availability and Local Scene.', 'extrachill-events' ); ?></p></div>
+		<?php else : ?>
+			<div class="ec-local-support__cards"><?php foreach ( $model['opportunities'] as $opportunity ) : ?>
+				<article class="ec-local-support__artist-card"><div><h3><?php echo esc_html( $opportunity['event']['title'] ); ?></h3><p><?php echo esc_html( $opportunity['event']['venue'] ); ?></p></div><a class="button-2" href="<?php echo esc_url( add_query_arg( 'artist_id', (int) $model['artist_id'], home_url( '/local-support/' . (int) $opportunity['request']['id'] . '/' ) ) ); ?>"><?php esc_html_e( 'View opportunity', 'extrachill-events' ); ?></a></article>
+			<?php endforeach; ?></div>
+		<?php endif; ?></section>
+		<section class="ec-local-support__section"><h2><?php esc_html_e( 'Eligible organizer events', 'extrachill-events' ); ?></h2>
+		<p><?php esc_html_e( 'Request management requires an exact confirmed or completed booking for this Artist and current Artist management. Taxonomy attachment alone never grants access.', 'extrachill-events' ); ?></p>
+		<?php if ( empty( $model['organizer_events'] ) ) : ?>
+			<div class="ec-local-support__empty"><strong><?php esc_html_e( 'No eligible organizer events', 'extrachill-events' ); ?></strong></div>
+		<?php else : ?>
+			<div class="ec-local-support__cards"><?php foreach ( $model['organizer_events'] as $event ) : ?>
+				<article class="ec-local-support__artist-card"><div><h3><?php echo esc_html( $event['title'] ); ?></h3><span class="ec-local-support__status"><?php echo esc_html( 'open' === $event['status'] ? __( 'Seeking', 'extrachill-events' ) : ucwords( str_replace( '_', ' ', $event['status'] ) ) ); ?></span></div><a class="button-2" href="<?php echo esc_url( $event['workspace_url'] ); ?>"><?php echo esc_html( 'not_seeking' === $event['status'] ? __( 'Find local support', 'extrachill-events' ) : __( 'Manage request', 'extrachill-events' ) ); ?></a></article>
+			<?php endforeach; ?></div>
+		<?php endif; ?></section>
 	</section>
 	<?php
 }
@@ -491,7 +635,7 @@ function extrachill_events_render_local_support_open( int $event_id, string $ide
 	$options = $event_id ? extrachill_events_local_support_organizer_options( $event_id, get_current_user_id() ) : array();
 	$post    = $event_id ? get_post( $event_id ) : null;
 	if ( '' !== $identity_reference ) {
-		$selected = array_values(
+		$selected  = array_values(
 			array_filter(
 				$options,
 				static function ( array $option ) use ( $identity_reference ): bool {
@@ -499,7 +643,15 @@ function extrachill_events_render_local_support_open( int $event_id, string $ide
 				}
 			)
 		);
-		$options = 1 === count( $selected ) ? array_merge( $selected, array_values( array_filter( $options, static function ( array $option ) use ( $identity_reference ): bool { return $identity_reference !== $option['type'] . ':' . (int) $option['id']; } ) ) ) : array();
+		$remaining = array_filter(
+			$options,
+			static function ( array $option ) use ( $identity_reference ): bool {
+				return $identity_reference !== $option['type'] . ':' . (int) $option['id'];
+			}
+		);
+		$options   = 1 === count( $selected )
+			? array_merge( $selected, array_values( $remaining ) )
+			: array();
 	}
 	if ( ! $post instanceof WP_Post || empty( $options ) ) {
 		status_header( 404 );

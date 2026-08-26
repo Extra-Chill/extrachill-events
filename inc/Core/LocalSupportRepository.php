@@ -72,6 +72,18 @@ class LocalSupportRepository {
 		return array_map( array( $this, 'hydrate_request' ), (array) $rows );
 	}
 
+	/** List bounded active requests for exact Artist participation checks. */
+	public function list_participation_requests( int $limit = 100 ) {
+		global $wpdb;
+		$table = LocalSupportSchema::requests_table();
+		$limit = max( 1, min( 100, $limit ) );
+		$rows  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table} WHERE status IN ('open', 'paused') ORDER BY updated_at DESC, id DESC LIMIT %d", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Bounded private participation candidates reauthorized by the workspace.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'local_support_request_list_failed', __( 'Local support requests could not be read.', 'extrachill-events' ) );
+		}
+		return array_map( array( $this, 'hydrate_request' ), (array) $rows );
+	}
+
 	/** Create one artist interest. */
 	public function create_interest( int $request_id, int $artist_term_id, int $actor_id ) {
 		global $wpdb;

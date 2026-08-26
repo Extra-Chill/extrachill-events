@@ -671,6 +671,16 @@ final class LocalSupportMemoryRepository extends LocalSupportRepository {
 		return null;
 	}
 
+	public function list_participation_requests( int $limit = 100 ) {
+		$rows = array_filter(
+			$this->requests,
+			static function ( array $request ): bool {
+				return in_array( $request['status'], array( 'open', 'paused' ), true );
+			}
+		);
+		return array_slice( array_values( $rows ), 0, $limit );
+	}
+
 	public function create_interest( int $request_id, int $artist_term_id, int $actor_id ) {
 		$id                     = count( $this->interests ) + 1;
 		$row                    = array(

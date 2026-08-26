@@ -112,6 +112,47 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 		$this->assertSame( array(), $options, 'Artist taxonomy attachment without an exact confirmed booking is not organizer authority.' );
 	}
 
+	/** Explicit Artist mode returns only booking-backed events for that exact Artist. */
+	public function test_exact_artist_mode_never_falls_back_to_other_managed_resources(): void {
+		$this->grant_venue( 12, 55 );
+		$this->grant_artist( 12, 402, 202, 302 );
+		$this->grant_artist( 12, 403, 203, 303 );
+		$this->candidate( 10, 2010, 55 );
+		$this->candidate( 11, 2011, 56, array( 302 ) );
+		$this->candidate( 12, 2012, 57, array( 303 ) );
+		$this->candidate( 13, 2013, 58, array( 302 ) );
+		$this->grant_booking( 1, 11, 56, 202, 402 );
+		$booking = ( new ExtraChillEvents\Core\BookingRepository() )->get_by_event( 11 );
+		$this->assertIsArray( $booking, is_wp_error( $booking ) ? $booking->get_error_code() : 'booking missing' );
+		$this->assertSame( array( 'confirmed', 11, 56, 202 ), array( $booking['status'], $booking['event_id'], $booking['venue_term_id'], $booking['artist_term_id'] ) );
+		$authorization = new ExtraChillEvents\Core\LocalSupportAuthorization();
+		$this->assertTrue( $authorization->authorize_artist( 202, 12 ) );
+		$this->assertTrue( $authorization->artist_attached_to_event( 11, 202 ) );
+		$provider = new ExtraChillEvents\Core\LocalSupportArtistOrganizerProvider();
+		$allowed  = $provider->authorize( ExtraChillEvents\Core\LocalSupportAuthorization::ACTION_OPEN, array( 'event_id' => 11, 'venue_term_id' => 56, 'organizer_type' => 'artist', 'organizer_id' => 202 ), array( 'type' => 'artist', 'id' => 202 ), 12, $authorization );
+		$this->assertTrue( $allowed, is_wp_error( $allowed ) ? $allowed->get_error_code() : 'provider denied' );
+		$mapped = extrachill_events_resolve_artist_term( 202 );
+		$this->assertSame( 302, $mapped['term_id'] );
+		$this->assertInstanceOf( WP_Term::class, $authorization->organizer_term( 302, 'artist' ) );
+		$this->assertSame( 11, ( new ExtraChillEvents\Core\BookingRepository() )->get( 1 )['event_id'] );
+		$options = extrachill_events_local_support_organizer_options( 11, 12 );
+		$this->assertSame( array( 'artist:202' ), array_map( static fn( array $option ): string => $option['type'] . ':' . $option['id'], $options ) );
+		$GLOBALS['ec_artist_test']['feature_available'] = false;
+
+		$events = extrachill_events_local_support_organizer_events(
+			12,
+			0,
+			array(
+				'type' => 'artist',
+				'id'   => 202,
+			)
+		);
+
+		$this->assertSame( array( 11 ), array_column( $events, 'id' ) );
+		$this->assertStringContainsString( 'identity=artist%3A202', $events[0]['workspace_url'] );
+		$this->assertSame( array(), extrachill_events_local_support_organizer_events( 12, 0, array( 'type' => 'artist', 'id' => 999 ) ) );
+	}
+
 	/** Taxonomy assignment without reciprocal roster authority grants nothing. */
 	public function test_artist_taxonomy_assignment_alone_does_not_grant_authority(): void {
 		$this->candidate( 20, 2020, 56, array( 302 ) );
@@ -331,5 +372,23 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 		if ( ! isset( $GLOBALS['ec_artist_test']['terms'][7][ $venue_id ] ) ) {
 			$GLOBALS['ec_artist_test']['terms'][7][ $venue_id ] = new WP_Term( $venue_id, 'venue', 'Venue ' . $venue_id );
 		}
+	}
+
+	private function grant_booking( int $id, int $event_id, int $venue_id, int $artist_id, int $profile_id ): void {
+		$GLOBALS['wpdb']->rows[ BookingSchema::bookings_table() ][ $id ] = array(
+			'id'                   => $id,
+			'public_id'            => 'booking-' . $id,
+			'venue_term_id'        => $venue_id,
+			'artist_term_id'       => $artist_id,
+			'artist_profile_id'    => $profile_id,
+			'submitter_user_id'    => 12,
+			'status'               => 'confirmed',
+			'version'              => 1,
+			'event_id'             => $event_id,
+			'intake_payload'        => wp_json_encode( array( 'version' => 1, 'data' => array() ) ),
+			'production_payload'    => null,
+			'deal_payload'          => null,
+			'confirmed_deal_payload' => null,
+		);
 	}
 }

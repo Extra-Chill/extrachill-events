@@ -13,6 +13,25 @@ use ExtraChillEvents\Core\LocalSupportWorkspace;
 define( 'EXTRACHILL_EVENTS_LOCAL_SUPPORT_SKIP_HOOKS', true );
 
 require_once __DIR__ . '/Support/BookingTestHarness.php';
+if ( ! class_exists( 'LocalSupportMemoryRepository' ) ) {
+	require_once __DIR__ . '/LocalSupportDomainTest.php';
+}
+
+if ( ! class_exists( 'WP_Term' ) ) {
+	class WP_Term {
+		public $term_id;
+		public $taxonomy;
+		public $name;
+		public $slug;
+
+		public function __construct( int $term_id, string $taxonomy, string $name ) {
+			$this->term_id  = $term_id;
+			$this->taxonomy = $taxonomy;
+			$this->name     = $name;
+			$this->slug     = strtolower( str_replace( ' ', '-', $name ) );
+		}
+	}
+}
 
 if ( ! function_exists( 'esc_html' ) ) {
 	function esc_html( $value ) {
@@ -53,6 +72,17 @@ if ( ! function_exists( 'get_home_url' ) ) {
 	function get_home_url( $blog_id = null, $path = '' ) {
 		unset( $blog_id );
 		return 'https://events.example' . $path;
+	}
+}
+if ( ! function_exists( 'home_url' ) ) {
+	function home_url( $path = '' ) {
+		return 'https://events.example' . $path;
+	}
+}
+if ( ! function_exists( 'add_query_arg' ) ) {
+	function add_query_arg( $key, $value = null, $url = '' ) {
+		$args = is_array( $key ) ? $key : array( $key => $value );
+		return $url . ( false === strpos( $url, '?' ) ? '?' : '&' ) . http_build_query( $args );
 	}
 }
 
@@ -205,6 +235,33 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 		$this->assertStringContainsString( 'role="status"', $conflict );
 	}
 
+	/** Artist mode renders only exact participation and booking-backed sections. */
+	public function test_exact_artist_index_model_and_render_contract(): void {
+		$request = $this->open_request();
+		$GLOBALS['ec_artist_test']['terms'][1][202] = new WP_Term( 202, 'artist', 'Exact Artist' );
+		$workspace = $this->workspace( true );
+
+		$model = extrachill_events_local_support_artist_index_model( 202, 20, $workspace );
+		$this->assertSame( 202, $model['artist_id'] );
+		$this->assertCount( 1, $model['opportunities'] );
+		$this->assertSame( $request['id'], $model['opportunities'][0]['request']['id'] );
+		$this->assertSame( array(), $model['organizer_events'] );
+
+		$html = $this->render( 'extrachill_events_render_local_support_artist_index', 202, $model );
+		$this->assertStringContainsString( 'data-local-support-artist-index="202"', $html );
+		$this->assertStringContainsString( '/local-support/1/?artist_id=202', $html );
+		$this->assertStringContainsString( 'No eligible organizer events', $html );
+		$this->assertStringContainsString( 'Taxonomy attachment alone never grants access', $html );
+	}
+
+	/** Unauthorized Artist context returns no venue, promoter, or other Artist fallback. */
+	public function test_artist_index_denial_fails_closed_without_cross_identity_resources(): void {
+		$this->authorization->artist_allowed = false;
+		$model = extrachill_events_local_support_artist_index_model( 202, 20, $this->workspace( true ) );
+
+		$this->assertSame( 'local_support_forbidden', $model->get_error_code() );
+	}
+
 	private function open_request( int $event_id = 900, string $key = 'open-render' ): array {
 		return $this->service->open_request( array( 'event_id' => $event_id, 'organizer_type' => 'venue', 'organizer_id' => 55, 'idempotency_key' => $key ), 12 );
 	}
@@ -221,9 +278,9 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 		} );
 	}
 
-	private function render( string $callback, $model = null ): string {
+	private function render( string $callback, ...$args ): string {
 		ob_start();
-		null === $model ? $callback() : $callback( $model );
+		$callback( ...$args );
 		return (string) ob_get_clean();
 	}
 

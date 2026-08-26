@@ -48,6 +48,12 @@ final class LocalSupportMySQLProbeAuthorization extends LocalSupportAuthorizatio
 	}
 }
 
+final class LocalSupportArtistMySQLAuthorization extends LocalSupportAuthorization {
+	private $profile_id;
+	public function __construct( int $profile_id ) { parent::__construct(); $this->profile_id = $profile_id; }
+	protected function artist_profile_id( int $artist_term_id ) { unset( $artist_term_id ); return $this->profile_id; }
+}
+
 /** Prove both deterministic orders through an actual LocalSupportService mutation. */
 final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
 	/** Artist binding writers and Local Support acquire binding before membership. */
@@ -78,9 +84,9 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		self::commit_transaction();
 		$wpdb->query( 'SET autocommit = 1' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exposes fixture and advisory locks outside the test wrapper.
 
-		$authorization = new LocalSupportAuthorization();
+		$authorization = new LocalSupportArtistMySQLAuthorization( $profile_id );
 		$scope = $authorization->prepare_artist_transaction( $artist_term_id, $this->actor_id );
-		$this->assertIsObject( $scope, is_wp_error( $scope ) ? $scope->get_error_code() : '' );
+		$this->assertNotWPError( $scope );
 		$this->assertSame( '0', (string) $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" )->fetch_row()[0], 'Artist binding writer did not wait behind Local Support.' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Exact fixed test lock.
 		$this->assertTrue( $authorization->close_pretransaction_scope( $scope ) );
 

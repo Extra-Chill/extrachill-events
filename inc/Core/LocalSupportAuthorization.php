@@ -428,7 +428,7 @@ class LocalSupportAuthorization {
 	}
 
 	/** Resolve and verify a canonical term's bidirectional Artist Platform profile. */
-	private function artist_profile_id( int $artist_term_id ) {
+	protected function artist_profile_id( int $artist_term_id ) {
 		$main_blog_id   = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'main' ) : 0;
 		$artist_blog_id = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'artist' ) : 0;
 		if ( $main_blog_id < 1 || $artist_blog_id < 1 || $artist_term_id < 1 ) {

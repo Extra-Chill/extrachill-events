@@ -68,7 +68,7 @@ final class LocalSupportArtistMySQLAuthorization extends LocalSupportAuthorizati
 		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $this->profile_id );
 		$this->contender->query( "SELECT GET_LOCK('{$membership}', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Deterministic test lock identity.
 		$result = $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Proves binding is already held.
-		$this->binding_waited = '0' === (string) $result->fetch_row()[0];
+		$this->binding_waited = '1' !== (string) $result->fetch_row()[0];
 		$this->contender->query( "SELECT RELEASE_LOCK('{$membership}')" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Allows production membership acquisition to continue.
 		$this->probe = false;
 		return true;

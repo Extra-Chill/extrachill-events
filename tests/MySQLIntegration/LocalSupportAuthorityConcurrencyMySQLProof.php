@@ -55,8 +55,15 @@ final class LocalSupportAuthorityConcurrencyMySQLProof extends BookingAttachment
 		global $wpdb;
 		$main_blog_id   = (int) ec_get_blog_id( 'main' );
 		$artist_blog_id = (int) ec_get_blog_id( 'artist' );
+		if ( ! taxonomy_exists( 'artist' ) ) {
+			register_taxonomy( 'artist', 'post', array( 'public' => false ) );
+		}
+		if ( ! post_type_exists( 'artist_profile' ) ) {
+			register_post_type( 'artist_profile', array( 'public' => false ) );
+		}
 		switch_to_blog( $main_blog_id );
 		$term = wp_insert_term( 'Local Support Lock Artist', 'artist' );
+		$this->assertNotWPError( $term );
 		$artist_term_id = (int) $term['term_id'];
 		restore_current_blog();
 		switch_to_blog( $artist_blog_id );

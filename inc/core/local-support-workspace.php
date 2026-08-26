@@ -429,8 +429,10 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 				'venue_term_id'  => (int) $row['venue_term_id'],
 				'status'         => is_array( $request ) ? (string) $request['status'] : 'not_seeking',
 				'workspace_url'  => add_query_arg(
-					'identity',
-					$options[0]['type'] . ':' . (int) $options[0]['id'],
+					array(
+						'mode'     => 'organizer',
+						'identity' => $options[0]['type'] . ':' . (int) $options[0]['id'],
+					),
 					is_array( $request )
 					? home_url( '/local-support/' . (int) $request['id'] . '/' )
 					: add_query_arg( 'event_id', $event_id, home_url( '/local-support/' ) )
@@ -526,6 +528,11 @@ function extrachill_events_render_local_support_workspace(): void {
 	$identity_reference = isset( $_GET['identity'] ) ? sanitize_text_field( wp_unslash( $_GET['identity'] ) ) : '';
 	$mode               = isset( $_GET['mode'] ) ? sanitize_key( wp_unslash( $_GET['mode'] ) ) : '';
 	// phpcs:enable WordPress.Security.NonceVerification.Recommended
+	if ( 'artist' === $mode && '' !== $identity_reference && 'artist:' . $artist_id !== $identity_reference ) {
+		status_header( preg_match( '/^artist:[1-9][0-9]{0,9}$/', $identity_reference ) ? 403 : 400 );
+		extrachill_events_render_local_support_unavailable();
+		return;
+	}
 	if ( ! $request_id ) {
 		if ( $event_id ) {
 			extrachill_events_render_local_support_open( $event_id, $identity_reference );
@@ -708,15 +715,7 @@ function extrachill_events_render_local_support_open( int $event_id, string $ide
 				}
 			)
 		);
-		$remaining = array_filter(
-			$options,
-			static function ( array $option ) use ( $identity_reference ): bool {
-				return $identity_reference !== $option['type'] . ':' . (int) $option['id'];
-			}
-		);
-		$options   = 1 === count( $selected )
-			? array_merge( $selected, array_values( $remaining ) )
-			: array();
+		$options = 1 === count( $selected ) ? $selected : array();
 	}
 	if ( ! $post instanceof WP_Post || empty( $options ) ) {
 		status_header( 404 );

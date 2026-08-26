@@ -251,12 +251,6 @@ class LocalSupportAbilities {
 			'required'             => $required,
 			'additionalProperties' => false,
 		);
-		if ( isset( $properties['acting_organizer_type'], $properties['acting_organizer_id'] ) ) {
-			$schema['dependencies'] = array(
-				'acting_organizer_type' => array( 'acting_organizer_id' ),
-				'acting_organizer_id'   => array( 'acting_organizer_type' ),
-			);
-		}
 		return $schema;
 	}
 

@@ -8,6 +8,11 @@ use ExtraChillEvents\Core\LocalSupportAuthorization;
 use ExtraChillEvents\Core\LocalSupportSchema;
 use ExtraChillEvents\Core\LocalSupportService;
 
+if ( ! function_exists( 'switch_to_blog' ) ) {
+	function switch_to_blog( $blog_id ) { unset( $blog_id ); return true; }
+	function restore_current_blog() { return true; }
+}
+
 /** Inject a second-session revocation immediately around production lock-current authorization. */
 final class LocalSupportMySQLProbeAuthorization extends LocalSupportAuthorization {
 	/** @var mysqli */

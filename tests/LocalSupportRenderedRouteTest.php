@@ -117,7 +117,7 @@ final class LocalSupportRenderedRouteTest extends BookingTestCase {
 		$GLOBALS['wpdb']      = new BookingWpdb();
 		$this->repository     = new LocalSupportMemoryRepository();
 		$this->authorization  = new LocalSupportTestAuthorization();
-		$this->service        = new LocalSupportService( $this->repository, $this->authorization );
+		$this->service        = new LocalSupportService( $this->repository, $this->authorization, static function (): bool { return true; } );
 	}
 
 	/** Public event pages must never expose organizer workflow controls. */

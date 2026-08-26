@@ -46,7 +46,7 @@ class LocalSupportAuthorization {
 	/** @var string[] Events mapping advisory locks held through commit/rollback. */
 	private $mapping_locks = array();
 
-	/** @var array<int,array{binding:string,membership:string}> Pre-transaction Artist lock scopes. */
+	/** @var array<int,array{binding:?string,membership:?string,scope:object}> Pre-transaction Artist lock scopes. */
 	private $artist_pre_scopes = array();
 
 	/** @var \SplObjectStorage Active service-owned transaction scopes. */
@@ -151,7 +151,7 @@ class LocalSupportAuthorization {
 	/** Acquire Artist writer advisory locks in canonical order before START TRANSACTION. */
 	public function prepare_artist_transaction( int $artist_term_id, int $user_id ) {
 		global $wpdb;
-		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( get_class( $wpdb ) ) ) ) {
+		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( (string) get_class( $wpdb ) ) ) ) {
 			return new \WP_Error( 'local_support_artist_advisory_locks_unsupported', __( 'Artist mutation authorization requires MySQL advisory locks.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		$binding = 'ec_artist_binding_v1';
@@ -176,17 +176,33 @@ class LocalSupportAuthorization {
 	/** Release Artist writer locks only after transaction completion. */
 	public function close_pretransaction_scope( $scope ) {
 		global $wpdb;
-		if ( ! is_object( $scope ) || ! isset( $this->artist_pre_scopes[ spl_object_id( $scope ) ] ) ) {
+		$scope_id = is_object( $scope ) ? spl_object_id( $scope ) : 0;
+		if ( $scope_id < 1 || ! isset( $this->artist_pre_scopes[ $scope_id ] ) ) {
 			return true;
 		}
-		$locks = $this->artist_pre_scopes[ spl_object_id( $scope ) ];
-		foreach ( array( $locks['membership'], $locks['binding'] ) as $name ) {
-			if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) ) ) {
-				return new \WP_Error( 'local_support_artist_authority_release_failed', __( 'Artist authority lock cleanup failed.', 'extrachill-events' ), array( 'status' => 503 ) );
+		$failure = null;
+		foreach ( array( 'membership', 'binding' ) as $key ) {
+			$name = $this->artist_pre_scopes[ $scope_id ][ $key ] ?? null;
+			if ( ! is_string( $name ) || '' === $name ) {
+				continue;
+			}
+			if ( '1' === (string) $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $name ) ) ) {
+				$this->artist_pre_scopes[ $scope_id ][ $key ] = null;
+			} else {
+				$failure = new \WP_Error(
+					'local_support_artist_authority_release_failed',
+					__( 'Artist authority lock cleanup failed.', 'extrachill-events' ),
+					array(
+						'status' => 503,
+						'lock'   => $key,
+					)
+				);
 			}
 		}
-		unset( $this->artist_pre_scopes[ spl_object_id( $scope ) ] );
-		return true;
+		if ( null === ( $this->artist_pre_scopes[ $scope_id ]['membership'] ?? null ) && null === ( $this->artist_pre_scopes[ $scope_id ]['binding'] ?? null ) ) {
+			unset( $this->artist_pre_scopes[ $scope_id ] );
+		}
+		return $failure ? $failure : true;
 	}
 
 	/** Lock canonical event venue context within one provider-owned sequence. */
@@ -469,8 +485,8 @@ class LocalSupportAuthorization {
 		global $wpdb;
 
 		$wpdb->flush();
-		$query          = new \WP_Term_Query();
-		$terms          = $query->query(
+		$query = new \WP_Term_Query();
+		$terms = $query->query(
 			array(
 				'taxonomy'      => $taxonomy,
 				'hide_empty'    => false,
@@ -479,8 +495,11 @@ class LocalSupportAuthorization {
 				'cache_results' => false,
 			)
 		);
+		if ( ! is_array( $terms ) ) {
+			return new \WP_Error( $error_code, __( 'Organizer taxonomy data could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
 		$database_error = (string) $wpdb->last_error;
-		if ( '' !== $database_error || is_wp_error( $terms ) ) {
+		if ( '' !== $database_error ) {
 			return new \WP_Error( $error_code, __( 'Organizer taxonomy data could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		return empty( $terms ) ? null : reset( $terms );

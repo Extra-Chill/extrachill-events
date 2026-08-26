@@ -20,16 +20,14 @@ class LocalSupportNotificationAdapter {
 	private $repository;
 	/** @var LocalSupportAuthorization */
 	private $authorization;
-	/** @var VenueMembershipRepository */
-	private $memberships;
 	/** @var callable|null Authorized workspace resolver test seam. */
 	private $workspace;
 
 	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null, ?VenueMembershipRepository $memberships = null, $workspace = null ) {
 		$this->repository    = $repository ? $repository : new LocalSupportRepository();
 		$this->authorization = $authorization ? $authorization : new LocalSupportAuthorization();
-		$this->memberships   = $memberships ? $memberships : new VenueMembershipRepository();
-		$this->workspace     = $workspace;
+		unset( $memberships );
+		$this->workspace = $workspace;
 	}
 
 	/** Hydrate the exact committed domain records represented by one change event. */
@@ -265,29 +263,5 @@ class LocalSupportNotificationAdapter {
 	/** Read one source activity by immutable ID and request. */
 	private function source_activity_by_id( int $activity_id, int $request_id ) {
 		return $this->repository->get_activity( $activity_id, $request_id );
-	}
-
-	/** Resolve reciprocal Artist Platform managers for a canonical artist term. */
-	private function artist_manager_ids( int $artist_term_id ) {
-		$main_blog_id   = function_exists( 'ec_get_blog_id' ) ? absint( ec_get_blog_id( 'main' ) ) : 0;
-		$artist_blog_id = function_exists( 'ec_get_blog_id' ) ? absint( ec_get_blog_id( 'artist' ) ) : 0;
-		if ( $main_blog_id < 1 || $artist_blog_id < 1 || ! function_exists( 'extrachill_artist_platform_get_local_support_manager_ids' ) ) {
-			return new \WP_Error( 'local_support_artist_managers_unavailable', __( 'Validated Artist Platform manager recipients are unavailable.', 'extrachill-events' ) );
-		}
-		switch_to_blog( $main_blog_id );
-		try {
-			$profile_id = absint( get_term_meta( $artist_term_id, '_artist_profile_id', true ) );
-		} finally {
-			restore_current_blog();
-		}
-		if ( $profile_id < 1 ) {
-			return new \WP_Error( 'local_support_artist_binding_invalid', __( 'The organizer artist profile binding is invalid.', 'extrachill-events' ) );
-		}
-		switch_to_blog( $artist_blog_id );
-		try {
-			return extrachill_artist_platform_get_local_support_manager_ids( $profile_id );
-		} finally {
-			restore_current_blog();
-		}
 	}
 }

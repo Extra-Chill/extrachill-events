@@ -294,6 +294,10 @@ class LocalSupportWorkspace {
 	 * @return array|\WP_Error Public artist card or denial.
 	 */
 	private function eligible_candidate( array $request, int $artist_term_id, int $user_id ) {
+		$eligible = $this->service->artist_eligible( $request, $artist_term_id, $user_id );
+		if ( true !== $eligible ) {
+			return is_wp_error( $eligible ) ? $eligible : $this->denied();
+		}
 		foreach ( $this->eligible_candidates( $request, $user_id ) as $candidate ) {
 			if ( (int) ( $candidate['artist_term_id'] ?? 0 ) === $artist_term_id ) {
 				return $candidate;

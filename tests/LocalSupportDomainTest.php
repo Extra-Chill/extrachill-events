@@ -40,7 +40,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$GLOBALS['wpdb']           = new BookingWpdb();
 		$this->repository          = new LocalSupportMemoryRepository();
 		$this->authorization       = new LocalSupportTestAuthorization();
-		$this->service             = new LocalSupportService( $this->repository, $this->authorization );
+		$this->service             = new LocalSupportService( $this->repository, $this->authorization, static function (): bool { return true; } );
 	}
 
 	public function test_schema_owns_separate_unique_transactional_tables(): void {
@@ -147,6 +147,14 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->authorization->organizer_error = new WP_Error( 'provider_unavailable' );
 		$failed = $workspace->read( $request['id'], 202, 20, array( 'type' => 'venue', 'id' => 55 ) );
 		$this->assertSame( 'provider_unavailable', $failed->get_error_code() );
+	}
+
+	public function test_direct_interest_ability_rechecks_current_eligibility(): void {
+		$request = $this->open_request();
+		$service = new LocalSupportService( $this->repository, new LocalSupportTestAuthorization(), static function (): bool { return false; } );
+		$error = $service->express_interest( $request['id'], 202, 'direct-ineligible', 20 );
+		$this->assertSame( 'local_support_artist_ineligible', $error->get_error_code() );
+		$this->assertCount( 0, $this->repository->interests );
 	}
 
 	/** Legacy calls retain their shipped hash while explicit identities are bound. */
@@ -546,6 +554,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$abilities->register();
 		$this->assertSame( 'local_support_organizer_identity_incomplete', $abilities->get_request( array( 'request_id' => $request['id'], 'acting_organizer_type' => 'venue' ) )->get_error_code() );
 		$this->assertArrayHasKey( 'extrachill-events/open-local-support-request', $GLOBALS['ec_artist_test']['abilities'] );
+		$this->assertArrayNotHasKey( 'dependencies', $GLOBALS['ec_artist_test']['abilities']['extrachill-events/open-local-support-request']['input_schema'] );
 		foreach ( $GLOBALS['ec_artist_test']['abilities'] as $name => $definition ) {
 			if ( 0 === strpos( $name, 'extrachill-events/' ) && false !== strpos( $name, 'local-support' ) ) {
 				$this->assertFalse( $definition['meta']['show_in_rest'], $name );

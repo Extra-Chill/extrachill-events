@@ -83,7 +83,7 @@ class LocalSupportNotificationService {
 	/** Run one scheduler reconciliation page. */
 	public static function reconcile_scheduled(): void {
 		$service = self::runtime();
-		$result  = is_wp_error( $service ) ? $service : $service->reconcile_pending();
+		$result  = $service->reconcile_pending();
 		if ( is_wp_error( $result ) ) {
 			throw new \RuntimeException( $result->get_error_message() ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Scheduler diagnostic.
 		}
@@ -245,7 +245,7 @@ class LocalSupportNotificationService {
 		if ( is_wp_error( $method ) ) {
 			return $method;
 		}
-		$intents = $this->adapter->pending_notification_intents( $limit );
+		$intents = $this->call_adapter( 'pending_notification_intents', array( $limit ) );
 		if ( is_wp_error( $intents ) || ! is_array( $intents ) ) {
 			return is_wp_error( $intents ) ? $intents : new \WP_Error( 'local_support_pending_intents_invalid', __( 'Local-support pending notification storage returned an invalid result.', 'extrachill-events' ) );
 		}
@@ -343,7 +343,7 @@ class LocalSupportNotificationService {
 			if ( ! $ability || ! is_callable( array( $ability, 'execute' ) ) ) {
 				return new \WP_Error( 'local_support_eligibility_unavailable', __( 'The private Artist Platform local-support eligibility contract is unavailable.', 'extrachill-events' ) );
 			}
-			$result = $ability->execute( $input );
+			$result = call_user_func( array( $ability, 'execute' ), $input );
 		}
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -541,7 +541,8 @@ class LocalSupportNotificationService {
 		}
 		$due_at = gmdate( 'Y-m-d H:i:s', time() + min( HOUR_IN_SECONDS, MINUTE_IN_SECONDS * ( 2 ** max( 0, $attempt - 1 ) ) ) );
 		$result = $this->call_adapter( 'record_notification_attempt', array( $intent, $attempt, $due_at, $error->get_error_code() ) );
-		$this->schedule_reconciliation( strtotime( $due_at . ' UTC' ) );
+		$timestamp = strtotime( $due_at . ' UTC' );
+		$this->schedule_reconciliation( false === $timestamp ? null : $timestamp );
 		return $result;
 	}
 
@@ -553,7 +554,7 @@ class LocalSupportNotificationService {
 	/** Call one required adapter method with an actionable dependency error. */
 	private function call_adapter( string $method, array $args ) {
 		$valid = $this->adapter_method( $method );
-		return is_wp_error( $valid ) ? $valid : call_user_func_array( array( $this->adapter, $method ), $args );
+		return is_wp_error( $valid ) ? $valid : call_user_func_array( array( $this->adapter, $method ), $args ); // @phpstan-ignore-line
 	}
 
 	/** Ensure a #420 adapter method is callable. */

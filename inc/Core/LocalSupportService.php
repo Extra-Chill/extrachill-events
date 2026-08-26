@@ -48,12 +48,16 @@ class LocalSupportService {
 	/** @var \WP_Error|null Token claim failure for a reused authorization instance. */
 	private $transaction_owner_error;
 
-	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null ) {
+	/** @var callable|null Artist Platform eligibility resolver. */
+	private $eligibility;
+
+	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null, ?callable $eligibility = null ) {
 		$this->repository              = $repository ? $repository : new LocalSupportRepository();
 		$this->authorization           = $authorization ? $authorization : new LocalSupportAuthorization();
 		$this->transaction_token       = new \stdClass();
 		$claimed                       = $this->authorization->claim_transaction_owner( $this->transaction_token );
 		$this->transaction_owner_error = $claimed instanceof \WP_Error ? $claimed : null;
+		$this->eligibility             = $eligibility;
 	}
 
 	/** Open one request per canonical event. */
@@ -201,6 +205,10 @@ class LocalSupportService {
 		if ( $attached ) {
 			return new \WP_Error( 'local_support_artist_already_attached', __( 'Artists already attached to the event cannot express local-support interest.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
+		$eligible = $this->artist_eligible( $request, $artist_term_id, $actor_id );
+		if ( true !== $eligible ) {
+			return is_wp_error( $eligible ) ? $eligible : new \WP_Error( 'local_support_artist_ineligible', __( 'This Artist is not currently eligible for the Local Support request.', 'extrachill-events' ), array( 'status' => 403 ) );
+		}
 		$key  = $this->idempotency_key( $idempotency_key );
 		$hash = $this->request_hash(
 			'express_interest',
@@ -237,6 +245,10 @@ class LocalSupportService {
 				}
 				if ( $attached ) {
 					return new \WP_Error( 'local_support_artist_already_attached', __( 'Artists already attached to the event cannot express local-support interest.', 'extrachill-events' ), array( 'status' => 409 ) );
+				}
+				$eligible = $this->artist_eligible( $locked_request, $artist_term_id, $actor_id );
+				if ( true !== $eligible ) {
+					return is_wp_error( $eligible ) ? $eligible : new \WP_Error( 'local_support_artist_ineligible', __( 'This Artist is not currently eligible for the Local Support request.', 'extrachill-events' ), array( 'status' => 403 ) );
 				}
 				$allowed = $this->authorization->authorize_artist_locked( $artist_term_id, $actor_id, $scope );
 				if ( true !== $allowed ) {
@@ -280,6 +292,34 @@ class LocalSupportService {
 		}
 		$this->emit( 'interest_expressed', $request_id, $interest['id'], 1 );
 		return $interest;
+	}
+
+	/** Resolve exact current Artist Platform candidate eligibility. */
+	public function artist_eligible( array $request, int $artist_term_id, int $user_id ) {
+		if ( $this->eligibility ) {
+			return call_user_func( $this->eligibility, $request, $artist_term_id, $user_id );
+		}
+		$locations = wp_get_object_terms( (int) $request['event_id'], 'location' );
+		$location  = is_array( $locations ) && 1 === count( $locations ) ? reset( $locations ) : null;
+		$ability   = function_exists( 'wp_get_ability' ) ? wp_get_ability( 'extrachill/artist-query-local-support-candidates' ) : null;
+		if ( ! $location instanceof \WP_Term || ! is_object( $ability ) || ! is_callable( array( $ability, 'execute' ) ) ) {
+			return new \WP_Error( 'local_support_eligibility_unavailable', __( 'Artist Platform Local Support eligibility is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
+		$result = $ability->execute(
+			array(
+				'producer'   => LocalSupportWorkspace::PRODUCER,
+				'scene_slug' => $location->slug,
+			)
+		);
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		foreach ( (array) ( $result['candidates'] ?? array() ) as $candidate ) {
+			if ( absint( $candidate['artist_term_id'] ?? 0 ) === $artist_term_id && in_array( $user_id, array_map( 'absint', (array) ( $candidate['manager_user_ids'] ?? array() ) ), true ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Transition an interest as the artist or organizer, depending on target state. */
@@ -640,9 +680,10 @@ class LocalSupportService {
 		if ( null !== $identity ) {
 			$payload['acting_identity'] = $identity;
 		}
+		$encoded = wp_json_encode( $payload );
 		return hash_hmac(
 			'sha256',
-			wp_json_encode( $payload ),
+			false === $encoded ? '' : $encoded,
 			wp_salt( 'auth' )
 		);
 	}
@@ -767,6 +808,7 @@ class LocalSupportService {
 	/** Start only when this connection is not already in a transaction. */
 	private function begin() {
 		global $wpdb;
+		/** @var \wpdb $wpdb */
 		if ( $this->transaction_active ) {
 			return new \WP_Error( 'local_support_nested_transaction_forbidden', __( 'Local support cannot start a nested transaction.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
@@ -826,6 +868,7 @@ class LocalSupportService {
 	/** Close a connection whose transaction could not be safely terminated. */
 	private function quarantine_transaction( \WP_Error $cause ): \WP_Error {
 		global $wpdb;
+		/** @var \wpdb $wpdb */
 		$closed = false;
 		try {
 			$closed = method_exists( $wpdb, 'close' ) && true === $wpdb->close();
@@ -850,6 +893,7 @@ class LocalSupportService {
 	/** Retire a connection when failed commit state cannot be observed safely. */
 	private function quarantine_uncertain_commit(): \WP_Error {
 		global $wpdb;
+		/** @var \wpdb $wpdb */
 		$closed = false;
 		try {
 			$closed = method_exists( $wpdb, 'close' ) && true === $wpdb->close();

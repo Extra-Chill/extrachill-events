@@ -147,7 +147,7 @@ final class LocalSupportOrganizerProviderRegistry {
 		$blog_id = get_current_blog_id();
 		$depth   = count( (array) ( $GLOBALS['_wp_switched_stack'] ?? array() ) );
 		try {
-			$result = call_user_func_array( array( $provider, $method ), $args );
+			$result = call_user_func_array( array( $provider, $method ), $args ); // @phpstan-ignore-line
 		} catch ( \Throwable $throwable ) {
 			$result = new \WP_Error(
 				'local_support_organizer_provider_failed',

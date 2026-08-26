@@ -178,7 +178,7 @@ function extrachill_events_local_support_organizer_scope( int $user_id ) {
 			if ( empty( $mapped['term_id'] ) ) {
 				return new WP_Error( 'local_support_artist_scope_corrupt', __( 'An organizer artist mapping is invalid.', 'extrachill-events' ) );
 			}
-			$main_blog_id = function_exists( 'ec_get_blog_id' ) ? (int) ec_get_blog_id( 'main' ) : 0;
+			$main_blog_id = (int) ec_get_blog_id( 'main' );
 			if ( $main_blog_id < 1 ) {
 				return new WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical artist mapping is unavailable.', 'extrachill-events' ) );
 			}
@@ -704,19 +704,21 @@ function extrachill_events_render_local_support_artist_selection( array $model )
  * @param string $identity_reference Optional exact selected organizer identity.
  */
 function extrachill_events_render_local_support_open( int $event_id, string $identity_reference = '' ): void {
-	$options = $event_id ? extrachill_events_local_support_organizer_options( $event_id, get_current_user_id() ) : array();
-	$post    = $event_id ? get_post( $event_id ) : null;
-	if ( '' !== $identity_reference ) {
-		$selected  = array_values(
-			array_filter(
-				$options,
-				static function ( array $option ) use ( $identity_reference ): bool {
-					return $identity_reference === $option['type'] . ':' . (int) $option['id'];
-				}
+	$options = array();
+	if ( $event_id && '' !== $identity_reference && preg_match( '/^([a-z][a-z0-9_-]{0,31}):([1-9][0-9]{0,9})$/', $identity_reference, $matches ) ) {
+		$resolved = ( new LocalSupportAuthorization() )->organizer_choice(
+			$event_id,
+			get_current_user_id(),
+			array(
+				'type' => $matches[1],
+				'id'   => (int) $matches[2],
 			)
 		);
-		$options = 1 === count( $selected ) ? $selected : array();
+		$options  = is_array( $resolved ) ? $resolved : array();
+	} elseif ( $event_id && '' === $identity_reference ) {
+		$options = extrachill_events_local_support_organizer_options( $event_id, get_current_user_id() );
 	}
+	$post = $event_id ? get_post( $event_id ) : null;
 	if ( ! $post instanceof WP_Post || empty( $options ) ) {
 		status_header( 404 );
 		echo '<section class="ec-local-support ec-block-shell" role="alert"><h1>' . esc_html__( 'Workspace unavailable', 'extrachill-events' ) . '</h1><p>' . esc_html__( 'Open Local Support from an event you organize.', 'extrachill-events' ) . '</p></section>';

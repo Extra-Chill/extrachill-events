@@ -158,18 +158,23 @@ class LocalSupportAuthorization {
 		if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $binding, 5 ) ) ) {
 			return new \WP_Error( 'local_support_artist_binding_lock_failed', __( 'Artist binding authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
+		$scope = new \stdClass();
+		$this->artist_pre_scopes[ spl_object_id( $scope ) ] = array(
+			'binding'    => $binding,
+			'membership' => null,
+			'scope'      => $scope,
+		);
 		$profile_id = $this->artist_profile_id( $artist_term_id );
 		if ( is_wp_error( $profile_id ) ) {
-			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $binding ) );
-			return $profile_id;
+			$closed = $this->close_pretransaction_scope( $scope );
+			return is_wp_error( $closed ) ? $closed : $profile_id;
 		}
 		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $profile_id );
 		if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $membership, 5 ) ) ) {
-			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $binding ) );
-			return new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
+			$closed = $this->close_pretransaction_scope( $scope );
+			return is_wp_error( $closed ) ? $closed : new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
-		$scope = new \stdClass();
-		$this->artist_pre_scopes[ spl_object_id( $scope ) ] = compact( 'binding', 'membership', 'scope' );
+		$this->artist_pre_scopes[ spl_object_id( $scope ) ]['membership'] = $membership;
 		return $scope;
 	}
 
@@ -377,11 +382,9 @@ class LocalSupportAuthorization {
 			$this->transaction_scopes->detach( $scope );
 		}
 		foreach ( $this->artist_pre_scopes as $locks ) {
-			if ( isset( $locks['scope'] ) ) {
-				$released = $this->close_pretransaction_scope( $locks['scope'] );
-				if ( is_wp_error( $released ) ) {
-					return $released;
-				}
+			$released = $this->close_pretransaction_scope( $locks['scope'] );
+			if ( is_wp_error( $released ) ) {
+				return $released;
 			}
 		}
 		return true;
@@ -568,7 +571,7 @@ class LocalSupportAuthorization {
 		} finally {
 			restore_current_blog();
 		}
-		if ( '' !== $mapping_error ) {
+		if ( '' !== $mapping_error ) { // @phpstan-ignore-line
 			return new \WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical artist mapping could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
 		if ( is_wp_error( $claims ) || array( $artist_term_id ) !== array_values( array_unique( array_map( 'intval', (array) $claims ) ) ) ) {

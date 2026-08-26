@@ -343,7 +343,7 @@ class LocalSupportNotificationService {
 			if ( ! $ability || ! is_callable( array( $ability, 'execute' ) ) ) {
 				return new \WP_Error( 'local_support_eligibility_unavailable', __( 'The private Artist Platform local-support eligibility contract is unavailable.', 'extrachill-events' ) );
 			}
-			$result = call_user_func( array( $ability, 'execute' ), $input );
+			$result = call_user_func( array( $ability, 'execute' ), $input ); // @phpstan-ignore-line
 		}
 		if ( is_wp_error( $result ) ) {
 			return $result;

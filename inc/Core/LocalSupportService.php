@@ -812,16 +812,14 @@ class LocalSupportService {
 		if ( $this->transaction_active ) {
 			return new \WP_Error( 'local_support_nested_transaction_forbidden', __( 'Local support cannot start a nested transaction.', 'extrachill-events' ), array( 'status' => 409 ) );
 		}
-		$previous = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+		$previous = $wpdb->suppress_errors( true );
 		try {
 			$boundary = $wpdb->query( 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Portable MySQL/MariaDB active-transaction rejection and required next-key isolation.
 		} catch ( \Throwable $throwable ) {
 			unset( $throwable );
 			$boundary = false;
 		} finally {
-			if ( method_exists( $wpdb, 'suppress_errors' ) ) {
-				$wpdb->suppress_errors( $previous );
-			}
+			$wpdb->suppress_errors( $previous );
 		}
 		if ( false === $boundary ) {
 			return new \WP_Error( 'local_support_transaction_boundary_forbidden', __( 'Local support requires an isolated transaction boundary.', 'extrachill-events' ), array( 'status' => 409 ) );
@@ -871,13 +869,11 @@ class LocalSupportService {
 		/** @var \wpdb $wpdb */
 		$closed = false;
 		try {
-			$closed = method_exists( $wpdb, 'close' ) && true === $wpdb->close();
+			$closed = true === $wpdb->close();
 		} catch ( \Throwable $throwable ) {
 			unset( $throwable );
 		}
-		if ( property_exists( $wpdb, 'ready' ) ) {
-			$wpdb->ready = false;
-		}
+		$wpdb->ready = false;
 		$this->transaction_active = false;
 		return new \WP_Error(
 			'local_support_transaction_rollback_failed',
@@ -896,13 +892,11 @@ class LocalSupportService {
 		/** @var \wpdb $wpdb */
 		$closed = false;
 		try {
-			$closed = method_exists( $wpdb, 'close' ) && true === $wpdb->close();
+			$closed = true === $wpdb->close();
 		} catch ( \Throwable $throwable ) {
 			unset( $throwable );
 		}
-		if ( property_exists( $wpdb, 'ready' ) ) {
-			$wpdb->ready = false;
-		}
+		$wpdb->ready = false;
 		$this->transaction_active = false;
 		return new \WP_Error(
 			'local_support_transaction_commit_uncertain',

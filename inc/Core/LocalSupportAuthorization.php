@@ -55,6 +55,9 @@ class LocalSupportAuthorization {
 	/** @var object|null Opaque owner token held only by LocalSupportService. */
 	private $transaction_owner;
 
+	/** @var bool Connection was quarantined after uncertain advisory-lock cleanup. */
+	private $authorization_quarantined = false;
+
 	public function __construct( ?VenueAuthorization $venues = null, ?LocalSupportOrganizerProviderRegistry $organizers = null ) {
 		$this->venues             = $venues ? $venues : new VenueAuthorization();
 		$this->organizers         = $organizers ? $organizers : $this->default_organizers();
@@ -151,6 +154,9 @@ class LocalSupportAuthorization {
 	/** Acquire Artist writer advisory locks in canonical order before START TRANSACTION. */
 	public function prepare_artist_transaction( int $artist_term_id, int $user_id ) {
 		global $wpdb;
+		if ( $this->authorization_quarantined ) {
+			return new \WP_Error( 'local_support_artist_authorization_quarantined', __( 'Artist authorization is unavailable after uncertain lock cleanup.', 'extrachill-events' ), array( 'status' => 503 ) );
+		}
 		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( (string) get_class( $wpdb ) ) ) ) {
 			return new \WP_Error( 'local_support_artist_advisory_locks_unsupported', __( 'Artist mutation authorization requires MySQL advisory locks.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
@@ -166,16 +172,44 @@ class LocalSupportAuthorization {
 		);
 		$profile_id = $this->artist_profile_id( $artist_term_id );
 		if ( is_wp_error( $profile_id ) ) {
-			$closed = $this->close_pretransaction_scope( $scope );
-			return is_wp_error( $closed ) ? $closed : $profile_id;
+			return $this->finish_failed_prepare( $scope, $profile_id );
 		}
 		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $profile_id );
 		if ( '1' !== (string) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $membership, 5 ) ) ) {
-			$closed = $this->close_pretransaction_scope( $scope );
-			return is_wp_error( $closed ) ? $closed : new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) );
+			return $this->finish_failed_prepare( $scope, new \WP_Error( 'local_support_artist_authority_lock_failed', __( 'Artist authority could not be locked.', 'extrachill-events' ), array( 'status' => 503 ) ) );
 		}
 		$this->artist_pre_scopes[ spl_object_id( $scope ) ]['membership'] = $membership;
 		return $scope;
+	}
+
+	/** Resolve early prepare failure without returning while session locks remain uncertain. */
+	private function finish_failed_prepare( object $scope, \WP_Error $cause ): \WP_Error {
+		global $wpdb;
+		for ( $attempt = 1; $attempt <= 3; ++$attempt ) {
+			$closed = $this->close_pretransaction_scope( $scope );
+			if ( true === $closed ) {
+				return $cause;
+			}
+		}
+		$disconnected = false;
+		try {
+			$disconnected = true === $wpdb->close();
+		} catch ( \Throwable $throwable ) {
+			unset( $throwable );
+		}
+		$wpdb->ready                     = false;
+		$this->artist_pre_scopes         = array();
+		$this->authorization_quarantined = true;
+		return new \WP_Error(
+			'local_support_artist_pretransaction_cleanup_failed',
+			__( 'Artist authorization lock cleanup was uncertain and its connection was retired.', 'extrachill-events' ),
+			array(
+				'status'                 => 503,
+				'cause'                  => $cause->get_error_code(),
+				'connection_quarantined' => true,
+				'disconnect_confirmed'   => $disconnected,
+			)
+		);
 	}
 
 	/** Release Artist writer locks only after transaction completion. */
@@ -400,6 +434,9 @@ class LocalSupportAuthorization {
 				break;
 			}
 			--$scope_count;
+		}
+		foreach ( $this->artist_pre_scopes as $locks ) {
+			$this->finish_failed_prepare( $locks['scope'], new \WP_Error( 'local_support_artist_pretransaction_orphaned' ) );
 		}
 	}
 

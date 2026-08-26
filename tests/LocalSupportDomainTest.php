@@ -380,6 +380,33 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'local_support_artist_advisory_locks_unsupported', $authorization->prepare_artist_transaction( 101, 30 )->get_error_code() );
 	}
 
+	public function test_failed_artist_prepare_retries_exact_locks_and_quarantines_persistent_failure(): void {
+		$this->configure_real_authority_fixture();
+		$wpdb = new LocalSupportAuthorityWpdb();
+		$GLOBALS['wpdb'] = $wpdb;
+		$wpdb->release_results['ec_artist_binding_v1'] = array( 0, 1 );
+		$authorization = new LocalSupportFailingProfileAuthorization();
+		$error = $authorization->prepare_artist_transaction( 101, 30 );
+		$this->assertSame( 'invalid_local_support_artist', $error->get_error_code() );
+		$this->assertSame( array( 'binding-release', 'binding-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
+
+		$wpdb->release_results['ec_artist_binding_v1'] = array( 0, 0, 0 );
+		$authorization = new LocalSupportFailingProfileAuthorization();
+		$error = $authorization->prepare_artist_transaction( 101, 30 );
+		$this->assertSame( 'local_support_artist_pretransaction_cleanup_failed', $error->get_error_code() );
+		$this->assertSame( 1, $wpdb->close_calls );
+		$this->assertSame( 'local_support_artist_authorization_quarantined', $authorization->prepare_artist_transaction( 101, 30 )->get_error_code() );
+
+		$wpdb = new LocalSupportAuthorityWpdb();
+		$GLOBALS['wpdb'] = $wpdb;
+		$wpdb->get_lock_results['ec_artist_membership_30_501'] = array( 0 );
+		$wpdb->release_results['ec_artist_binding_v1'] = array( 0, 1 );
+		$authorization = new LocalSupportAuthorization();
+		$error = $authorization->prepare_artist_transaction( 101, 30 );
+		$this->assertSame( 'local_support_artist_authority_lock_failed', $error->get_error_code() );
+		$this->assertSame( 0, $wpdb->close_calls );
+	}
+
 	public function test_repeatable_read_boundary_succeeds_and_restores_error_suppression(): void {
 		$wpdb = $GLOBALS['wpdb'];
 		$wpdb->suppress_errors = true;
@@ -954,6 +981,10 @@ class LocalSupportAuthorityWpdb {
 	public $membership_release_result = 1;
 	public $after_profile_binding_lock;
 	public $binding_change_waited = false;
+	public $get_lock_results = array();
+	public $release_results = array();
+	public $close_calls = 0;
+	public $ready = true;
 
 	public function flush(): void {
 		$this->last_error = '';
@@ -976,17 +1007,23 @@ class LocalSupportAuthorityWpdb {
 	public function get_var( $query ) {
 		$this->last_error = '';
 		if ( false !== strpos( $query, 'GET_LOCK' ) ) {
+			preg_match( "/GET_LOCK\('([^']+)'/", $query, $matches );
+			$name = $matches[1] ?? '';
 			$this->lock_sequence[] = false !== strpos( $query, 'ec_artist_binding_v1' ) ? 'binding-advisory' : ( false !== strpos( $query, 'ec_events_artist_mapping_' ) ? 'mapping-advisory' : 'membership-advisory' );
-			return 1;
+			return isset( $this->get_lock_results[ $name ] ) && $this->get_lock_results[ $name ] ? array_shift( $this->get_lock_results[ $name ] ) : 1;
 		}
 		if ( false !== strpos( $query, 'RELEASE_LOCK' ) ) {
+			preg_match( "/RELEASE_LOCK\('([^']+)'/", $query, $matches );
+			$name = $matches[1] ?? '';
 			$is_mapping = false !== strpos( $query, 'ec_events_artist_mapping_' );
 			$is_binding = false !== strpos( $query, 'ec_artist_binding_v1' );
 			$this->lock_sequence[] = $is_binding ? 'binding-release' : ( $is_mapping ? 'mapping-release' : 'membership-release' );
-			return $is_mapping ? $this->mapping_release_result : $this->membership_release_result;
+			return isset( $this->release_results[ $name ] ) && $this->release_results[ $name ] ? array_shift( $this->release_results[ $name ] ) : ( $is_mapping ? $this->mapping_release_result : $this->membership_release_result );
 		}
 		return null;
 	}
+
+	public function close(): bool { ++$this->close_calls; $this->ready = false; return true; }
 
 	public function get_results( $query, $output = null ) {
 		unset( $output );
@@ -1041,6 +1078,10 @@ class LocalSupportAuthorityWpdb {
 		}
 		return null;
 	}
+}
+
+final class LocalSupportFailingProfileAuthorization extends LocalSupportAuthorization {
+	protected function artist_profile_id( int $artist_term_id ) { unset( $artist_term_id ); return new WP_Error( 'invalid_local_support_artist' ); }
 }
 
 /** Non-MySQL runtime double for explicit advisory-lock incompatibility. */

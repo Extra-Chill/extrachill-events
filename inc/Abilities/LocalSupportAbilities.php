@@ -53,12 +53,12 @@ class LocalSupportAbilities {
 
 	/** Execute organizer request read. */
 	public function get_request( array $input ) {
-		return $this->service->get_request( (int) $input['request_id'], get_current_user_id() );
+		return $this->service->get_request( (int) $input['request_id'], get_current_user_id(), $this->identity( $input ) );
 	}
 
 	/** Execute request transition. */
 	public function transition_request( array $input ) {
-		return $this->service->transition_request( (int) $input['request_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id() );
+		return $this->service->transition_request( (int) $input['request_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $this->identity( $input ) );
 	}
 
 	/** Execute interest creation. */
@@ -68,7 +68,7 @@ class LocalSupportAbilities {
 
 	/** Execute interest transition. */
 	public function transition_interest( array $input ) {
-		return $this->service->transition_interest( (int) $input['interest_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id() );
+		return $this->service->transition_interest( (int) $input['interest_id'], (string) $input['to_status'], (int) $input['expected_version'], (string) $input['idempotency_key'], get_current_user_id(), $this->identity( $input ) );
 	}
 
 	/** Execute request-scoped contact consent. */
@@ -78,7 +78,7 @@ class LocalSupportAbilities {
 
 	/** Execute organizer shortlist read. */
 	public function list_interests( array $input ) {
-		return $this->service->list_interests( (int) $input['request_id'], get_current_user_id(), (int) ( $input['limit'] ?? 100 ) );
+		return $this->service->list_interests( (int) $input['request_id'], get_current_user_id(), (int) ( $input['limit'] ?? 100 ), $this->identity( $input ) );
 	}
 
 	/** Require an authenticated actor; domain authorization remains in the service. */
@@ -113,17 +113,16 @@ class LocalSupportAbilities {
 	private function open_schema(): array {
 		return $this->object_schema(
 			array(
-				'event_id'        => $this->integer(),
-				'booking_id'      => array(
+				'event_id'              => $this->integer(),
+				'booking_id'            => array(
 					'type'    => array( 'integer', 'null' ),
 					'minimum' => 1,
 				),
-				'organizer_type'  => array(
-					'type' => 'string',
-					'enum' => array( 'venue', 'artist' ),
-				),
-				'organizer_id'    => $this->integer(),
-				'idempotency_key' => $this->key_schema(),
+				'organizer_type'        => $this->identity_type(),
+				'organizer_id'          => $this->integer(),
+				'acting_organizer_type' => $this->identity_type(),
+				'acting_organizer_id'   => $this->integer(),
+				'idempotency_key'       => $this->key_schema(),
 			),
 			array( 'event_id', 'organizer_type', 'organizer_id', 'idempotency_key' )
 		);
@@ -143,13 +142,15 @@ class LocalSupportAbilities {
 	private function transition_request_schema(): array {
 		return $this->object_schema(
 			array(
-				'request_id'       => $this->integer(),
-				'to_status'        => array(
+				'request_id'            => $this->integer(),
+				'to_status'             => array(
 					'type' => 'string',
 					'enum' => LocalSupportService::REQUEST_STATUSES,
 				),
-				'expected_version' => $this->integer(),
-				'idempotency_key'  => $this->key_schema(),
+				'expected_version'      => $this->integer(),
+				'idempotency_key'       => $this->key_schema(),
+				'acting_organizer_type' => $this->identity_type(),
+				'acting_organizer_id'   => $this->integer(),
 			),
 			array( 'request_id', 'to_status', 'expected_version', 'idempotency_key' )
 		);
@@ -158,13 +159,15 @@ class LocalSupportAbilities {
 	private function transition_interest_schema(): array {
 		return $this->object_schema(
 			array(
-				'interest_id'      => $this->integer(),
-				'to_status'        => array(
+				'interest_id'           => $this->integer(),
+				'to_status'             => array(
 					'type' => 'string',
 					'enum' => LocalSupportService::INTEREST_STATUSES,
 				),
-				'expected_version' => $this->integer(),
-				'idempotency_key'  => $this->key_schema(),
+				'expected_version'      => $this->integer(),
+				'idempotency_key'       => $this->key_schema(),
+				'acting_organizer_type' => $this->identity_type(),
+				'acting_organizer_id'   => $this->integer(),
 			),
 			array( 'interest_id', 'to_status', 'expected_version', 'idempotency_key' )
 		);
@@ -212,29 +215,45 @@ class LocalSupportAbilities {
 	private function list_schema(): array {
 		return $this->object_schema(
 			array(
-				'request_id' => $this->integer(),
-				'limit'      => array(
+				'request_id'            => $this->integer(),
+				'limit'                 => array(
 					'type'    => 'integer',
 					'minimum' => 1,
 					'maximum' => 100,
 					'default' => 100,
 				),
+				'acting_organizer_type' => $this->identity_type(),
+				'acting_organizer_id'   => $this->integer(),
 			),
 			array( 'request_id' )
 		);
 	}
 
 	private function id_schema( string $field ): array {
-		return $this->object_schema( array( $field => $this->integer() ), array( $field ) );
+		return $this->object_schema(
+			array(
+				$field                  => $this->integer(),
+				'acting_organizer_type' => $this->identity_type(),
+				'acting_organizer_id'   => $this->integer(),
+			),
+			array( $field )
+		);
 	}
 
 	private function object_schema( array $properties, array $required ): array {
-		return array(
+		$schema = array(
 			'type'                 => 'object',
 			'properties'           => $properties,
 			'required'             => $required,
 			'additionalProperties' => false,
 		);
+		if ( isset( $properties['acting_organizer_type'], $properties['acting_organizer_id'] ) ) {
+			$schema['dependencies'] = array(
+				'acting_organizer_type' => array( 'acting_organizer_id' ),
+				'acting_organizer_id'   => array( 'acting_organizer_type' ),
+			);
+		}
+		return $schema;
 	}
 
 	private function integer(): array {
@@ -249,6 +268,23 @@ class LocalSupportAbilities {
 			'type'      => 'string',
 			'minLength' => 1,
 			'maxLength' => 191,
+		);
+	}
+
+	private function identity_type(): array {
+		return array(
+			'type'    => 'string',
+			'pattern' => '^[a-z][a-z0-9_-]{0,31}$',
+		);
+	}
+
+	private function identity( array $input ): ?array {
+		if ( ! isset( $input['acting_organizer_type'], $input['acting_organizer_id'] ) ) {
+			return null;
+		}
+		return array(
+			'type' => sanitize_key( (string) $input['acting_organizer_type'] ),
+			'id'   => absint( $input['acting_organizer_id'] ),
 		);
 	}
 

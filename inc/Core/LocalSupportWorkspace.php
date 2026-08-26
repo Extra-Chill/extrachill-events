@@ -67,22 +67,26 @@ class LocalSupportWorkspace {
 	 * @param int $user_id Acting user ID.
 	 * @return array|\WP_Error Workspace model or denial.
 	 */
-	public function read( int $request_id, int $artist_term_id, int $user_id ) {
+	public function read( int $request_id, int $artist_term_id, int $user_id, ?array $organizer_identity = null ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : $this->denied();
 		}
 
-		if ( true === $this->authorization->authorize_organizer( $request, $user_id ) ) {
-			$interests = $this->service->list_interests( $request_id, $user_id );
+		$organizer_allowed = $organizer_identity
+			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_VIEW, $request, $user_id, $organizer_identity )
+			: $this->authorization->authorize_organizer( $request, $user_id );
+		if ( true === $organizer_allowed ) {
+			$interests = $this->service->list_interests( $request_id, $user_id, 100, $organizer_identity );
 			if ( is_wp_error( $interests ) ) {
 				return $interests;
 			}
 			return array(
-				'role'      => 'organizer',
-				'request'   => $request,
-				'event'     => $this->event_card( $request ),
-				'interests' => array_map( array( $this, 'interest_card' ), $interests ),
+				'role'             => 'organizer',
+				'request'          => $request,
+				'event'            => $this->event_card( $request ),
+				'interests'        => array_map( array( $this, 'interest_card' ), $interests ),
+				'acting_organizer' => $organizer_identity,
 			);
 		}
 
@@ -135,27 +139,34 @@ class LocalSupportWorkspace {
 	 * @return array|\WP_Error Updated record or error.
 	 */
 	public function act( string $action, array $input, int $user_id ) {
-		$request_id = absint( $input['request_id'] ?? 0 );
-		$artist_id  = absint( $input['artist_term_id'] ?? 0 );
-		$key        = sanitize_key( (string) ( $input['idempotency_key'] ?? '' ) );
+		$request_id         = absint( $input['request_id'] ?? 0 );
+		$artist_id          = absint( $input['artist_term_id'] ?? 0 );
+		$key                = sanitize_key( (string) ( $input['idempotency_key'] ?? '' ) );
+		$organizer_identity = $this->organizer_identity( $input );
 		switch ( $action ) {
 			case 'open':
+				$open_input = array(
+					'event_id'        => absint( $input['event_id'] ?? 0 ),
+					'booking_id'      => absint( $input['booking_id'] ?? 0 ) ?: null,
+					'organizer_type'  => sanitize_key( (string) ( $input['organizer_type'] ?? '' ) ),
+					'organizer_id'    => absint( $input['organizer_id'] ?? 0 ),
+					'idempotency_key' => $key,
+				);
+				if ( $organizer_identity ) {
+					$open_input['acting_organizer_type'] = $organizer_identity['type'];
+					$open_input['acting_organizer_id']   = $organizer_identity['id'];
+				}
 				return $this->service->open_request(
-					array(
-						'event_id'        => absint( $input['event_id'] ?? 0 ),
-						'organizer_type'  => sanitize_key( (string) ( $input['organizer_type'] ?? '' ) ),
-						'organizer_id'    => absint( $input['organizer_id'] ?? 0 ),
-						'idempotency_key' => $key,
-					),
+					$open_input,
 					$user_id
 				);
 			case 'request':
-				return $this->service->transition_request( $request_id, sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id );
+				return $this->service->transition_request( $request_id, sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id, $organizer_identity );
 			case 'interest':
 				$workspace = $this->read( $request_id, $artist_id, $user_id );
 				return is_wp_error( $workspace ) ? $workspace : $this->service->express_interest( $request_id, $artist_id, $key, $user_id );
 			case 'interest_status':
-				return $this->service->transition_interest( absint( $input['interest_id'] ?? 0 ), sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id );
+				return $this->service->transition_interest( absint( $input['interest_id'] ?? 0 ), sanitize_key( (string) ( $input['to_status'] ?? '' ) ), absint( $input['expected_version'] ?? 0 ), $key, $user_id, $organizer_identity );
 			case 'consent':
 				$submitted_interest_id = absint( $input['interest_id'] ?? 0 );
 				if ( ! empty( $input['granted'] ) ) {
@@ -174,6 +185,17 @@ class LocalSupportWorkspace {
 				return $this->service->set_contact_consent( $submitted_interest_id, ! empty( $input['granted'] ), $contact, $fields, absint( $input['expected_version'] ?? 0 ), $key, $user_id );
 		}
 		return new \WP_Error( 'local_support_action_invalid', __( 'That local support action is not available.', 'extrachill-events' ), array( 'status' => 400 ) );
+	}
+
+	/** Parse one explicit managed organizer identity without inference. */
+	private function organizer_identity( array $input ): ?array {
+		if ( ! isset( $input['acting_organizer_type'], $input['acting_organizer_id'] ) ) {
+			return null;
+		}
+		return array(
+			'type' => sanitize_key( (string) $input['acting_organizer_type'] ),
+			'id'   => absint( $input['acting_organizer_id'] ),
+		);
 	}
 
 	/**

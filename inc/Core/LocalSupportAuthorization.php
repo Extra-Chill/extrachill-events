@@ -14,14 +14,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Validates canonical event bindings and exact organizer/artist authority.
  *
- * Mutation lock order is Local Support request/interest rows, exact Events
- * taxonomy relationships, future promoter organization/member rows, the exact
- * direct venue membership, future promoter grant rows, artist profile binding,
- * canonical term binding, artist roster, then user roster. Promoter consumption
- * must use organize_local_support, never ACTION_ACCESS_VENUE.
+ * The service locks Local Support request/interest rows first. Each provider
+ * then owns its canonical domain order: venue locks event then membership;
+ * Artist locks booking, event/Artist attachment, mapping, and reciprocal roster;
+ * promoter locks event, organization, membership, and exact delegated grant.
+ * Promoter consumption uses organize_local_support, never ACTION_ACCESS_VENUE.
  */
 class LocalSupportAuthorization {
 	public const ACTION_ORGANIZE_LOCAL_SUPPORT = 'organize_local_support';
+	public const ACTION_OPEN                   = 'open';
+	public const ACTION_VIEW                   = 'view';
+	public const ACTION_TRANSITION_REQUEST     = 'transition_request';
+	public const ACTION_REVIEW_INTERESTS       = 'review_interests';
+	public const ACTION_SELECT_INTEREST        = 'select_interest';
+	public const ACTION_NOTIFY                 = 'notification_participation';
 	private const MAX_ARTIST_AUTHORITY_IDS     = 100;
 
 	/**
@@ -30,6 +36,9 @@ class LocalSupportAuthorization {
 	 * @var VenueAuthorization
 	 */
 	private $venues;
+
+	/** @var LocalSupportOrganizerProviderRegistry */
+	private $organizers;
 
 	/** @var string[] Artist relationship advisory locks held through commit/rollback. */
 	private $artist_locks = array();
@@ -43,8 +52,9 @@ class LocalSupportAuthorization {
 	/** @var object|null Opaque owner token held only by LocalSupportService. */
 	private $transaction_owner;
 
-	public function __construct( ?VenueAuthorization $venues = null ) {
+	public function __construct( ?VenueAuthorization $venues = null, ?LocalSupportOrganizerProviderRegistry $organizers = null ) {
 		$this->venues             = $venues ? $venues : new VenueAuthorization();
+		$this->organizers         = $organizers ? $organizers : $this->default_organizers();
 		$this->transaction_scopes = new \SplObjectStorage();
 	}
 
@@ -98,58 +108,75 @@ class LocalSupportAuthorization {
 
 	/** Authorize and validate the organizer identity against the exact event. */
 	public function authorize_organizer( array $request, int $user_id ) {
+		return $this->authorize_organizer_action( self::ACTION_VIEW, $request, $user_id, $this->provenance_identity( $request ) );
+	}
+
+	/** Authorize an exact selected managed identity for one organizer action. */
+	public function authorize_organizer_action( string $action, array $request, int $user_id, array $identity ) {
 		$context = $this->event_context( (int) $request['event_id'] );
 		if ( is_wp_error( $context ) ) {
 			return $context;
 		}
-		if ( (int) $request['venue_term_id'] !== $context['venue_term_id'] ) {
+		if ( (int) $request['venue_term_id'] !== (int) $context['venue_term_id'] ) {
 			return $this->denied();
 		}
-		if ( 'venue' === $request['organizer_type'] ) {
-			if ( (int) $request['organizer_id'] !== $context['venue_term_id'] ) {
-				return $this->denied();
-			}
-			return $this->venues->authorize( $user_id, $context['venue_term_id'], VenueAuthorization::ACTION_ACCESS_VENUE );
-		}
-		if ( 'artist' !== $request['organizer_type'] ) {
-			return $this->denied();
-		}
-		$artist_id = (int) $request['organizer_id'];
-		$attached  = $this->artist_attached_to_event( $context['event_id'], $artist_id );
-		if ( true !== $attached ) {
-			return is_wp_error( $attached ) ? $attached : $this->denied();
-		}
-		return $this->authorize_artist( $artist_id, $user_id );
+		return $this->organizers->authorize( $action, $request, $identity, $user_id, $this );
 	}
 
 	/** Authorize an organizer from authority locked in the service-owned transaction. */
 	public function authorize_organizer_locked( array $request, int $user_id, object $scope ) {
+		return $this->authorize_organizer_action_locked( self::ACTION_TRANSITION_REQUEST, $request, $user_id, $this->provenance_identity( $request ), $scope );
+	}
+
+	/** Lock-current authorization for one exact selected managed identity and action. */
+	public function authorize_organizer_action_locked( string $action, array $request, int $user_id, array $identity, object $scope ) {
 		$valid_scope = $this->validate_scope( $scope );
 		if ( true !== $valid_scope ) {
 			return $valid_scope;
 		}
-		$context = $this->locked_event_context( (int) $request['event_id'] );
-		if ( is_wp_error( $context ) ) {
-			return $context;
-		}
-		if ( (int) $request['venue_term_id'] !== $context['venue_term_id'] ) {
-			return $this->denied();
-		}
-		if ( 'venue' === $request['organizer_type'] ) {
-			if ( (int) $request['organizer_id'] !== $context['venue_term_id'] ) {
-				return $this->denied();
-			}
-			return $this->authorize_locked_venue( $user_id, $context['venue_term_id'] );
-		}
-		if ( 'artist' !== $request['organizer_type'] ) {
-			return $this->denied();
-		}
-		$artist_id = (int) $request['organizer_id'];
-		$attached  = $this->locked_artist_attachment( $context['event_id'], $artist_id );
-		if ( true !== $attached ) {
-			return is_wp_error( $attached ) ? $attached : $this->denied();
-		}
-		return $this->authorize_artist_locked( $artist_id, $user_id, $scope );
+		return $this->organizers->authorize( $action, $request, $identity, $user_id, $this, true, $scope );
+	}
+
+	/** Lock canonical event venue context within one provider-owned sequence. */
+	public function event_context_locked_for_provider( int $event_id, object $scope ) {
+		$valid = $this->validate_scope( $scope );
+		return true === $valid ? $this->locked_event_context( $event_id ) : $valid;
+	}
+
+	/** Resolve every currently authorized organizer identity for an event. */
+	public function organizer_choices( int $event_id, int $user_id ) {
+		return $this->organizers->choices( $event_id, $user_id, $this );
+	}
+
+	/** Resolve exact current notification participants across all providers. */
+	public function organizer_recipient_ids( array $request ) {
+		return $this->organizers->recipient_ids( $request, $this );
+	}
+
+	/** Expose the injected venue policy only to the Events-local venue provider. */
+	public function venue_policy(): VenueAuthorization {
+		return $this->venues;
+	}
+
+	/** Lock exact venue authority for the Events-local venue provider. */
+	public function authorize_venue_locked( int $user_id, int $venue_term_id, ?object $scope ) {
+		$valid = $scope ? $this->validate_scope( $scope ) : $this->denied();
+		return true === $valid ? $this->authorize_locked_venue( $user_id, $venue_term_id ) : $valid;
+	}
+
+	/** Provider-safe access to the canonical reciprocal Artist profile binding. */
+	public function artist_profile_id_for_provider( int $artist_term_id ) {
+		return $this->artist_profile_id( $artist_term_id );
+	}
+
+	/** Shared non-enumerating denial for provider implementations. */
+	public function denied(): \WP_Error {
+		return new \WP_Error( 'local_support_forbidden', __( 'You are not authorized for this local support request.', 'extrachill-events' ), array( 'status' => 403 ) );
+	}
+
+	/** Whether an error is a normal authority denial rather than an operational fault. */
+	public function is_denial( $result ): bool {
+		return is_wp_error( $result ) && in_array( $result->get_error_code(), array( 'local_support_forbidden', 'venue_action_forbidden', 'promoter_venue_action_forbidden' ), true );
 	}
 
 	/** Lock and read one exact event artist attachment in a service-owned scope. */
@@ -518,7 +545,22 @@ class LocalSupportAuthorization {
 	}
 
 	/** Return a non-enumerating denial. */
-	private function denied(): \WP_Error {
-		return new \WP_Error( 'local_support_forbidden', __( 'You are not authorized for this local support request.', 'extrachill-events' ), array( 'status' => 403 ) );
+	private function provenance_identity( array $request ): array {
+		return array(
+			'type' => sanitize_key( (string) ( $request['organizer_type'] ?? '' ) ),
+			'id'   => absint( $request['organizer_id'] ?? 0 ),
+		);
+	}
+
+	/** Register the three concrete consumers without leaking their types into the generic path. */
+	private function default_organizers(): LocalSupportOrganizerProviderRegistry {
+		$registry = new LocalSupportOrganizerProviderRegistry();
+		foreach ( array( new LocalSupportVenueOrganizerProvider(), new LocalSupportArtistOrganizerProvider(), new LocalSupportPromoterOrganizerProvider() ) as $provider ) {
+			$registered = $registry->register( $provider );
+			if ( is_wp_error( $registered ) ) {
+				throw new \RuntimeException( $registered->get_error_message() );
+			}
+		}
+		return $registry;
 	}
 }

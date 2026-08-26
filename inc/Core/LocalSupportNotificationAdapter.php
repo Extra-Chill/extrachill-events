@@ -187,40 +187,22 @@ class LocalSupportNotificationAdapter {
 		return $this->repository->hydrate_activity( $record )['payload'];
 	}
 
-	/** Resolve currently authorized users for the stored organizer identity. */
+	/** Resolve exact current participants across registered organizer providers. */
 	public function organizer_recipient_ids( int $request_id ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : new \WP_Error( 'local_support_request_missing', __( 'The local-support request could not be resolved.', 'extrachill-events' ) );
 		}
-		if ( 'venue' === $request['organizer_type'] ) {
-			$members = $this->memberships->list_for_venue(
-				(int) $request['venue_term_id'],
-				array(
-					'status' => VenueAuthorization::STATUS_ACTIVE,
-					'limit'  => 100,
-				)
-			);
-			if ( is_wp_error( $members ) ) {
-				return $members;
-			}
-			$candidates = array_column( $members, 'user_id' );
-		} elseif ( 'artist' === $request['organizer_type'] ) {
-			$candidates = $this->artist_manager_ids( (int) $request['organizer_id'] );
-			if ( is_wp_error( $candidates ) ) {
-				return $candidates;
-			}
-		} else {
-			return new \WP_Error( 'local_support_organizer_invalid', __( 'The local-support organizer identity is invalid.', 'extrachill-events' ) );
-		}
+		return $this->authorization->organizer_recipient_ids( $request );
+	}
 
-		$recipients = array();
-		foreach ( array_unique( array_map( 'absint', $candidates ) ) as $user_id ) {
-			if ( $user_id > 0 && get_userdata( $user_id ) && true === $this->authorization->authorize_organizer( $request, $user_id ) ) {
-				$recipients[] = $user_id;
-			}
+	/** Resolve one exact managed identity attribution for a recipient. */
+	public function organizer_identity( int $request_id, int $recipient_id ) {
+		$request = $this->repository->get_request( $request_id );
+		if ( ! is_array( $request ) ) {
+			return is_wp_error( $request ) ? $request : new \WP_Error( 'local_support_request_missing', __( 'The local-support request could not be resolved.', 'extrachill-events' ) );
 		}
-		return $recipients;
+		return $this->notification_identity( $request, $recipient_id );
 	}
 
 	/** Resolve a future private workspace route only after current authorization. */
@@ -229,18 +211,45 @@ class LocalSupportNotificationAdapter {
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : new \WP_Error( 'local_support_request_missing', __( 'The local-support request could not be resolved.', 'extrachill-events' ) );
 		}
+		$identity = null;
 		$allowed = 'organizer_interest_changed' === ( $intent['kind'] ?? '' )
-			? $this->authorization->authorize_organizer( $request, $recipient_id )
+			? $this->notification_identity( $request, $recipient_id )
 			: ( get_userdata( $recipient_id ) ? true : new \WP_Error( 'local_support_workspace_forbidden', __( 'The local-support workspace is not authorized.', 'extrachill-events' ) ) );
 		if ( true !== $allowed ) {
-			return is_wp_error( $allowed ) ? $allowed : new \WP_Error( 'local_support_workspace_forbidden', __( 'The local-support workspace is not authorized.', 'extrachill-events' ) );
+			if ( is_array( $allowed ) ) {
+				$identity = $allowed;
+			} else {
+				return is_wp_error( $allowed ) ? $allowed : new \WP_Error( 'local_support_workspace_forbidden', __( 'The local-support workspace is not authorized.', 'extrachill-events' ) );
+			}
 		}
 		$url = $this->workspace
 			? call_user_func( $this->workspace, $request, $recipient_id )
 			: apply_filters( self::WORKSPACE_URL_FILTER, null, $request, $recipient_id );
 		return is_string( $url ) && '' !== $url
-			? $url
+			? ( $identity ? add_query_arg( 'identity', $identity['type'] . ':' . $identity['id'], $url ) : $url )
 			: new \WP_Error( 'local_support_workspace_unavailable', __( 'A private local-support workspace route is not available yet.', 'extrachill-events' ) );
+	}
+
+	/** Resolve one unambiguous current organizer identity for a notification link. */
+	private function notification_identity( array $request, int $recipient_id ) {
+		$provenance = array(
+			'type' => sanitize_key( (string) $request['organizer_type'] ),
+			'id'   => absint( $request['organizer_id'] ),
+		);
+		if ( true === $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_NOTIFY, $request, $recipient_id, $provenance ) ) {
+			return $provenance;
+		}
+		$choices = $this->authorization->organizer_choices( (int) $request['event_id'], $recipient_id );
+		if ( is_wp_error( $choices ) ) {
+			return $choices;
+		}
+		if ( 1 !== count( $choices ) ) {
+			return new \WP_Error( 'local_support_organizer_identity_ambiguous', __( 'Choose an exact organizer identity before opening this Local Support request.', 'extrachill-events' ), array( 'status' => 409 ) );
+		}
+		return array(
+			'type' => sanitize_key( (string) $choices[0]['type'] ),
+			'id'   => absint( $choices[0]['id'] ),
+		);
 	}
 
 	/** Convert one activity row back to the service's strict intent shape. */

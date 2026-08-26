@@ -212,6 +212,7 @@ final class PromoterWorkspace {
 			'venue'                  => null,
 			'granted_venues'         => array(),
 			'promoter_relationships' => array(),
+			'local_support_events'   => array(),
 		);
 		if ( '' === $selected_reference ) {
 			return $result;
@@ -281,6 +282,17 @@ final class PromoterWorkspace {
 				'action'       => PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT,
 				'action_label' => $this->action_label( PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT ),
 			);
+		}
+		if ( function_exists( 'extrachill_events_local_support_organizer_events' ) ) {
+			$granted_ids = array_column( $result['granted_venues'], 'id' );
+			$events      = extrachill_events_local_support_organizer_events( $user_id );
+			foreach ( $events as $event ) {
+				if ( ! in_array( (int) $event['venue_term_id'], $granted_ids, true ) ) {
+					continue;
+				}
+				$event['workspace_url']           = add_query_arg( 'identity', 'promoter:' . $term_id, remove_query_arg( 'identity', $event['workspace_url'] ) );
+				$result['local_support_events'][] = $event;
+			}
 		}
 		return $result;
 	}

@@ -50,6 +50,9 @@ function extrachill_events_handle_local_support_action(): void {
 	if ( ! empty( $input['artist_term_id'] ) ) {
 		$query['artist_id'] = absint( $input['artist_term_id'] );
 	}
+	if ( ! empty( $input['acting_organizer_type'] ) && ! empty( $input['acting_organizer_id'] ) ) {
+		$query['identity'] = sanitize_key( (string) $input['acting_organizer_type'] ) . ':' . absint( $input['acting_organizer_id'] );
+	}
 	wp_safe_redirect( add_query_arg( $query, home_url( $id ? '/local-support/' . $id . '/' : '/local-support/' ) ) );
 	exit;
 }
@@ -91,69 +94,9 @@ function extrachill_events_local_support_organizer_options( int $event_id, int $
  * @return array|WP_Error Authorized organizer choices or an operational error.
  */
 function extrachill_events_local_support_resolve_organizer_options( int $event_id, int $user_id, ?array $scope = null ) {
+	unset( $scope );
 	$authorization = new LocalSupportAuthorization();
-	$context       = $authorization->event_context( $event_id );
-	if ( is_wp_error( $context ) ) {
-		return $context;
-	}
-	$options = array();
-	$venue   = $authorization->organizer_term( (int) $context['venue_term_id'], 'venue' );
-	if ( is_wp_error( $venue ) ) {
-		return $venue;
-	}
-	if ( ! $venue instanceof WP_Term || 'venue' !== $venue->taxonomy ) {
-		return new WP_Error( 'local_support_event_venues_unavailable', __( 'The event venue binding could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
-	}
-	$request       = array(
-		'event_id'       => $event_id,
-		'venue_term_id'  => (int) $context['venue_term_id'],
-		'organizer_type' => 'venue',
-		'organizer_id'   => (int) $context['venue_term_id'],
-	);
-	$venue_allowed = $authorization->authorize_organizer( $request, $user_id );
-	if ( true === $venue_allowed ) {
-		$options[] = array(
-			'type'  => 'venue',
-			'id'    => (int) $context['venue_term_id'],
-			'label' => $venue->name,
-		);
-	} elseif ( is_wp_error( $venue_allowed ) && 'venue_action_forbidden' !== $venue_allowed->get_error_code() ) {
-		return $venue_allowed;
-	}
-	$event_artists = $authorization->event_artist_term_ids( $event_id );
-	$scope         = null === $scope ? extrachill_events_local_support_organizer_scope( $user_id ) : $scope;
-	if ( is_wp_error( $event_artists ) ) {
-		return new WP_Error( 'local_support_event_artists_unavailable', __( 'Event artist bindings could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
-	}
-	if ( is_wp_error( $scope ) ) {
-		return $scope;
-	}
-	$event_artists = array_map( 'intval', (array) $event_artists );
-	foreach ( $scope['artists'] as $canonical_term_id => $local_term_id ) {
-		if ( ! in_array( $local_term_id, $event_artists, true ) ) {
-			continue;
-		}
-		$request['organizer_type'] = 'artist';
-		$request['organizer_id']   = (int) $canonical_term_id;
-		$artist_allowed            = $authorization->authorize_organizer( $request, $user_id );
-		if ( true === $artist_allowed ) {
-			$term = $authorization->organizer_term( $local_term_id, 'artist' );
-			if ( is_wp_error( $term ) ) {
-				return $term;
-			}
-			if ( ! $term instanceof WP_Term || 'artist' !== $term->taxonomy ) {
-				return new WP_Error( 'local_support_event_artists_unavailable', __( 'Event artist bindings could not be validated.', 'extrachill-events' ), array( 'status' => 503 ) );
-			}
-			$options[] = array(
-				'type'  => 'artist',
-				'id'    => (int) $canonical_term_id,
-				'label' => $term->name,
-			);
-		} elseif ( is_wp_error( $artist_allowed ) && 'local_support_forbidden' !== $artist_allowed->get_error_code() ) {
-			return $artist_allowed;
-		}
-	}
-	return $options;
+	return $authorization->organizer_choices( $event_id, $user_id );
 }
 
 /**
@@ -256,9 +199,31 @@ function extrachill_events_local_support_organizer_scope( int $user_id ) {
 		}
 	}
 
+	$promoters = array();
+	if ( class_exists( '\ExtraChillEvents\Core\PromoterAuthorityRepository' ) && class_exists( '\ExtraChillEvents\Core\PromoterVenueAuthorization' ) ) {
+		$memberships = ( new ExtraChillEvents\Core\PromoterAuthorityRepository() )->list_active_memberships_for_user( $user_id );
+		if ( is_wp_error( $memberships ) ) {
+			return $memberships;
+		}
+		$promoter_policy = new ExtraChillEvents\Core\PromoterVenueAuthorization();
+		foreach ( $memberships as $membership ) {
+			$promoter_id = (int) $membership['promoter_term_id'];
+			$venue_ids   = $promoter_policy->effective_venue_ids( $user_id, $promoter_id, ExtraChillEvents\Core\PromoterVenueGrantRepository::ACTION_ORGANIZE_LOCAL_SUPPORT );
+			if ( is_wp_error( $venue_ids ) ) {
+				if ( 'promoter_venue_action_forbidden' === $venue_ids->get_error_code() ) {
+					continue;
+				}
+				return $venue_ids;
+			}
+			$promoters[ $promoter_id ] = array_values( array_unique( array_map( 'intval', $venue_ids ) ) );
+			$authorized_venues         = array_values( array_unique( array_merge( $authorized_venues, $promoters[ $promoter_id ] ) ) );
+		}
+	}
+
 	return array(
-		'venues'  => $authorized_venues,
-		'artists' => $artists,
+		'venues'    => $authorized_venues,
+		'artists'   => $artists,
+		'promoters' => $promoters,
 	);
 }
 
@@ -366,9 +331,13 @@ function extrachill_events_local_support_organizer_events( int $user_id, int $ve
 				'start_datetime' => (string) $row['start_datetime'],
 				'venue_term_id'  => (int) $row['venue_term_id'],
 				'status'         => is_array( $request ) ? (string) $request['status'] : 'not_seeking',
-				'workspace_url'  => is_array( $request )
+				'workspace_url'  => add_query_arg(
+					'identity',
+					$options[0]['type'] . ':' . (int) $options[0]['id'],
+					is_array( $request )
 					? home_url( '/local-support/' . (int) $request['id'] . '/' )
-					: add_query_arg( 'event_id', $event_id, home_url( '/local-support/' ) ),
+					: add_query_arg( 'event_id', $event_id, home_url( '/local-support/' ) )
+				),
 				'permalink'      => get_permalink( $event_id ),
 			);
 			++$event_count;
@@ -411,19 +380,26 @@ function extrachill_events_render_local_support_workspace(): void {
 	}
 	$request_id = absint( get_query_var( 'ec_local_support_request', 0 ) );
 	// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only route context; mutations require a nonce.
-	$artist_id = isset( $_GET['artist_id'] ) ? absint( wp_unslash( $_GET['artist_id'] ) ) : 0;
-	$event_id  = isset( $_GET['event_id'] ) ? absint( wp_unslash( $_GET['event_id'] ) ) : 0;
-	$notice    = isset( $_GET['notice'] ) ? sanitize_key( wp_unslash( $_GET['notice'] ) ) : '';
+	$artist_id          = isset( $_GET['artist_id'] ) ? absint( wp_unslash( $_GET['artist_id'] ) ) : 0;
+	$event_id           = isset( $_GET['event_id'] ) ? absint( wp_unslash( $_GET['event_id'] ) ) : 0;
+	$notice             = isset( $_GET['notice'] ) ? sanitize_key( wp_unslash( $_GET['notice'] ) ) : '';
+	$identity_reference = isset( $_GET['identity'] ) ? sanitize_text_field( wp_unslash( $_GET['identity'] ) ) : '';
 	// phpcs:enable WordPress.Security.NonceVerification.Recommended
 	if ( ! $request_id ) {
 		if ( $event_id ) {
-			extrachill_events_render_local_support_open( $event_id );
+			extrachill_events_render_local_support_open( $event_id, $identity_reference );
 		} else {
 			extrachill_events_render_local_support_index();
 		}
 		return;
 	}
-	$model = ( new LocalSupportWorkspace() )->read( $request_id, $artist_id, get_current_user_id() );
+	$organizer_identity = preg_match( '/^([a-z][a-z0-9_-]{0,31}):([1-9][0-9]{0,9})$/', $identity_reference, $identity_matches )
+		? array(
+			'type' => $identity_matches[1],
+			'id'   => (int) $identity_matches[2],
+		)
+		: null;
+	$model              = ( new LocalSupportWorkspace() )->read( $request_id, $artist_id, get_current_user_id(), $organizer_identity );
 	if ( is_wp_error( $model ) ) {
 		status_header( in_array( $model->get_error_code(), array( 'local_support_forbidden', 'local_support_not_found' ), true ) ? 404 : 503 );
 		extrachill_events_render_local_support_unavailable();
@@ -508,11 +484,23 @@ function extrachill_events_render_local_support_artist_selection( array $model )
 /**
  * Render exact-event request creation.
  *
- * @param int $event_id Canonical event ID.
+ * @param int    $event_id Canonical event ID.
+ * @param string $identity_reference Optional exact selected organizer identity.
  */
-function extrachill_events_render_local_support_open( int $event_id ): void {
+function extrachill_events_render_local_support_open( int $event_id, string $identity_reference = '' ): void {
 	$options = $event_id ? extrachill_events_local_support_organizer_options( $event_id, get_current_user_id() ) : array();
 	$post    = $event_id ? get_post( $event_id ) : null;
+	if ( '' !== $identity_reference ) {
+		$selected = array_values(
+			array_filter(
+				$options,
+				static function ( array $option ) use ( $identity_reference ): bool {
+					return $identity_reference === $option['type'] . ':' . (int) $option['id'];
+				}
+			)
+		);
+		$options = 1 === count( $selected ) ? array_merge( $selected, array_values( array_filter( $options, static function ( array $option ) use ( $identity_reference ): bool { return $identity_reference !== $option['type'] . ':' . (int) $option['id']; } ) ) ) : array();
+	}
 	if ( ! $post instanceof WP_Post || empty( $options ) ) {
 		status_header( 404 );
 		echo '<section class="ec-local-support ec-block-shell" role="alert"><h1>' . esc_html__( 'Workspace unavailable', 'extrachill-events' ) . '</h1><p>' . esc_html__( 'Open Local Support from an event you organize.', 'extrachill-events' ) . '</p></section>';
@@ -524,7 +512,7 @@ function extrachill_events_render_local_support_open( int $event_id ): void {
 		<?php
 		foreach ( $options as $option ) :
 			?>
-			<option value="<?php echo esc_attr( $option['type'] . ':' . $option['id'] ); ?>"><?php echo esc_html( $option['label'] ); ?></option><?php endforeach; ?></select><input type="hidden" name="organizer_type" value="<?php echo esc_attr( $options[0]['type'] ); ?>" data-organizer-type /><input type="hidden" name="organizer_id" value="<?php echo esc_attr( $options[0]['id'] ); ?>" data-organizer-id /><button class="button-1" type="submit" data-loading-label="Opening request..."><?php esc_html_e( 'Open local support request', 'extrachill-events' ); ?></button></form>
+			<option value="<?php echo esc_attr( $option['type'] . ':' . $option['id'] ); ?>" data-booking-id="<?php echo esc_attr( (string) ( $option['booking_id'] ?? 0 ) ); ?>"><?php echo esc_html( $option['label'] ); ?></option><?php endforeach; ?></select><input type="hidden" name="organizer_type" value="<?php echo esc_attr( $options[0]['type'] ); ?>" data-organizer-type /><input type="hidden" name="organizer_id" value="<?php echo esc_attr( $options[0]['id'] ); ?>" data-organizer-id /><input type="hidden" name="acting_organizer_type" value="<?php echo esc_attr( $options[0]['type'] ); ?>" data-acting-organizer-type /><input type="hidden" name="acting_organizer_id" value="<?php echo esc_attr( $options[0]['id'] ); ?>" data-acting-organizer-id /><input type="hidden" name="booking_id" value="<?php echo esc_attr( (string) ( $options[0]['booking_id'] ?? 0 ) ); ?>" data-organizer-booking-id /><button class="button-1" type="submit" data-loading-label="Opening request..."><?php esc_html_e( 'Open local support request', 'extrachill-events' ); ?></button></form>
 	</section>
 	<?php
 }
@@ -552,7 +540,7 @@ function extrachill_events_render_local_support_organizer( array $model ): void 
 	<div class="ec-local-support__section"><h2><?php esc_html_e( 'Request controls', 'extrachill-events' ); ?></h2><div class="ec-local-support__actions">
 	<?php
 	foreach ( $transitions[ $request['status'] ] ?? array() as $status => $label ) {
-		extrachill_events_local_support_action_form( 'request', $request['id'], 0, $request['version'], $status, $label ); }
+		extrachill_events_local_support_action_form( 'request', $request['id'], 0, $request['version'], $status, $label, 0, $model['acting_organizer'] ?? null ); }
 	?>
 	</div></div>
 	<div class="ec-local-support__section"><h2><?php esc_html_e( 'Interested artists', 'extrachill-events' ); ?></h2><p><?php esc_html_e( 'Only artists who responded are shown. Contact details appear only while request-specific consent is active.', 'extrachill-events' ); ?></p>
@@ -584,11 +572,11 @@ else :
 			<div class="ec-local-support__actions">
 			<?php
 			if ( 'interested' === $interest['status'] ) {
-				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'shortlisted', __( 'Shortlist', 'extrachill-events' ) );
-				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'declined', __( 'Decline', 'extrachill-events' ) );
+				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'shortlisted', __( 'Shortlist', 'extrachill-events' ), 0, $model['acting_organizer'] ?? null );
+				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'declined', __( 'Decline', 'extrachill-events' ), 0, $model['acting_organizer'] ?? null );
 			} elseif ( 'shortlisted' === $interest['status'] ) {
-				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'selected', __( 'Select artist', 'extrachill-events' ) );
-				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'declined', __( 'Decline', 'extrachill-events' ) ); }
+				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'selected', __( 'Select artist', 'extrachill-events' ), 0, $model['acting_organizer'] ?? null );
+				extrachill_events_local_support_action_form( 'interest_status', $request['id'], $interest['id'], $interest['version'], 'declined', __( 'Decline', 'extrachill-events' ), 0, $model['acting_organizer'] ?? null ); }
 			?>
 			</div></article><?php endforeach; ?></div>
 	</div>
@@ -698,7 +686,7 @@ function extrachill_events_local_support_consent_form( array $model, bool $grant
  * @param string $label Button label.
  * @param int    $artist_term_id Acting artist term ID.
  */
-function extrachill_events_local_support_action_form( string $action, int $request_id, int $interest_id, int $version, string $status, string $label, int $artist_term_id = 0 ): void {
+function extrachill_events_local_support_action_form( string $action, int $request_id, int $interest_id, int $version, string $status, string $label, int $artist_term_id = 0, ?array $organizer_identity = null ): void {
 	?>
 	<form method="post" class="ec-local-support__inline-form"><?php wp_nonce_field( 'extrachill_events_local_support' ); ?>
 	<?php
@@ -712,6 +700,9 @@ function extrachill_events_local_support_action_form( string $action, int $reque
 		'idempotency_key'      => wp_generate_uuid4(),
 	) as $name => $value ) {
 		printf( '<input type="hidden" name="%s" value="%s" />', esc_attr( $name ), esc_attr( (string) $value ) ); }
+	if ( $organizer_identity ) {
+		printf( '<input type="hidden" name="acting_organizer_type" value="%s" /><input type="hidden" name="acting_organizer_id" value="%s" />', esc_attr( $organizer_identity['type'] ), esc_attr( (string) $organizer_identity['id'] ) );
+	}
 	?>
 	<button class="button-2" type="submit" data-loading-label="Updating..."><?php echo esc_html( $label ); ?></button></form>
 	<?php

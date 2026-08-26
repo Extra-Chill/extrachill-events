@@ -97,7 +97,7 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 		$this->assertStringContainsString( "scope_tt.taxonomy = 'venue' AND scope_tt.term_id IN (55)", $GLOBALS['wpdb']->local_support_candidate_query );
 	}
 
-	/** Venue and canonical artist authority include only their exact event scopes. */
+	/** Venue authority remains visible while attachment-only Artist events fail closed. */
 	public function test_direct_venue_and_artist_scopes_are_isolated(): void {
 		$this->grant_venue( 12, 55 );
 		$this->grant_artist( 12, 402, 202, 302 );
@@ -107,9 +107,9 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 
 		$events = extrachill_events_local_support_organizer_events( 12 );
 
-		$this->assertSame( array( 10, 11 ), array_column( $events, 'id' ) );
+		$this->assertSame( array( 10 ), array_column( $events, 'id' ) );
 		$options = extrachill_events_local_support_organizer_options( 11, 12 );
-		$this->assertSame( array( array( 'type' => 'artist', 'id' => 202, 'label' => 'Managed Artist' ) ), $options );
+		$this->assertSame( array(), $options, 'Artist taxonomy attachment without an exact confirmed booking is not organizer authority.' );
 	}
 
 	/** Taxonomy assignment without reciprocal roster authority grants nothing. */
@@ -141,7 +141,7 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 		$this->assertStringContainsString( 'ORDER BY dates.start_datetime ASC, p.ID ASC LIMIT 101', $GLOBALS['wpdb']->local_support_candidate_query );
 	}
 
-	/** Venue memberships without current feature access cannot precede artist scope. */
+	/** Neither inactive venue access nor attachment-only Artist scope grants an event. */
 	public function test_inactive_feature_venue_candidates_do_not_hide_artist_event(): void {
 		$this->grant_venue( 12, 55 );
 		$this->grant_artist( 12, 402, 202, 302 );
@@ -153,7 +153,7 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 
 		$events = extrachill_events_local_support_organizer_events( 12 );
 
-		$this->assertSame( array( 200 ), array_column( $events, 'id' ) );
+		$this->assertSame( array(), array_column( $events, 'id' ) );
 		$this->assertStringNotContainsString( "scope_tt.taxonomy = 'venue'", $GLOBALS['wpdb']->local_support_candidate_query );
 	}
 
@@ -197,14 +197,14 @@ final class LocalSupportOrganizerEventsTest extends BookingTestCase {
 		$this->assertSame( array(), extrachill_events_local_support_organizer_events( 12 ) );
 	}
 
-	/** Empty object-term results with wpdb errors cannot return prior successes. */
-	public function test_hidden_object_term_database_error_after_success_fails_complete_list(): void {
+	/** Venue-only choices do not initialize unrelated Artist taxonomy resources. */
+	public function test_venue_choice_ignores_unrelated_artist_taxonomy_failure(): void {
 		$this->grant_venue( 12, 55 );
 		$this->candidate( 1, 1000, 55 );
 		$this->candidate( 2, 1001, 55 );
 		$GLOBALS['ec_artist_test']['event_term_db_errors']['artist'][2] = true;
 
-		$this->assertSame( array(), extrachill_events_local_support_organizer_events( 12 ) );
+		$this->assertSame( array( 1, 2 ), array_column( extrachill_events_local_support_organizer_events( 12 ), 'id' ) );
 	}
 
 	/** Malformed scoped rows are skipped across bounded deterministic pages. */

@@ -49,10 +49,10 @@ class LocalSupportService {
 	private $transaction_owner_error;
 
 	public function __construct( ?LocalSupportRepository $repository = null, ?LocalSupportAuthorization $authorization = null ) {
-		$this->repository    = $repository ? $repository : new LocalSupportRepository();
-		$this->authorization = $authorization ? $authorization : new LocalSupportAuthorization();
-		$this->transaction_token = new \stdClass();
-		$claimed = $this->authorization->claim_transaction_owner( $this->transaction_token );
+		$this->repository              = $repository ? $repository : new LocalSupportRepository();
+		$this->authorization           = $authorization ? $authorization : new LocalSupportAuthorization();
+		$this->transaction_token       = new \stdClass();
+		$claimed                       = $this->authorization->claim_transaction_owner( $this->transaction_token );
 		$this->transaction_owner_error = $claimed instanceof \WP_Error ? $claimed : null;
 	}
 
@@ -70,14 +70,17 @@ class LocalSupportService {
 		if ( is_wp_error( $event_context ) ) {
 			return $event_context;
 		}
-		$request = array(
+		$request  = array(
 			'event_id'       => $event_id,
 			'venue_term_id'  => $event_context['venue_term_id'],
 			'booking_id'     => $booking_id,
 			'organizer_type' => $organizer,
 			'organizer_id'   => $organizer_id,
 		);
-		$allowed = $this->authorization->authorize_organizer( $request, $actor_id );
+		$identity = $this->input_identity( $input );
+		$allowed  = $identity
+			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_OPEN, $request, $actor_id, $identity )
+			: $this->authorization->authorize_organizer( $request, $actor_id );
 		if ( true !== $allowed ) {
 			return $allowed;
 		}
@@ -87,7 +90,7 @@ class LocalSupportService {
 				return new \WP_Error( 'invalid_local_support_booking', __( 'The optional booking must belong to this exact event and venue.', 'extrachill-events' ), array( 'status' => 409 ) );
 			}
 		}
-		$hash     = $this->request_hash( 'open_request', $request, $actor_id );
+		$hash     = $this->request_hash( 'open_request', $request, $actor_id, $identity );
 		$existing = $this->repository->get_request_by_event( $event_id );
 		if ( is_wp_error( $existing ) ) {
 			return $existing;
@@ -97,8 +100,10 @@ class LocalSupportService {
 		}
 
 		$created = $this->transaction(
-			function ( object $scope ) use ( $request, $actor_id, $key, $hash ) {
-				$allowed = $this->authorization->authorize_organizer_locked( $request, $actor_id, $scope );
+			function ( object $scope ) use ( $request, $actor_id, $key, $hash, $identity ) {
+				$allowed = $identity
+					? $this->authorization->authorize_organizer_action_locked( LocalSupportAuthorization::ACTION_OPEN, $request, $actor_id, $identity, $scope )
+					: $this->authorization->authorize_organizer_locked( $request, $actor_id, $scope );
 				if ( true !== $allowed ) {
 					return $allowed;
 				}
@@ -106,7 +111,7 @@ class LocalSupportService {
 				if ( is_wp_error( $created ) ) {
 					return $created;
 				}
-				$activity = $this->record( $created['id'], null, 'request_opened', $actor_id, $key, $hash, 1, array( 'status' => 'open' ) );
+				$activity = $this->record( $created['id'], null, 'request_opened', $actor_id, $key, $hash, 1, array( 'status' => 'open' ), $identity ? $identity : $this->provenance_identity( $request ) );
 				return is_wp_error( $activity ) ? $activity : $created;
 			}
 		);
@@ -122,22 +127,26 @@ class LocalSupportService {
 	}
 
 	/** Read one request as its organizer. */
-	public function get_request( int $request_id, int $actor_id ) {
+	public function get_request( int $request_id, int $actor_id, ?array $identity = null ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : $this->not_found();
 		}
-		$allowed = $this->authorization->authorize_organizer( $request, $actor_id );
+		$allowed = $identity
+			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_VIEW, $request, $actor_id, $identity )
+			: $this->authorization->authorize_organizer( $request, $actor_id );
 		return true === $allowed ? $request : $allowed;
 	}
 
 	/** Apply one organizer-owned request transition. */
-	public function transition_request( int $request_id, string $to_status, int $expected_version, string $idempotency_key, int $actor_id ) {
+	public function transition_request( int $request_id, string $to_status, int $expected_version, string $idempotency_key, int $actor_id, ?array $identity = null ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : $this->not_found();
 		}
-		$allowed = $this->authorization->authorize_organizer( $request, $actor_id );
+		$allowed = $identity
+			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_TRANSITION_REQUEST, $request, $actor_id, $identity )
+			: $this->authorization->authorize_organizer( $request, $actor_id );
 		if ( true !== $allowed ) {
 			return $allowed;
 		}
@@ -155,7 +164,8 @@ class LocalSupportService {
 			array(
 				'from_status' => $request['status'],
 				'to_status'   => $to_status,
-			)
+			),
+			$identity
 		);
 	}
 
@@ -231,6 +241,10 @@ class LocalSupportService {
 					array(
 						'artist_term_id' => $artist_term_id,
 						'status'         => 'interested',
+					),
+					array(
+						'type' => 'artist',
+						'id'   => $artist_term_id,
 					)
 				);
 				return is_wp_error( $activity ) ? $activity : $interest;
@@ -252,7 +266,7 @@ class LocalSupportService {
 	}
 
 	/** Transition an interest as the artist or organizer, depending on target state. */
-	public function transition_interest( int $interest_id, string $to_status, int $expected_version, string $idempotency_key, int $actor_id ) {
+	public function transition_interest( int $interest_id, string $to_status, int $expected_version, string $idempotency_key, int $actor_id, ?array $identity = null ) {
 		$interest = $this->repository->get_interest( $interest_id );
 		if ( ! is_array( $interest ) ) {
 			return is_wp_error( $interest ) ? $interest : $this->not_found();
@@ -268,7 +282,9 @@ class LocalSupportService {
 		$artist_owned = 'withdrawn' === $to_status;
 		$allowed      = $artist_owned
 			? $this->authorization->authorize_artist( $interest['artist_term_id'], $actor_id )
-			: $this->authorization->authorize_organizer( $request, $actor_id );
+			: ( $identity
+				? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_SELECT_INTEREST, $request, $actor_id, $identity )
+				: $this->authorization->authorize_organizer( $request, $actor_id ) );
 		if ( true !== $allowed ) {
 			return $allowed;
 		}
@@ -302,7 +318,8 @@ class LocalSupportService {
 			'interest_status_changed',
 			$changes,
 			$payload,
-			$artist_owned
+			$artist_owned,
+			$artist_owned ? null : $identity
 		);
 	}
 
@@ -359,16 +376,28 @@ class LocalSupportService {
 			);
 			$kind    = 'contact_consent_revoked';
 		}
-		return $this->mutate_interest( $request, $interest, $expected_version, $idempotency_key, $actor_id, $kind, $changes, $payload, true );
+		return $this->mutate_interest(
+			$request,
+			$interest,
+			$expected_version,
+			$idempotency_key,
+			$actor_id,
+			$kind,
+			$changes,
+			$payload,
+			true
+		);
 	}
 
 	/** Return the private organizer shortlist; no uninterested candidates exist here. */
-	public function list_interests( int $request_id, int $actor_id, int $limit = 100 ) {
+	public function list_interests( int $request_id, int $actor_id, int $limit = 100, ?array $identity = null ) {
 		$request = $this->repository->get_request( $request_id );
 		if ( ! is_array( $request ) ) {
 			return is_wp_error( $request ) ? $request : $this->not_found();
 		}
-		$allowed = $this->authorization->authorize_organizer( $request, $actor_id );
+		$allowed = $identity
+			? $this->authorization->authorize_organizer_action( LocalSupportAuthorization::ACTION_REVIEW_INTERESTS, $request, $actor_id, $identity )
+			: $this->authorization->authorize_organizer( $request, $actor_id );
 		return true === $allowed ? $this->repository->list_interests( $request_id, $limit ) : $allowed;
 	}
 
@@ -383,9 +412,9 @@ class LocalSupportService {
 	}
 
 	/** Run one request mutation transaction. */
-	private function mutate_request( array $request, int $expected_version, string $key, int $actor_id, string $kind, array $changes, array $payload ) {
+	private function mutate_request( array $request, int $expected_version, string $key, int $actor_id, string $kind, array $changes, array $payload, ?array $identity = null ) {
 		$key  = $this->idempotency_key( $key );
-		$hash = $this->request_hash( $kind, $changes, $actor_id );
+		$hash = $this->request_hash( $kind, $changes, $actor_id, $identity );
 		if ( is_wp_error( $key ) ) {
 			return $key;
 		}
@@ -397,17 +426,19 @@ class LocalSupportService {
 			return $this->conflict( $request['version'] );
 		}
 		$updated = $this->transaction(
-			function ( object $scope ) use ( $request, $expected_version, $actor_id, $changes, $kind, $key, $hash, $payload ) {
+			function ( object $scope ) use ( $request, $expected_version, $actor_id, $changes, $kind, $key, $hash, $payload, $identity ) {
 				$locked = $this->repository->get_request( $request['id'], true );
 				if ( ! is_array( $locked ) || $locked['version'] !== $expected_version ) {
 					return is_array( $locked ) ? $this->conflict( $locked['version'] ) : $this->not_found();
 				}
-				$allowed = $this->authorization->authorize_organizer_locked( $locked, $actor_id, $scope );
+				$allowed = $identity
+					? $this->authorization->authorize_organizer_action_locked( LocalSupportAuthorization::ACTION_TRANSITION_REQUEST, $locked, $actor_id, $identity, $scope )
+					: $this->authorization->authorize_organizer_locked( $locked, $actor_id, $scope );
 				if ( true !== $allowed ) {
 					return $allowed;
 				}
 				$updated = $this->repository->update_request( $locked['id'], $expected_version, $changes );
-				$event   = is_wp_error( $updated ) ? $updated : $this->record( $locked['id'], null, $kind, $actor_id, $key, $hash, $updated['version'], $payload );
+				$event   = is_wp_error( $updated ) ? $updated : $this->record( $locked['id'], null, $kind, $actor_id, $key, $hash, $updated['version'], $payload, $identity ? $identity : $this->provenance_identity( $locked ) );
 				return is_wp_error( $event ) ? $event : $updated;
 			}
 		);
@@ -419,7 +450,7 @@ class LocalSupportService {
 	}
 
 	/** Run one interest mutation transaction. */
-	private function mutate_interest( array $request, array $interest, int $expected_version, string $key, int $actor_id, string $kind, array $changes, array $payload, bool $artist_owned ) {
+	private function mutate_interest( array $request, array $interest, int $expected_version, string $key, int $actor_id, string $kind, array $changes, array $payload, bool $artist_owned, ?array $identity = null ) {
 		$key  = $this->idempotency_key( $key );
 		$hash = $this->request_hash(
 			$kind,
@@ -427,7 +458,8 @@ class LocalSupportService {
 				'interest_id' => $interest['id'],
 				'changes'     => $changes,
 			),
-			$actor_id
+			$actor_id,
+			$identity
 		);
 		if ( is_wp_error( $key ) ) {
 			return $key;
@@ -443,7 +475,7 @@ class LocalSupportService {
 			return $this->conflict( $interest['version'] );
 		}
 		$updated = $this->transaction(
-			function ( object $scope ) use ( $request, $interest, $expected_version, $artist_owned, $actor_id, $changes, $kind, $key, $hash, $payload ) {
+			function ( object $scope ) use ( $request, $interest, $expected_version, $artist_owned, $actor_id, $changes, $kind, $key, $hash, $payload, $identity ) {
 				$locked_request = $this->repository->get_request( $request['id'], true );
 				if ( ! is_array( $locked_request ) ) {
 					return $this->not_found();
@@ -454,12 +486,18 @@ class LocalSupportService {
 				}
 				$allowed = $artist_owned
 					? $this->authorization->authorize_artist_locked( $locked['artist_term_id'], $actor_id, $scope )
-					: $this->authorization->authorize_organizer_locked( $locked_request, $actor_id, $scope );
+					: ( $identity
+						? $this->authorization->authorize_organizer_action_locked( LocalSupportAuthorization::ACTION_SELECT_INTEREST, $locked_request, $actor_id, $identity, $scope )
+						: $this->authorization->authorize_organizer_locked( $locked_request, $actor_id, $scope ) );
 				if ( true !== $allowed ) {
 					return $allowed;
 				}
-				$updated = $this->repository->update_interest( $locked['id'], $expected_version, $changes );
-				$event   = is_wp_error( $updated ) ? $updated : $this->record( $request['id'], $locked['id'], $kind, $actor_id, $key, $hash, $updated['version'], $payload );
+				$updated         = $this->repository->update_interest( $locked['id'], $expected_version, $changes );
+				$acting_identity = $identity ? $identity : ( $artist_owned ? array(
+					'type' => 'artist',
+					'id'   => (int) $locked['artist_term_id'],
+				) : $this->provenance_identity( $locked_request ) );
+				$event           = is_wp_error( $updated ) ? $updated : $this->record( $request['id'], $locked['id'], $kind, $actor_id, $key, $hash, $updated['version'], $payload, $acting_identity );
 				return is_wp_error( $event ) ? $event : $updated;
 			}
 		);
@@ -519,7 +557,7 @@ class LocalSupportService {
 	}
 
 	/** Append one mutation receipt. */
-	private function record( int $request_id, ?int $interest_id, string $kind, int $actor_id, string $key, string $hash, int $version, array $payload ) {
+	private function record( int $request_id, ?int $interest_id, string $kind, int $actor_id, string $key, string $hash, int $version, array $payload, ?array $identity = null ) {
 		return $this->repository->append_activity(
 			array(
 				'request_id'      => $request_id,
@@ -529,7 +567,13 @@ class LocalSupportService {
 				'idempotency_key' => $key,
 				'request_hash'    => $hash,
 				'result_version'  => $version,
-				'payload'         => array_merge( $payload, array( 'version' => $version ) ),
+				'payload'         => array_merge(
+					$payload,
+					array(
+						'version'         => $version,
+						'acting_identity' => $identity,
+					)
+				),
 			)
 		);
 	}
@@ -556,18 +600,43 @@ class LocalSupportService {
 	}
 
 	/** Fingerprint one actor-bound mutation. */
-	private function request_hash( string $operation, array $data, int $actor_id ): string {
+	private function request_hash( string $operation, array $data, int $actor_id, ?array $identity = null ): string {
 		$this->canonicalize( $data );
+		$payload = array(
+			'operation' => $operation,
+			'actor_id'  => $actor_id,
+			'data'      => $data,
+		);
+		if ( null !== $identity ) {
+			$payload['acting_identity'] = $identity;
+		}
 		return hash_hmac(
 			'sha256',
-			wp_json_encode(
-				array(
-					'operation' => $operation,
-					'actor_id'  => $actor_id,
-					'data'      => $data,
-				)
-			),
+			wp_json_encode( $payload ),
 			wp_salt( 'auth' )
+		);
+	}
+
+	/** Strict explicit identity input; absence selects the concrete legacy path. */
+	private function input_identity( array $input ): ?array {
+		if ( ! array_key_exists( 'acting_organizer_type', $input ) && ! array_key_exists( 'acting_organizer_id', $input ) ) {
+			return null;
+		}
+		$type = sanitize_key( (string) ( $input['acting_organizer_type'] ?? '' ) );
+		$id   = absint( $input['acting_organizer_id'] ?? 0 );
+		return '' !== $type && $id > 0 ? array(
+			'type' => $type,
+			'id'   => $id,
+		) : array(
+			'type' => '',
+			'id'   => 0,
+		);
+	}
+
+	private function provenance_identity( array $request ): array {
+		return array(
+			'type' => sanitize_key( (string) $request['organizer_type'] ),
+			'id'   => absint( $request['organizer_id'] ),
 		);
 	}
 

@@ -62,7 +62,7 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertFalse( LocalSupportService::can_transition_interest( 'declined', 'interested' ) );
 	}
 
-	/** Prove exact venue and bound canonical artist organizer authorization. */
+	/** Prove exact venue authority and reject attachment-only Artist organizing. */
 	public function test_real_authorization_requires_exact_event_bindings_and_current_authority(): void {
 		$GLOBALS['ec_artist_test'] = array_merge(
 			$GLOBALS['ec_artist_test'],
@@ -92,7 +92,9 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'local_support_forbidden', $authorization->authorize_organizer( $venue_request, 12 )->get_error_code() );
 
 		$artist_request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'artist', 'organizer_id' => 101 );
-		$this->assertTrue( $authorization->authorize_organizer( $artist_request, 30 ) );
+		$this->assertSame( 'local_support_forbidden', $authorization->authorize_organizer( $artist_request, 30 )->get_error_code(), 'Event taxonomy attachment is not Artist organizer provenance.' );
+		$this->assertTrue( $authorization->artist_attached_to_event( 900, 101 ) );
+		$this->assertTrue( $authorization->authorize_artist( 101, 30 ), 'Artist participation authority remains independent from event ownership.' );
 		$this->assertSame( 'local_support_forbidden', $authorization->authorize_organizer( $artist_request, 31 )->get_error_code() );
 		$GLOBALS['ec_artist_test']['user_caps'][1]['manage_options'] = true;
 		$this->assertSame( 'local_support_forbidden', $authorization->authorize_organizer( $artist_request, 1 )->get_error_code(), 'Administrative capability must not manufacture an artist organizer identity.' );
@@ -122,6 +124,16 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( $interest['id'], $retry['id'] );
 		$this->assertCount( 1, $this->repository->interests );
 		$this->assertNull( $interest['contact'] );
+	}
+
+	/** Legacy calls retain their shipped hash while explicit identities are bound. */
+	public function test_explicit_identity_hashing_preserves_legacy_receipts(): void {
+		$method = new ReflectionMethod( LocalSupportService::class, 'request_hash' );
+		$method->setAccessible( true );
+		$data = array( 'status' => 'paused' );
+		$legacy = hash_hmac( 'sha256', wp_json_encode( array( 'operation' => 'request_status_changed', 'actor_id' => 12, 'data' => $data ) ), wp_salt( 'auth' ) );
+		$this->assertSame( $legacy, $method->invoke( $this->service, 'request_status_changed', $data, 12 ) );
+		$this->assertNotSame( $legacy, $method->invoke( $this->service, 'request_status_changed', $data, 12, array( 'type' => 'venue', 'id' => 55 ) ) );
 	}
 
 	public function test_optimistic_conflicts_and_authority_fail_closed(): void {
@@ -247,22 +259,23 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$this->assertSame( 'invalid_local_support_event_venue', $authorization->authorize_organizer_locked( $venue_request, 12, $scope )->get_error_code() );
 		$wpdb->event_venue_rows = array( array( 'term_id' => 55, 'term_taxonomy_id' => 555 ) );
 		$wpdb->mapping_rows[0]['meta_value'] = '999';
-		$this->assertSame( 'local_support_artist_mapping_changed', $authorization->authorize_organizer_locked( $artist_request, 30, $scope )->get_error_code() );
+		$this->assertSame( 'local_support_artist_mapping_changed', $authorization->artist_attached_to_event_locked( 900, 101, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
 		$scope = $this->open_authorization_scope( $authorization );
 		$wpdb->mapping_rows[0]['meta_value'] = '1001';
 		$GLOBALS['ec_artist_test']['artist_mappings'][102] = 1001;
-		$this->assertSame( 'local_support_artist_mapping_claims_invalid', $authorization->authorize_organizer_locked( $artist_request, 30, $scope )->get_error_code() );
+		$this->assertSame( 'local_support_artist_mapping_claims_invalid', $authorization->artist_attached_to_event_locked( 900, 101, $scope )->get_error_code() );
 		$authorization->close_transaction_scope( $scope );
 		$scope = $this->open_authorization_scope( $authorization );
 		unset( $GLOBALS['ec_artist_test']['artist_mappings'][102] );
 		$wpdb->event_artist_rows = array();
-		$this->assertSame( 'local_support_forbidden', $authorization->authorize_organizer_locked( $artist_request, 30, $scope )->get_error_code() );
+		$this->assertFalse( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
 		$authorization->close_transaction_scope( $scope );
 		$scope = $this->open_authorization_scope( $authorization );
 		$wpdb->event_artist_rows = array( array( 'term_id' => 1001, 'term_taxonomy_id' => 10001 ) );
 		$wpdb->profile_binding_rows[0]['meta_value'] = '999';
-		$this->assertSame( 'invalid_local_support_artist', $authorization->authorize_organizer_locked( $artist_request, 30, $scope )->get_error_code() );
+		$this->assertTrue( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
+		$this->assertSame( 'invalid_local_support_artist', $authorization->authorize_artist_locked( 101, 30, $scope )->get_error_code() );
 		$this->assertSame( array( 'membership-advisory', 'profile-binding', 'term-binding' ), array_slice( $wpdb->lock_sequence, -3 ) );
 		$authorization->close_transaction_scope( $scope );
 		$this->assertSame( array( 'membership-release', 'mapping-release' ), array_slice( $wpdb->lock_sequence, -2 ) );
@@ -277,7 +290,8 @@ final class LocalSupportDomainTest extends BookingTestCase {
 		$authorization = new LocalSupportAuthorization();
 		$scope = $this->open_authorization_scope( $authorization );
 		$request = array( 'event_id' => 900, 'venue_term_id' => 55, 'organizer_type' => 'artist', 'organizer_id' => 101 );
-		$this->assertTrue( $authorization->authorize_organizer_locked( $request, 30, $scope ) );
+		$this->assertTrue( $authorization->artist_attached_to_event_locked( 900, 101, $scope ) );
+		$this->assertTrue( $authorization->authorize_artist_locked( 101, 30, $scope ) );
 
 		$wpdb->mapping_release_result = 0;
 		$this->assertSame( 'events_artist_mapping_release_failed', $authorization->close_transaction_scope( $scope )->get_error_code() );

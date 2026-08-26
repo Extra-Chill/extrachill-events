@@ -22,6 +22,10 @@
 			const [ type, id ] = organizer.value.split( ':' );
 			root.querySelector( '[data-organizer-type]' ).value = type;
 			root.querySelector( '[data-organizer-id]' ).value = id;
+			root.querySelector( '[data-acting-organizer-type]' ).value = type;
+			root.querySelector( '[data-acting-organizer-id]' ).value = id;
+			root.querySelector( '[data-organizer-booking-id]' ).value =
+				organizer.selectedOptions[ 0 ].dataset.bookingId || '0';
 		} );
 	}
 

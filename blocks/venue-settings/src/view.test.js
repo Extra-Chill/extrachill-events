@@ -560,6 +560,34 @@ describe( 'venue settings authorization-facing states', () => {
 		await act( async () => root.unmount() );
 	} );
 
+	it( 'renders promoter-scoped Local Support controls with explicit identity links', async () => {
+		const appContext = promoterContext();
+		appContext.workspace.granted_venues = [
+			{
+				id: 44,
+				name: 'Venue 44',
+				action_label: 'Organize local support',
+			},
+		];
+		appContext.workspace.local_support_events = [
+			{
+				id: 901,
+				title: 'Touring Band at Venue 44',
+				status: 'not_seeking',
+				workspace_url:
+					'https://events.example/local-support/?event_id=901&identity=promoter%3A100',
+			},
+		];
+		const { container, root } = await renderApp( appContext );
+		const link = [ ...container.querySelectorAll( 'a' ) ].find(
+			( item ) => item.textContent === 'Find local support'
+		);
+		expect( container.textContent ).toContain( 'Touring Band at Venue 44' );
+		expect( link.href ).toContain( 'identity=promoter%3A100' );
+		expect( container.textContent ).not.toContain( 'Booking Rules' );
+		await act( async () => root.unmount() );
+	} );
+
 	it( 'does not initialize promoter Link Page abilities in venue mode', async () => {
 		const { root } = await renderApp( context() );
 		expect(

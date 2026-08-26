@@ -70,6 +70,9 @@ final class LocalSupportNotificationAdapterStub {
 	public function organizer_recipient_ids(): array {
 		return $this->organizers;
 	}
+	public function organizer_identity(): array {
+		return array( 'type' => 'venue', 'id' => 55 );
+	}
 	public function workspace_url(): string {
 		return $this->workspace;
 	}
@@ -186,6 +189,11 @@ final class LocalSupportNotificationAuthorizationStub extends LocalSupportAuthor
 	public function authorize_organizer( array $request, int $user_id ) {
 		unset( $request );
 		return 77 === $user_id ? true : new WP_Error( 'local_support_forbidden' );
+	}
+
+	public function organizer_recipient_ids( array $request ) {
+		unset( $request );
+		return array( 77 );
 	}
 }
 
@@ -329,6 +337,7 @@ final class LocalSupportNotificationTest extends TestCase {
 		);
 
 		$this->assertSame( array( 77 ), array_column( $queued, 'recipient_id' ) );
+		$this->assertSame( array( 'type' => 'venue', 'id' => 55 ), $queued[0]['organizer_identity'] );
 		$this->adapter->organizers = array();
 		$result                    = $service->reconcile_intent( $queued[0] );
 		$this->assertSame( 'suppressed', $result['status'] );

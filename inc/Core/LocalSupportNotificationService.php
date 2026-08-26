@@ -187,6 +187,10 @@ class LocalSupportNotificationService {
 		}
 		$queued = array();
 		foreach ( $recipients as $recipient_id ) {
+			$organizer_identity = $this->call_adapter( 'organizer_identity', array( (int) $request['id'], $recipient_id ) );
+			if ( is_wp_error( $organizer_identity ) ) {
+				return $organizer_identity;
+			}
 			$key    = $this->intent_key( 'interest-changed', array( $activity['id'], $recipient_id ) );
 			$intent = $this->append_intent(
 				array(
@@ -197,6 +201,7 @@ class LocalSupportNotificationService {
 					'event_id'           => (int) $request['event_id'],
 					'artist_term_id'     => $artist_term_id,
 					'recipient_id'       => $recipient_id,
+					'organizer_identity' => $organizer_identity,
 					'payload'            => array(
 						'type'    => 'local_support_interest_changed',
 						/* translators: %s: public event title. */
@@ -295,6 +300,9 @@ class LocalSupportNotificationService {
 			'producer'        => self::PRODUCER,
 			'idempotency_key' => (string) $intent['idempotency_key'],
 		);
+		if ( is_array( $intent['organizer_identity'] ?? null ) ) {
+			$payload['managed_identity'] = $intent['organizer_identity'];
+		}
 		try {
 			$receipt = $this->deliver( array( (int) $intent['recipient_id'] ), $payload );
 		} catch ( \Throwable $throwable ) {

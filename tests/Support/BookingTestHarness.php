@@ -2364,6 +2364,7 @@ require_once dirname( __DIR__, 2 ) . '/inc/Core/VenueAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/ArtistMappingLock.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/BookingRepository.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportRepository.php';
+require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportOrganizerProviders.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportAuthorization.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportService.php';
 require_once dirname( __DIR__, 2 ) . '/inc/Core/LocalSupportWorkspace.php';

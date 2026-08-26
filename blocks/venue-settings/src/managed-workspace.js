@@ -283,7 +283,12 @@ export function ManagedIdentitySelector( {
 }
 
 export function PromoterWorkspacePanel( { workspace, onLinkPageDirtyChange } ) {
-	const { selection, promoter, granted_venues: venues } = workspace;
+	const {
+		selection,
+		promoter,
+		granted_venues: venues,
+		local_support_events: localSupportEvents = [],
+	} = workspace;
 	if ( selection.state === 'stale' ) {
 		return (
 			<InlineStatus tone="warning" role="status">
@@ -350,6 +355,46 @@ export function PromoterWorkspacePanel( { workspace, onLinkPageDirtyChange } ) {
 										{ venue.action_label }
 									</Badge>
 								</p>
+							</Panel>
+						) ) }
+					</div>
+				) }
+			</section>
+
+			<section aria-labelledby="promoter-local-support-heading">
+				<h2 id="promoter-local-support-heading">Local Support</h2>
+				{ localSupportEvents.length === 0 ? (
+					<InlineStatus tone="info" role="status">
+						No eligible upcoming events are available for this
+						promoter.
+					</InlineStatus>
+				) : (
+					<div className="ec-promoter-workspace__venues">
+						{ localSupportEvents.map( ( event ) => (
+							<Panel compact depth={ 2 } key={ event.id }>
+								<h3>{ event.title }</h3>
+								<p>
+									<Badge
+										tone={
+											event.status === 'open'
+												? 'success'
+												: 'info'
+										}
+										variant="solid"
+									>
+										{ event.status === 'not_seeking'
+											? 'Not seeking'
+											: event.status }
+									</Badge>
+								</p>
+								<a
+									className="button-2"
+									href={ event.workspace_url }
+								>
+									{ event.status === 'not_seeking'
+										? 'Find local support'
+										: 'Manage request' }
+								</a>
 							</Panel>
 						) ) }
 					</div>

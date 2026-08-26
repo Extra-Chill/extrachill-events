@@ -260,6 +260,20 @@ class BookingRepository {
 		return is_array( $row ) ? $this->hydrate( $row ) : null;
 	}
 
+	/** Read and lock the sole booking linked to one canonical event. */
+	public function get_by_event_for_update( int $event_id ) {
+		global $wpdb;
+		if ( $event_id < 1 ) {
+			return null;
+		}
+		$table = BookingSchema::bookings_table();
+		$row   = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE event_id = %d AND status <> 'admission_pending' LIMIT 1 FOR UPDATE", $event_id ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Exact booking provenance lock inside a caller transaction.
+		if ( '' !== (string) $wpdb->last_error ) {
+			return new \WP_Error( 'booking_read_failed', __( 'The booking could not be locked.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) );
+		}
+		return is_array( $row ) ? $this->hydrate( $row ) : null;
+	}
+
 	/** Read and lock one booking inside an existing transaction. */
 	public function get_for_update( int $id, bool $include_reservations = false ) {
 		global $wpdb;

@@ -66,6 +66,9 @@ class LocalSupportAuthorization {
 
 	/** Claim this authorization instance for one service-owned transaction token. */
 	public function claim_transaction_owner( object $owner ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		if ( null === $this->transaction_owner ) {
 			$this->transaction_owner = $owner;
 			return true;
@@ -77,6 +80,9 @@ class LocalSupportAuthorization {
 
 	/** Register a lock-current scope only for the owning service's opaque token. */
 	public function open_transaction_scope( object $owner ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		if ( null === $this->transaction_owner || $this->transaction_owner !== $owner ) {
 			return new \WP_Error( 'local_support_transaction_scope_required', __( 'Lock-current local support authorization requires its service transaction.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
@@ -87,6 +93,9 @@ class LocalSupportAuthorization {
 
 	/** Resolve a valid canonical event and its one exact venue. */
 	public function event_context( int $event_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$post = get_post( $event_id );
 		if ( ! $post || 'data_machine_events' !== $post->post_type || 'trash' === $post->post_status ) {
 			return new \WP_Error( 'invalid_local_support_event', __( 'A valid canonical event is required.', 'extrachill-events' ), array( 'status' => 400 ) );
@@ -114,11 +123,17 @@ class LocalSupportAuthorization {
 
 	/** Authorize and validate the organizer identity against the exact event. */
 	public function authorize_organizer( array $request, int $user_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->authorize_organizer_action( self::ACTION_VIEW, $request, $user_id, $this->provenance_identity( $request ) );
 	}
 
 	/** Authorize an exact selected managed identity for one organizer action. */
 	public function authorize_organizer_action( string $action, array $request, int $user_id, array $identity ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$context = $this->event_context( (int) $request['event_id'] );
 		if ( is_wp_error( $context ) ) {
 			return $context;
@@ -131,11 +146,17 @@ class LocalSupportAuthorization {
 
 	/** Authorize an organizer from authority locked in the service-owned transaction. */
 	public function authorize_organizer_locked( array $request, int $user_id, object $scope ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->authorize_organizer_action_locked( self::ACTION_TRANSITION_REQUEST, $request, $user_id, $this->provenance_identity( $request ), $scope );
 	}
 
 	/** Lock-current authorization for one exact selected managed identity and action. */
 	public function authorize_organizer_action_locked( string $action, array $request, int $user_id, array $identity, object $scope ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$valid_scope = $this->validate_scope( $scope );
 		if ( true !== $valid_scope ) {
 			return $valid_scope;
@@ -144,19 +165,25 @@ class LocalSupportAuthorization {
 	}
 
 	public function prepare_organizer_transaction( string $action, array $request, int $user_id, array $identity ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->organizers->prepare( $action, $request, $identity, $user_id, $this );
 	}
 
 	public function organizer_choice( int $event_id, int $user_id, array $identity ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->organizers->choice( $event_id, $user_id, $identity, $this );
 	}
 
 	/** Acquire Artist writer advisory locks in canonical order before START TRANSACTION. */
 	public function prepare_artist_transaction( int $artist_term_id, int $user_id ) {
 		global $wpdb;
-		if ( $this->authorization_quarantined ) {
-			return new \WP_Error( 'local_support_artist_authorization_quarantined', __( 'Artist authorization is unavailable after uncertain lock cleanup.', 'extrachill-events' ), array( 'status' => 503 ) );
-		}
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		if ( preg_match( '/sqlite|pgsql|postgres/', strtolower( (string) get_class( $wpdb ) ) ) ) {
 			return new \WP_Error( 'local_support_artist_advisory_locks_unsupported', __( 'Artist mutation authorization requires MySQL advisory locks.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
@@ -246,17 +273,26 @@ class LocalSupportAuthorization {
 
 	/** Lock canonical event venue context within one provider-owned sequence. */
 	public function event_context_locked_for_provider( int $event_id, object $scope ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$valid = $this->validate_scope( $scope );
 		return true === $valid ? $this->locked_event_context( $event_id ) : $valid;
 	}
 
 	/** Resolve every currently authorized organizer identity for an event. */
 	public function organizer_choices( int $event_id, int $user_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->organizers->choices( $event_id, $user_id, $this );
 	}
 
 	/** Resolve exact current notification participants across all providers. */
 	public function organizer_recipient_ids( array $request ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->organizers->recipient_ids( $request, $this );
 	}
 
@@ -267,12 +303,18 @@ class LocalSupportAuthorization {
 
 	/** Lock exact venue authority for the Events-local venue provider. */
 	public function authorize_venue_locked( int $user_id, int $venue_term_id, ?object $scope ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$valid = $scope ? $this->validate_scope( $scope ) : $this->denied();
 		return true === $valid ? $this->authorize_locked_venue( $user_id, $venue_term_id ) : $valid;
 	}
 
 	/** Provider-safe access to the canonical reciprocal Artist profile binding. */
 	public function artist_profile_id_for_provider( int $artist_term_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->artist_profile_id( $artist_term_id );
 	}
 
@@ -288,12 +330,18 @@ class LocalSupportAuthorization {
 
 	/** Lock and read one exact event artist attachment in a service-owned scope. */
 	public function artist_attached_to_event_locked( int $event_id, int $artist_term_id, object $scope ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$valid_scope = $this->validate_scope( $scope );
 		return true === $valid_scope ? $this->locked_artist_attachment( $event_id, $artist_term_id ) : $valid_scope;
 	}
 
 	/** Authorize one canonical artist manager through its bound profile. */
 	public function authorize_artist( int $artist_term_id, int $user_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$profile_id = $this->artist_profile_id( $artist_term_id );
 		if ( is_wp_error( $profile_id ) ) {
 			return $profile_id;
@@ -307,6 +355,9 @@ class LocalSupportAuthorization {
 	/** Lock and authorize the reciprocal persisted artist relationship. */
 	public function authorize_artist_locked( int $artist_term_id, int $user_id, object $scope ) {
 		global $wpdb;
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$valid_scope = $this->validate_scope( $scope );
 		if ( true !== $valid_scope ) {
 			return $valid_scope;
@@ -442,6 +493,9 @@ class LocalSupportAuthorization {
 
 	/** Determine whether a canonical artist is explicitly attached to the event. */
 	public function artist_attached_to_event( int $event_id, int $artist_term_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		if ( ! function_exists( 'extrachill_events_resolve_artist_term' ) ) {
 			return new \WP_Error( 'local_support_artist_mapping_unavailable', __( 'Canonical artist mapping is unavailable.', 'extrachill-events' ), array( 'status' => 503 ) );
 		}
@@ -458,11 +512,17 @@ class LocalSupportAuthorization {
 
 	/** Read attached Events artist IDs without hiding database failures. */
 	public function event_artist_term_ids( int $event_id ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		return $this->read_object_term_ids( $event_id, 'artist', 'local_support_event_artists_unavailable' );
 	}
 
 	/** Read one organizer term without using a potentially stale object cache. */
 	public function organizer_term( int $term_id, string $taxonomy ) {
+		$usable = $this->assert_usable();
+		if ( true !== $usable ) {
+			return $usable; }
 		$error_code = 'venue' === $taxonomy ? 'local_support_event_venues_unavailable' : 'local_support_event_artists_unavailable';
 		return $this->read_term( $term_id, $taxonomy, $error_code );
 	}
@@ -676,5 +736,19 @@ class LocalSupportAuthorization {
 			$registry->register( $provider );
 		}
 		return $registry;
+	}
+
+	/** Fail every reused authorization path after connection quarantine. */
+	public function assert_usable() {
+		return $this->authorization_quarantined
+			? new \WP_Error(
+				'local_support_artist_authorization_quarantined',
+				__( 'Local Support authorization is unavailable after uncertain lock cleanup.', 'extrachill-events' ),
+				array(
+					'status'                 => 503,
+					'connection_quarantined' => true,
+				)
+			)
+			: true;
 	}
 }

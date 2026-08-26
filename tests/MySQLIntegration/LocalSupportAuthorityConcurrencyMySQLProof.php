@@ -63,12 +63,14 @@ final class LocalSupportArtistMySQLAuthorization extends LocalSupportAuthorizati
 		$this->profile_id = $profile_id; }
 	public function enable_probe(): void { $this->probe = true; }
 	protected function after_artist_binding_lock_acquired( object $scope, int $artist_term_id, int $user_id ) {
+		global $wpdb;
 		unset( $scope, $artist_term_id );
 		if ( ! $this->probe ) { return true; }
 		$membership = sprintf( 'ec_artist_membership_%d_%d', $user_id, $this->profile_id );
+		$this->binding_waited = null !== $wpdb->get_var( "SELECT IS_USED_LOCK('ec_artist_binding_v1')" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Confirms binding ownership before contender proceeds.
 		$this->contender->query( "SELECT GET_LOCK('{$membership}', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Deterministic test lock identity.
 		$result = $this->contender->query( "SELECT GET_LOCK('ec_artist_binding_v1', 1)" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Proves binding is already held.
-		$this->binding_waited = '1' !== (string) $result->fetch_row()[0];
+		$result->fetch_row();
 		$this->contender->query( "SELECT RELEASE_LOCK('{$membership}')" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Allows production membership acquisition to continue.
 		$this->probe = false;
 		return true;

@@ -60,6 +60,18 @@ final class LocalSupportArtistMySQLAuthorization extends LocalSupportAuthorizati
 	protected function artist_profile_id( int $artist_term_id ) {
 		unset( $artist_term_id );
 		return $this->profile_id; }
+	public function artist_attached_to_event( int $event_id, int $artist_term_id ) {
+		unset( $event_id, $artist_term_id );
+		return true; }
+	public function artist_attached_to_event_locked( int $event_id, int $artist_term_id, object $scope ) {
+		unset( $event_id, $artist_term_id, $scope );
+		return true; }
+	public function authorize_artist( int $artist_term_id, int $user_id ) {
+		unset( $artist_term_id, $user_id );
+		return true; }
+	public function authorize_artist_locked( int $artist_term_id, int $user_id, object $scope ) {
+		unset( $artist_term_id, $user_id, $scope );
+		return true; }
 }
 
 /** Prove both deterministic orders through an actual LocalSupportService mutation. */

@@ -147,7 +147,7 @@ class VenueBookingConfig {
 		$fields      = $this->normalize_intake_fields( $stored['intake']['fields'] ?? null );
 		$consent     = $this->normalize_consent( $stored['consent'] ?? null );
 		$spaces      = $this->normalize_spaces( $stored['spaces'] ?? null );
-		$attachments = in_array( $stored['version'] ?? null, array( self::RETIRED_PRESENTATION_VERSION, self::VERSION ), true )
+		$attachments = in_array( $stored['version'], array( self::RETIRED_PRESENTATION_VERSION, self::VERSION ), true )
 			? $this->normalize_attachment_policy( $stored['attachment_policy'] ?? null )
 			: $this->default_attachment_policy();
 		foreach ( array( $fields, $consent, $spaces, $attachments ) as $section ) {

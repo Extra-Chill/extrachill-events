@@ -9,8 +9,6 @@ import {
 	buildAvailabilityPayload,
 	buildPayload,
 	clearDraft,
-	DRAFT_SCOPE_DEVICE,
-	DRAFT_SCOPE_SESSION,
 	DRAFT_TTL,
 	DRAFT_VERSION,
 	draftStorageKey,
@@ -70,11 +68,6 @@ const storage = ( failures = {} ) => {
 	};
 };
 
-const stores = ( session = storage(), device = storage() ) => ( {
-	session,
-	device,
-} );
-
 describe( 'booking inquiry transport helpers', () => {
 	test( 'maps a requested date to its complete local day', () => {
 		expect( bookingDateInterval( values.requestedDate ) ).toEqual( {
@@ -125,16 +118,11 @@ describe( 'booking inquiry transport helpers', () => {
 		} );
 	} );
 
-	test( 'defaults to session-only recovery with a strict persisted allowlist', () => {
-		const browserStores = stores();
+	test( 'persists a strict allowlist to this tab only', () => {
+		const tab = storage();
 		const now = Date.now();
-		expect(
-			saveDraft( config, values, DRAFT_SCOPE_SESSION, browserStores, now )
-		).toBe( true );
-		const raw = JSON.parse(
-			browserStores.session.getItem( draftStorageKey( config ) )
-		);
-		expect( raw.scope ).toBe( DRAFT_SCOPE_SESSION );
+		expect( saveDraft( config, values, tab, now ) ).toBe( true );
+		const raw = JSON.parse( tab.getItem( draftStorageKey( config ) ) );
 		expect( raw.values ).toEqual( {
 			artistName: 'Test Band',
 			contactName: 'Alex',
@@ -148,125 +136,127 @@ describe( 'booking inquiry transport helpers', () => {
 		expect( JSON.stringify( raw ) ).not.toMatch(
 			/consent|turnstile|idempotency|accessToken|files|receipt/
 		);
-		expect(
-			browserStores.device.getItem( draftStorageKey( config ) )
-		).toBeNull();
+		expect( raw ).not.toHaveProperty( 'scope' );
 
 		const restored = loadDraft(
 			config,
 			{ ...values, consent: false },
-			browserStores,
+			tab,
 			now + 1000
 		);
 		expect( restored.values.artistName ).toBe( 'Test Band' );
 		expect( restored.values.consent ).toBe( false );
-		expect( restored.scope ).toBe( DRAFT_SCOPE_SESSION );
 		expect( restored.outcome ).toBe( 'restored' );
+		expect( restored ).not.toHaveProperty( 'scope' );
 	} );
 
-	test( 'moves an opted-in draft to device storage and expires it', () => {
-		const browserStores = stores();
-		const now = Date.now();
-		saveDraft( config, values, DRAFT_SCOPE_SESSION, browserStores, now );
-		saveDraft( config, values, DRAFT_SCOPE_DEVICE, browserStores, now );
-		expect(
-			browserStores.session.getItem( draftStorageKey( config ) )
-		).toBeNull();
-		expect(
-			browserStores.device.getItem( draftStorageKey( config ) )
-		).not.toBeNull();
-
-		const expired = loadDraft(
-			config,
-			values,
-			browserStores,
-			now + DRAFT_TTL + 1
+	test( 'never writes an inquiry draft to persistent device storage', () => {
+		const tab = storage();
+		const device = storage();
+		const originalLocal = Object.getOwnPropertyDescriptor(
+			window,
+			'localStorage'
 		);
+		Object.defineProperty( window, 'localStorage', {
+			configurable: true,
+			get: () => device,
+		} );
+
+		try {
+			saveDraft( config, values, tab );
+			expect( device.length ).toBe( 0 );
+		} finally {
+			if ( originalLocal ) {
+				Object.defineProperty( window, 'localStorage', originalLocal );
+			} else {
+				delete window.localStorage;
+			}
+		}
+	} );
+
+	test( 'expires a draft once it outlives its time to live', () => {
+		const tab = storage();
+		const now = Date.now();
+		saveDraft( config, values, tab, now );
+		expect( tab.getItem( draftStorageKey( config ) ) ).not.toBeNull();
+
+		const expired = loadDraft( config, values, tab, now + DRAFT_TTL + 1 );
 		expect( expired.values ).toEqual( values );
 		expect( expired.outcome ).toBe( 'expired' );
-		expect(
-			browserStores.device.getItem( draftStorageKey( config ) )
-		).toBeNull();
+		expect( tab.getItem( draftStorageKey( config ) ) ).toBeNull();
 	} );
 
 	test( 'clears incompatible schemas and stale configuration revisions', () => {
-		const browserStores = stores();
+		const tab = storage();
 		const oldConfig = { ...config, revision: 6 };
-		saveDraft( oldConfig, values, DRAFT_SCOPE_SESSION, browserStores );
-		browserStores.session.setItem(
+		saveDraft( oldConfig, values, tab );
+		tab.setItem(
 			draftStorageKey( config ),
 			JSON.stringify( { version: 1, values: {} } )
 		);
-		const restored = loadDraft( config, values, browserStores );
+		const restored = loadDraft( config, values, tab );
 		expect( restored.outcome ).toBe( 'incompatible' );
-		expect(
-			browserStores.session.getItem( draftStorageKey( oldConfig ) )
-		).toBeNull();
-		expect(
-			browserStores.session.getItem( draftStorageKey( config ) )
-		).toBeNull();
+		expect( tab.getItem( draftStorageKey( oldConfig ) ) ).toBeNull();
+		expect( tab.getItem( draftStorageKey( config ) ) ).toBeNull();
 
-		browserStores.session.setItem(
+		tab.setItem(
 			draftStorageKey( config ),
 			JSON.stringify( {
 				version: DRAFT_VERSION,
 				venueId: config.venue.id,
 				revision: config.revision,
-				scope: DRAFT_SCOPE_SESSION,
 				savedAt: 'invalid',
 				values: { artistName: 'Must not restore' },
 			} )
 		);
-		expect( loadDraft( config, values, browserStores ).outcome ).toBe(
+		expect( loadDraft( config, values, tab ).outcome ).toBe(
 			'incompatible'
 		);
-		expect(
-			browserStores.session.getItem( draftStorageKey( config ) )
-		).toBeNull();
+		expect( tab.getItem( draftStorageKey( config ) ) ).toBeNull();
 	} );
 
-	test( 'uses available session storage when device storage is blocked', () => {
-		const browserStores = stores( storage(), null );
-		expect( loadDraft( config, values, browserStores ).outcome ).toBe(
-			'none'
+	test( 'rejects a draft written by the two-scope schema', () => {
+		const tab = storage();
+		tab.setItem(
+			draftStorageKey( config ),
+			JSON.stringify( {
+				version: 2,
+				venueId: config.venue.id,
+				revision: config.revision,
+				scope: 'device',
+				savedAt: Date.now(),
+				values: { artistName: 'Must not restore' },
+			} )
 		);
-		expect(
-			saveDraft( config, values, DRAFT_SCOPE_SESSION, browserStores )
-		).toBe( true );
+
+		expect( loadDraft( config, values, tab ).outcome ).toBe(
+			'incompatible'
+		);
+		expect( tab.getItem( draftStorageKey( config ) ) ).toBeNull();
 	} );
 
-	test( 'clears both storage scopes after success or an explicit clear', () => {
-		const browserStores = stores();
-		browserStores.session.setItem( draftStorageKey( config ), 'session' );
-		browserStores.device.setItem( draftStorageKey( config ), 'device' );
-		expect( clearDraft( config, browserStores ) ).toBe( true );
-		expect(
-			browserStores.session.getItem( draftStorageKey( config ) )
-		).toBeNull();
-		expect(
-			browserStores.device.getItem( draftStorageKey( config ) )
-		).toBeNull();
+	test( 'clears the draft after success or an explicit clear', () => {
+		const tab = storage();
+		tab.setItem( draftStorageKey( config ), 'draft' );
+		expect( clearDraft( config, tab ) ).toBe( true );
+		expect( tab.getItem( draftStorageKey( config ) ) ).toBeNull();
 	} );
 
 	test( 'reports denied storage without interrupting form behavior', () => {
-		const deniedRead = stores( storage( { read: true } ), null );
-		expect( loadDraft( config, values, deniedRead ).outcome ).toBe(
+		expect(
+			loadDraft( config, values, storage( { read: true } ) ).outcome
+		).toBe( 'read-failed' );
+		expect( loadDraft( config, values, null ).outcome ).toBe(
 			'read-failed'
 		);
-		expect(
-			saveDraft(
-				config,
-				values,
-				DRAFT_SCOPE_SESSION,
-				stores( storage( { write: true } ) )
-			)
-		).toBe( false );
-		expect(
-			clearDraft(
-				config,
-				stores( storage( { remove: true } ), storage() )
-			)
-		).toBe( false );
+		expect( saveDraft( config, values, storage( { write: true } ) ) ).toBe(
+			false
+		);
+		expect( saveDraft( config, values, null ) ).toBe( false );
+		expect( clearDraft( config, storage( { remove: true } ) ) ).toBe(
+			false
+		);
+		expect( clearDraft( config, null ) ).toBe( false );
 	} );
 
 	test( 'distinguishes safe retry, stale config, and reconciliation states', () => {

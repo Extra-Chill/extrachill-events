@@ -388,6 +388,9 @@ async function renderApp( appContext ) {
  *
  * The console opens on the calendar, so assertions about the booking inbox
  * list must select List first.
+ *
+ * @param {Object} appContext Venue settings app context.
+ * @return {Promise<Object>} Rendered container and root.
  */
 async function renderAppOnBookingList( appContext ) {
 	const rendered = await renderApp( appContext );

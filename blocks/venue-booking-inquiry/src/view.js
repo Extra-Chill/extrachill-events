@@ -24,7 +24,6 @@ import {
 	buildAvailabilityPayload,
 	buildPayload,
 	clearDraft,
-	DRAFT_SCOPE_SESSION,
 	errorState,
 	loadDraft,
 	newIdempotencyKey,
@@ -133,15 +132,10 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 	const restored = useRef();
 	if ( ! restored.current ) {
 		restored.current = preview
-			? {
-					values: initialValues( config ),
-					scope: DRAFT_SCOPE_SESSION,
-					outcome: 'none',
-			  }
+			? { values: initialValues( config ), outcome: 'none' }
 			: loadDraft( config, initialValues( config ) );
 	}
 	const [ values, setValues ] = useState( restored.current.values );
-	const [ draftScope, setDraftScope ] = useState( restored.current.scope );
 	const [ draftStatus, setDraftStatus ] = useState( '' );
 	const [ status, setStatus ] = useState( null );
 	const [ submitting, setSubmitting ] = useState( false );
@@ -185,9 +179,9 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 				skipDraftSave.current = false;
 				return;
 			}
-			saveDraft( config, values, draftScope );
+			saveDraft( config, values );
 		}
-	}, [ config, draftScope, values, preview, receipt ] );
+	}, [ config, values, preview, receipt ] );
 	useEffect( () => {
 		if ( restored.current.outcome === 'restored' ) {
 			setDraftStatus( 'Your saved answers were restored.' );
@@ -341,11 +335,10 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 		skipDraftSave.current = true;
 		key.current = newIdempotencyKey();
 		setValues( initialValues( config ) );
-		setDraftScope( DRAFT_SCOPE_SESSION );
 		setDraftStatus(
 			receiptCleared && draftsCleared
-				? 'Receipt and saved form details cleared.'
-				: "The form was reset, but browser storage may remain. Close this tab and clear this device's site data before leaving a shared device."
+				? 'Receipt and saved answers cleared.'
+				: 'The form was reset, but this browser tab may still hold saved answers. Close the tab to discard them.'
 		);
 		setIntervalOpen( false );
 		setStatus( null );
@@ -355,7 +348,6 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 		clearDraft( config );
 		key.current = newIdempotencyKey();
 		setValues( initialValues( config ) );
-		setDraftScope( DRAFT_SCOPE_SESSION );
 		setIntervalOpen( false );
 		setStatus( null );
 		setRecoveryOpen( false );

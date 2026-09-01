@@ -7,28 +7,25 @@ export const newIdempotencyKey = () => {
 		.slice( 2 ) }`;
 };
 
-export const DRAFT_VERSION = 2;
+export const DRAFT_VERSION = 3;
 export const DRAFT_TTL = 24 * 60 * 60 * 1000;
 const DRAFT_MAX_BYTES = 12000;
-export const DRAFT_SCOPE_SESSION = 'session';
-export const DRAFT_SCOPE_DEVICE = 'device';
 
-const browserStorage = () => ( {
-	session: ( () => {
-		try {
-			return window.sessionStorage;
-		} catch {
-			return null;
-		}
-	} )(),
-	device: ( () => {
-		try {
-			return window.localStorage;
-		} catch {
-			return null;
-		}
-	} )(),
-} );
+/**
+ * Drafts live in this tab only.
+ *
+ * A booking inquiry carries an artist's contact details, so it stays out of
+ * localStorage: closing the tab ends the draft, which is the behavior a
+ * shared or public computer needs by default. Reload and Back still restore,
+ * which is the only recovery the form actually promises.
+ */
+const browserStorage = () => {
+	try {
+		return window.sessionStorage;
+	} catch {
+		return null;
+	}
+};
 
 export const draftStorageKey = ( config ) =>
 	`extrachill.booking-inquiry.v1.${ config.venue.id }.${ config.revision }`;
@@ -76,36 +73,26 @@ const clearStaleDrafts = ( config, storage ) => {
 export const saveDraft = (
 	config,
 	values,
-	scope = DRAFT_SCOPE_SESSION,
 	storage = browserStorage(),
 	now = Date.now()
 ) => {
 	try {
-		const selected = storage[ scope ];
-		const other =
-			storage[
-				scope === DRAFT_SCOPE_DEVICE
-					? DRAFT_SCOPE_SESSION
-					: DRAFT_SCOPE_DEVICE
-			];
-		if ( ! selected ) {
+		if ( ! storage ) {
 			return false;
 		}
-		other?.removeItem( draftStorageKey( config ) );
 		if ( ! hasDraftValues( values ) ) {
-			selected.removeItem( draftStorageKey( config ) );
+			storage.removeItem( draftStorageKey( config ) );
 			return true;
 		}
 		const draft = JSON.stringify( {
 			version: DRAFT_VERSION,
 			venueId: config.venue.id,
 			revision: config.revision,
-			scope,
 			savedAt: now,
 			values: draftValues( config, values ),
 		} );
 		if ( draft.length <= DRAFT_MAX_BYTES ) {
-			selected.setItem( draftStorageKey( config ), draft );
+			storage.setItem( draftStorageKey( config ), draft );
 			return true;
 		}
 		return false;
@@ -120,78 +107,61 @@ export const loadDraft = (
 	storage = browserStorage(),
 	now = Date.now()
 ) => {
-	let sessionReadFailed = false;
-	for ( const scope of [ DRAFT_SCOPE_SESSION, DRAFT_SCOPE_DEVICE ] ) {
-		const selected = storage[ scope ];
-		if ( ! selected ) {
-			sessionReadFailed ||= scope === DRAFT_SCOPE_SESSION;
-			continue;
-		}
-		try {
-			clearStaleDrafts( config, selected );
-			const raw = selected.getItem( draftStorageKey( config ) );
-			if ( ! raw ) {
-				continue;
-			}
-			const draft = JSON.parse( raw );
-			const validSavedAt = Number.isFinite( draft.savedAt );
-			const expired =
-				validSavedAt &&
-				( now - draft.savedAt > DRAFT_TTL || now < draft.savedAt );
-			if (
-				draft.version !== DRAFT_VERSION ||
-				draft.venueId !== config.venue.id ||
-				draft.revision !== config.revision ||
-				draft.scope !== scope ||
-				! validSavedAt ||
-				! draft.values ||
-				expired
-			) {
-				selected.removeItem( draftStorageKey( config ) );
-				return {
-					values: initial,
-					scope: DRAFT_SCOPE_SESSION,
-					outcome: expired ? 'expired' : 'incompatible',
-				};
-			}
-			return {
-				values: {
-					...initial,
-					...draft.values,
-					consent: false,
-					fields: {
-						...initial.fields,
-						...( draft.values.fields || {} ),
-					},
-				},
-				scope,
-				outcome: 'restored',
-			};
-		} catch {
-			sessionReadFailed ||= scope === DRAFT_SCOPE_SESSION;
-		}
+	if ( ! storage ) {
+		return { values: initial, outcome: 'read-failed' };
 	}
-	return {
-		values: initial,
-		scope: DRAFT_SCOPE_SESSION,
-		outcome: sessionReadFailed ? 'read-failed' : 'none',
-	};
+	try {
+		clearStaleDrafts( config, storage );
+		const raw = storage.getItem( draftStorageKey( config ) );
+		if ( ! raw ) {
+			return { values: initial, outcome: 'none' };
+		}
+		const draft = JSON.parse( raw );
+		const validSavedAt = Number.isFinite( draft.savedAt );
+		const expired =
+			validSavedAt &&
+			( now - draft.savedAt > DRAFT_TTL || now < draft.savedAt );
+		if (
+			draft.version !== DRAFT_VERSION ||
+			draft.venueId !== config.venue.id ||
+			draft.revision !== config.revision ||
+			! validSavedAt ||
+			! draft.values ||
+			expired
+		) {
+			storage.removeItem( draftStorageKey( config ) );
+			return {
+				values: initial,
+				outcome: expired ? 'expired' : 'incompatible',
+			};
+		}
+		return {
+			values: {
+				...initial,
+				...draft.values,
+				consent: false,
+				fields: {
+					...initial.fields,
+					...( draft.values.fields || {} ),
+				},
+			},
+			outcome: 'restored',
+		};
+	} catch {
+		return { values: initial, outcome: 'read-failed' };
+	}
 };
 
 export const clearDraft = ( config, storage = browserStorage() ) => {
-	let cleared = true;
-	for ( const scope of [ DRAFT_SCOPE_SESSION, DRAFT_SCOPE_DEVICE ] ) {
-		try {
-			if ( ! storage[ scope ] ) {
-				cleared = false;
-				continue;
-			}
-			storage[ scope ].removeItem( draftStorageKey( config ) );
-		} catch {
-			cleared = false;
+	try {
+		if ( ! storage ) {
+			return false;
 		}
+		storage.removeItem( draftStorageKey( config ) );
+		return true;
+	} catch {
+		return false;
 	}
-	return cleared;
 };
 
 export const bookingDateInterval = ( value ) => {

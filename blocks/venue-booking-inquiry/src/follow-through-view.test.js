@@ -653,12 +653,11 @@ describe( 'artist booking inquiry follow-through UI', () => {
 		await act( async () => restored.root.unmount() );
 	} );
 
-	it( 'clears receipt, both draft scopes, and restored private form state', async () => {
+	it( 'clears the receipt, the draft, and restored private form state', async () => {
 		const draft = {
 			version: DRAFT_VERSION,
 			venueId: 42,
 			revision: 7,
-			scope: 'session',
 			savedAt: Date.now(),
 			values: {
 				artistName: 'Private Artist',
@@ -674,10 +673,6 @@ describe( 'artist booking inquiry follow-through UI', () => {
 		sessionStorage.setItem(
 			draftStorageKey( config ),
 			JSON.stringify( draft )
-		);
-		localStorage.setItem(
-			draftStorageKey( config ),
-			JSON.stringify( { ...draft, scope: 'device' } )
 		);
 		saveReceipt( config, receipt );
 		window.fetch.mockImplementation( () => response( inquiry() ) );
@@ -697,12 +692,11 @@ describe( 'artist booking inquiry follow-through UI', () => {
 		expect(
 			sessionStorage.getItem( draftStorageKey( config ) )
 		).toBeNull();
-		expect( localStorage.getItem( draftStorageKey( config ) ) ).toBeNull();
 		expect( container.querySelector( 'input[type="date"]' ).value ).toBe(
 			''
 		);
 		expect( container.textContent ).toContain(
-			'Receipt and saved form details cleared.'
+			'Receipt and saved answers cleared.'
 		);
 		await act( async () => root.unmount() );
 	} );
@@ -726,10 +720,10 @@ describe( 'artist booking inquiry follow-through UI', () => {
 				await flush();
 			} );
 			expect( container.textContent ).toContain(
-				'browser storage may remain'
+				'this browser tab may still hold saved answers'
 			);
 			expect( container.textContent ).toContain(
-				"clear this device's site data"
+				'Close the tab to discard them.'
 			);
 			expect(
 				container.querySelector( 'input[type="date"]' ).value

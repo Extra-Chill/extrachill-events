@@ -1511,9 +1511,14 @@ final class BookingFoundationTest extends BookingTestCase {
 	}
 
 	public function test_default_message_field_asks_for_the_show_vision(): void {
-		$presentation = ( new VenueBookingConfig() )->defaults()['intake']['presentation'];
+		$this->assertArrayNotHasKey(
+			'presentation',
+			( new VenueBookingConfig() )->defaults()['intake'],
+			'Built-in field labels are fixed, not venue-configurable.'
+		);
 
-		$this->assertSame( 'What is your vision for the show?', $presentation['message_label'] );
-		$this->assertNotSame( '', $presentation['message_help'] );
+		$view = file_get_contents( dirname( __DIR__ ) . '/blocks/venue-booking-inquiry/src/view.js' );
+		$this->assertStringContainsString( 'label="What\'s your vision for the show?"', $view );
+		$this->assertStringNotContainsString( 'config.presentation', $view );
 	}
 }

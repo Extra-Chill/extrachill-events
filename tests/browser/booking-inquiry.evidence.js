@@ -67,14 +67,6 @@ const config = {
 			options: [],
 		},
 	],
-	presentation: {
-		artist_name_label: 'Artist or project name',
-		contact_name_label: 'Contact name',
-		contact_email_label: 'Contact email',
-		contact_phone_label: 'Phone (Emergency use only)',
-		message_label: 'Additional performance details',
-		message_help: 'Share routing and scheduling notes.',
-	},
 	linkPage: {
 		url: 'https://artist.example/manage-link-page/',
 		hasPage: true,
@@ -322,7 +314,7 @@ const measure = ( page ) =>
 		);
 		assert.equal( await page.getByText( 'Press links' ).count(), 0 );
 		assert.equal(
-			await page.getByLabel( 'Artist or project name' ).count(),
+			await page.getByLabel( 'Artist or band name' ).count(),
 			0
 		);
 		assert.ok( await page.getByLabel( 'Requested date' ).count() );
@@ -367,7 +359,7 @@ const measure = ( page ) =>
 			.click();
 		await page.getByText( /That date is unavailable/ ).waitFor();
 		assert.equal(
-			await page.getByLabel( 'Artist or project name' ).count(),
+			await page.getByLabel( 'Artist or band name' ).count(),
 			0
 		);
 		assert.equal(
@@ -383,7 +375,7 @@ const measure = ( page ) =>
 		await page
 			.getByText( /That date is available for submissions/ )
 			.waitFor();
-		await page.getByLabel( 'Artist or project name' ).waitFor();
+		await page.getByLabel( 'Artist or band name' ).waitFor();
 		assert.equal( await page.getByLabel( 'Artist website' ).count(), 1 );
 		assert.equal( await page.getByLabel( 'Press links' ).count(), 1 );
 		assert.equal(
@@ -437,12 +429,12 @@ const measure = ( page ) =>
 		assert.ok( mobile.form.right < mobile.viewportWidth );
 		assert.equal( mobile.controlsInsideViewport, true );
 
-		await page.getByLabel( 'Artist or project name' ).fill( 'Proof Band' );
-		await page.getByLabel( 'Contact name' ).fill( 'Booking Agent' );
-		await page.getByLabel( 'Contact email' ).fill( 'agent@example.com' );
+		await page.getByLabel( 'Artist or band name' ).fill( 'Proof Band' );
+		await page.getByLabel( 'Your name' ).fill( 'Booking Agent' );
+		await page.getByLabel( 'Email' ).fill( 'agent@example.com' );
 		await page.getByLabel( 'Event type' ).selectOption( 'Concert' );
 		await page
-			.getByLabel( 'Additional performance details' )
+			.getByLabel( "What's your vision for the show?" )
 			.fill( 'Routing through Charleston.' );
 		await page.waitForFunction( () => sessionStorage.length === 1 );
 		const sessionDraft = await page.evaluate( () =>
@@ -479,9 +471,9 @@ const measure = ( page ) =>
 		await page
 			.getByRole( 'button', { name: 'Check availability' } )
 			.click();
-		await page.getByLabel( 'Artist or project name' ).waitFor();
+		await page.getByLabel( 'Artist or band name' ).waitFor();
 		assert.equal(
-			await page.getByLabel( 'Artist or project name' ).inputValue(),
+			await page.getByLabel( 'Artist or band name' ).inputValue(),
 			'Proof Band'
 		);
 		assert.equal(
@@ -516,7 +508,7 @@ const measure = ( page ) =>
 		await page
 			.getByRole( 'button', { name: 'Check availability' } )
 			.click();
-		await page.getByLabel( 'Artist or project name' ).waitFor();
+		await page.getByLabel( 'Artist or band name' ).waitFor();
 		await page.getByLabel( /I agree that this venue/ ).check();
 		await page
 			.getByRole( 'button', { name: 'Send booking inquiry' } )
@@ -552,7 +544,7 @@ const measure = ( page ) =>
 			.click();
 		await page.getByText( 'Temporary failure.' ).waitFor();
 		assert.equal(
-			await page.getByLabel( 'Artist or project name' ).inputValue(),
+			await page.getByLabel( 'Artist or band name' ).inputValue(),
 			'Proof Band'
 		);
 		await page.evaluate( () => {

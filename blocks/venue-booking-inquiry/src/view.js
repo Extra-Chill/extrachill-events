@@ -488,10 +488,7 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 										maxColumns={ 2 }
 									>
 										<FieldGroup
-											label={
-												config.presentation
-													.artist_name_label
-											}
+											label="Artist or band name"
 											htmlFor={ `${ prefix }-artist` }
 											required
 										>
@@ -510,10 +507,7 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 											/>
 										</FieldGroup>
 										<FieldGroup
-											label={
-												config.presentation
-													.contact_name_label
-											}
+											label="Your name"
 											htmlFor={ `${ prefix }-contact` }
 											required
 										>
@@ -532,10 +526,7 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 											/>
 										</FieldGroup>
 										<FieldGroup
-											label={
-												config.presentation
-													.contact_email_label
-											}
+											label="Email"
 											htmlFor={ `${ prefix }-email` }
 											required
 										>
@@ -555,10 +546,7 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 											/>
 										</FieldGroup>
 										<FieldGroup
-											label={
-												config.presentation
-													.contact_phone_label
-											}
+											label="Phone (optional)"
 											htmlFor={ `${ prefix }-phone` }
 										>
 											<input
@@ -652,9 +640,8 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 							</section>
 							<section className="ec-booking-inquiry__section">
 								<FieldGroup
-									label={ config.presentation.message_label }
+									label="What's your vision for the show?"
 									htmlFor={ `${ prefix }-message` }
-									help={ config.presentation.message_help }
 									required
 								>
 									<textarea

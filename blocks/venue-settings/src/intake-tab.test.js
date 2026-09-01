@@ -13,7 +13,7 @@ import { act } from 'react';
 /**
  * Internal dependencies
  */
-import { IntakeTab } from './intake-tab';
+import { composeIntakeFields, IntakeTab } from './intake-tab';
 
 jest.mock( '@extrachill/components', () => {
 	const React = require( 'react' );
@@ -58,19 +58,25 @@ const field = ( index, overrides = {} ) => ( {
 	...overrides,
 } );
 
-function Harness( { initialFields } ) {
+function Harness( { initialFields, initialHidden } ) {
 	const [ config, setConfig ] = useState( {
-		intake: { fields: initialFields, presentation },
+		intake: {
+			fields: initialFields,
+			hidden_platform_fields: initialHidden,
+			presentation,
+		},
 	} );
 	return <IntakeTab config={ config } setConfig={ setConfig } />;
 }
 
-async function renderIntake( fields ) {
+async function renderIntake( fields, hidden = [] ) {
 	const container = document.createElement( 'div' );
 	document.body.appendChild( container );
 	const root = createRoot( container );
 	await act( async () =>
-		root.render( <Harness initialFields={ fields } /> )
+		root.render(
+			<Harness initialFields={ fields } initialHidden={ hidden } />
+		)
 	);
 	return { container, root };
 }
@@ -191,6 +197,56 @@ describe( 'booking form question editor', () => {
 		await act( async () => root.unmount() );
 	} );
 
+	it( 'lets a venue turn a platform question off without rewording it', async () => {
+		const { container, root } = await renderIntake( [] );
+		const listen = container.querySelector(
+			'#intake-platform-listen_link'
+		);
+
+		expect( listen.checked ).toBe( true );
+		expect(
+			container.querySelector( 'input[value="Link to listen"]' )
+		).toBeNull();
+
+		await act( async () => {
+			listen.click();
+			await Promise.resolve();
+		} );
+
+		expect(
+			container.querySelector( '#intake-platform-listen_link' ).checked
+		).toBe( false );
+		expect(
+			container.querySelector( '#intake-platform-played_area_before' )
+				.checked
+		).toBe( true );
+
+		await act( async () => root.unmount() );
+	} );
+
+	it( 'restores a platform question the venue turned back on', async () => {
+		const { container, root } = await renderIntake(
+			[],
+			[ 'socials_link' ]
+		);
+		const socials = container.querySelector(
+			'#intake-platform-socials_link'
+		);
+
+		expect( socials.checked ).toBe( false );
+
+		await act( async () => {
+			socials.click();
+			await Promise.resolve();
+		} );
+
+		expect(
+			container.querySelector( '#intake-platform-socials_link' ).checked
+		).toBe( true );
+
+		await act( async () => root.unmount() );
+	} );
+
 	it( 'protects a saved question another question still depends on', async () => {
 		const controller = field( 1 );
 		const dependent = field( 2, {
@@ -209,5 +265,36 @@ describe( 'booking form question editor', () => {
 		);
 
 		await act( async () => root.unmount() );
+	} );
+} );
+
+describe( 'composed booking form questions', () => {
+	it( 'asks the platform questions before venue questions', () => {
+		expect(
+			composeIntakeFields( [ field( 1 ) ], [] ).map(
+				( item ) => item.key
+			)
+		).toEqual( [
+			'played_area_before',
+			'listen_link',
+			'socials_link',
+			'field_1',
+		] );
+	} );
+
+	it( 'omits only the platform questions a venue turned off', () => {
+		expect(
+			composeIntakeFields( [], [ 'listen_link' ] ).map(
+				( item ) => item.key
+			)
+		).toEqual( [ 'played_area_before', 'socials_link' ] );
+	} );
+
+	it( 'asks nothing extra for a venue with no questions of its own', () => {
+		expect( composeIntakeFields().map( ( item ) => item.key ) ).toEqual( [
+			'played_area_before',
+			'listen_link',
+			'socials_link',
+		] );
 	} );
 } );

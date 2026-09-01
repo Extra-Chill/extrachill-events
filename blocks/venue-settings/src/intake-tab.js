@@ -27,12 +27,67 @@ const ANSWER_TYPES = [
 	[ 'select', 'Choose one' ],
 ];
 
-/** Questions the form always asks, in the order the artist answers them. */
+/** Built-in questions every form asks, in the order the artist answers them. */
 const ALWAYS_ASKED = [
 	'Requested date',
 	'Artist or project name',
 	'Contact name and email',
 	'What is your vision for the show?',
+];
+
+/**
+ * Questions Extra Chill asks on every venue's form.
+ *
+ * Owned by the platform so the wording stays consistent across venues. A
+ * venue can turn one off when it does not apply, but cannot reword it.
+ */
+const PLATFORM_QUESTIONS = [
+	[ 'played_area_before', 'Have you played in the area before?' ],
+	[ 'listen_link', 'Link to listen' ],
+	[ 'socials_link', 'Link to socials' ],
+];
+
+/** Platform question definitions, mirroring the server contract. */
+const PLATFORM_FIELDS = [
+	{
+		key: 'played_area_before',
+		label: 'Have you played in the area before?',
+		type: 'select',
+		required: true,
+		options: [ 'Yes', 'No' ],
+		visible_when: null,
+	},
+	{
+		key: 'listen_link',
+		label: 'Link to listen',
+		type: 'url',
+		required: true,
+		options: [],
+		visible_when: null,
+	},
+	{
+		key: 'socials_link',
+		label: 'Link to socials',
+		type: 'url',
+		required: false,
+		options: [],
+		visible_when: null,
+	},
+];
+
+/**
+ * Compose the questions a form asks, platform-owned questions first.
+ *
+ * Mirrors VenueBookingConfig::compose_intake_fields() so the editor preview
+ * matches what the public form renders.
+ *
+ * @param {Array} venueFields Venue-authored questions.
+ * @param {Array} hidden      Platform keys this venue turned off.
+ * @return {Array} Questions in the order the artist answers them.
+ */
+export const composeIntakeFields = ( venueFields = [], hidden = [] ) => [
+	...PLATFORM_FIELDS.filter( ( field ) => ! hidden.includes( field.key ) ),
+	...venueFields,
 ];
 
 const nextQuestionKey = ( fields ) => {
@@ -48,10 +103,21 @@ const nextQuestionKey = ( fields ) => {
 
 export function IntakeTab( { config, setConfig, idPrefix = '' } ) {
 	const fields = config.intake.fields;
+	const hidden = config.intake.hidden_platform_fields || [];
 	const labelRefs = useRef( new Map() );
 	const pendingFocusKey = useRef( null );
 	const setFields = ( next ) =>
 		setConfig( { ...config, intake: { ...config.intake, fields: next } } );
+	const togglePlatformQuestion = ( key, asked ) =>
+		setConfig( {
+			...config,
+			intake: {
+				...config.intake,
+				hidden_platform_fields: asked
+					? hidden.filter( ( candidate ) => candidate !== key )
+					: [ ...hidden, key ],
+			},
+		} );
 	const updateField = ( field, patch ) =>
 		setFields(
 			fields.map( ( candidate ) =>
@@ -79,6 +145,32 @@ export function IntakeTab( { config, setConfig, idPrefix = '' } ) {
 					<li key={ question }>{ question }</li>
 				) ) }
 			</ul>
+			<div className="ec-booking-platform-questions">
+				<p className="ec-booking-platform-questions__intro">
+					Extra Chill asks these on every venue&#8217;s form. Turn one
+					off if it does not apply to how you book.
+				</p>
+				{ PLATFORM_QUESTIONS.map( ( [ key, label ] ) => (
+					<label
+						className="ec-checkbox-row"
+						key={ key }
+						htmlFor={ `${ idPrefix }intake-platform-${ key }` }
+					>
+						<input
+							id={ `${ idPrefix }intake-platform-${ key }` }
+							type="checkbox"
+							checked={ ! hidden.includes( key ) }
+							onChange={ ( event ) =>
+								togglePlatformQuestion(
+									key,
+									event.target.checked
+								)
+							}
+						/>{ ' ' }
+						<span>{ label }</span>
+					</label>
+				) ) }
+			</div>
 			<div className="ec-booking-fields">
 				{ fields.map( ( field, index ) => {
 					const isReferenced = fields.some(

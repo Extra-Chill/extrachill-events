@@ -19,7 +19,7 @@ import {
  */
 import { BookingInquiry } from '../../venue-booking-inquiry/src/view';
 import { bookingEmbedSnippet, bookingOriginFromWebsite } from './booking-embed';
-import { IntakeTab } from './intake-tab';
+import { composeIntakeFields, IntakeTab } from './intake-tab';
 import { Status } from './status';
 import { sameDocument, validateConfig } from './state';
 
@@ -36,7 +36,10 @@ const previewConfig = ( config, venueName, profile, idPrefix ) => ( {
 		logoUrl: profile?.logo_url || '',
 	},
 	spaces: config.spaces,
-	fields: config.intake.fields,
+	fields: composeIntakeFields(
+		config.intake.fields,
+		config.intake.hidden_platform_fields
+	),
 	presentation: config.intake.presentation,
 	consent: config.consent,
 } );

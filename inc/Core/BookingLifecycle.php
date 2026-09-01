@@ -208,7 +208,13 @@ class BookingLifecycle {
 		}
 		$values     = is_array( $intake['fields'] ?? null ) ? $intake['fields'] : array();
 		$normalized = array();
-		foreach ( $config['intake']['fields'] as $field ) {
+		// Validate against what the public form actually asked: the
+		// platform-owned questions this venue kept, then its own.
+		$asked = $this->config->compose_intake_fields(
+			$config['intake']['fields'],
+			$config['intake']['hidden_platform_fields'] ?? array()
+		);
+		foreach ( $asked as $field ) {
 			$condition = $field['visible_when'] ?? null;
 			$visible   = ! is_array( $condition ) || (string) ( $normalized[ $condition['field'] ] ?? '' ) === (string) $condition['value'];
 			if ( ! $visible ) {

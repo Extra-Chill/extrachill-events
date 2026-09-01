@@ -143,17 +143,19 @@ class VenueBookingConfig {
 		}
 
 		$fields       = $this->normalize_intake_fields( $stored['intake']['fields'] ?? null );
+		$hidden       = $this->normalize_hidden_platform_fields( $stored['intake']['hidden_platform_fields'] ?? array() );
 		$presentation = $this->normalize_intake_presentation( $stored['intake']['presentation'] ?? array() );
 		$consent      = $this->normalize_consent( $stored['consent'] ?? null );
 		$spaces       = $this->normalize_spaces( $stored['spaces'] ?? null );
 		$attachments  = self::VERSION === ( $stored['version'] ?? null )
 			? $this->normalize_attachment_policy( $stored['attachment_policy'] ?? null )
 			: $this->default_attachment_policy();
-		foreach ( array( $fields, $presentation, $consent, $spaces, $attachments ) as $section ) {
+		foreach ( array( $fields, $hidden, $presentation, $consent, $spaces, $attachments ) as $section ) {
 			if ( is_wp_error( $section ) ) {
 				return $section;
 			}
 		}
+		$fields = $this->compose_intake_fields( $this->reject_platform_owned_fields( $fields ), $hidden );
 
 		return array(
 			'enabled'      => ! empty( $stored['enabled'] ),
@@ -394,6 +396,14 @@ class VenueBookingConfig {
 		if ( is_wp_error( $fields ) ) {
 			return $fields;
 		}
+		$fields = $this->reject_platform_owned_fields( $fields );
+		if ( is_wp_error( $fields ) ) {
+			return $fields;
+		}
+		$hidden_platform_fields = $this->normalize_hidden_platform_fields( $config['intake']['hidden_platform_fields'] ?? array() );
+		if ( is_wp_error( $hidden_platform_fields ) ) {
+			return $hidden_platform_fields;
+		}
 		if ( $version >= self::PUBLIC_INTAKE_VERSION && $version <= self::RETIRED_REQUIREMENTS_VERSION ) {
 			$requirements = $this->normalize_public_requirements( $config['public_requirements'] ?? array() );
 			if ( is_wp_error( $requirements ) ) {
@@ -457,9 +467,10 @@ class VenueBookingConfig {
 			'updated_at'                => $updated_at,
 			'enabled'                   => ! empty( $config['enabled'] ),
 			'intake'                    => array(
-				'version'      => 1,
-				'fields'       => $fields,
-				'presentation' => $this->normalize_intake_presentation( $config['intake']['presentation'] ?? array() ),
+				'version'                => 1,
+				'fields'                 => $fields,
+				'hidden_platform_fields' => $hidden_platform_fields,
+				'presentation'           => $this->normalize_intake_presentation( $config['intake']['presentation'] ?? array() ),
 			),
 			'consent'                   => $consent,
 			'attachment_policy'         => $attachment_policy,
@@ -482,12 +493,16 @@ class VenueBookingConfig {
 	}
 
 	/**
-	 * Starter questions every new venue form asks.
+	 * Questions every Extra Chill booking form asks.
 	 *
-	 * These are ordinary intake fields, not a privileged field class. A venue
-	 * may relabel, retype, or remove any of them from the booking form editor.
+	 * These are owned by the platform, not copied into venue configuration.
+	 * Every venue asks them with the same wording, so the questions can be
+	 * reworded in one place instead of drifting per venue. A venue may hide
+	 * one that does not apply to how it books, but may not relabel or retype
+	 * it. Venue-authored questions are stored separately and remain fully
+	 * editable.
 	 */
-	public function starter_intake_fields(): array {
+	public function platform_intake_fields(): array {
 		return array(
 			array(
 				'key'          => 'played_area_before',
@@ -519,6 +534,86 @@ class VenueBookingConfig {
 		);
 	}
 
+	/** Keys owned by the platform, which venue configuration may not author. */
+	public function platform_intake_field_keys(): array {
+		return array_column( $this->platform_intake_fields(), 'key' );
+	}
+
+	/**
+	 * Compose the questions a form asks, platform-owned questions first.
+	 *
+	 * @param array $venue_fields Venue-authored questions.
+	 * @param array $hidden       Platform keys this venue turned off.
+	 */
+	public function compose_intake_fields( array $venue_fields, array $hidden ): array {
+		$platform = array_values(
+			array_filter(
+				$this->platform_intake_fields(),
+				static function ( array $field ) use ( $hidden ): bool {
+					return ! in_array( $field['key'], $hidden, true );
+				}
+			)
+		);
+		return array_merge( $platform, $venue_fields );
+	}
+
+	/**
+	 * Drop venue-authored copies of platform-owned questions.
+	 *
+	 * A venue configured before the platform owned these questions stored its
+	 * own copy. The platform definition is authoritative, so the stored copy is
+	 * discarded rather than rendered twice. A venue-authored question that only
+	 * collides on a conditional reference is repaired the same way.
+	 *
+	 * @param array $fields Normalized venue-authored questions.
+	 * @return array|\WP_Error
+	 */
+	private function reject_platform_owned_fields( array $fields ) {
+		$platform_keys = $this->platform_intake_field_keys();
+		$kept          = array();
+		foreach ( $fields as $field ) {
+			if ( in_array( $field['key'], $platform_keys, true ) ) {
+				continue;
+			}
+			$kept[] = $field;
+		}
+		$kept_keys = array_column( $kept, 'key' );
+		foreach ( $kept as $index => $field ) {
+			$condition = $field['visible_when'];
+			if ( is_array( $condition ) && ! in_array( $condition['field'], $kept_keys, true ) ) {
+				$kept[ $index ]['visible_when'] = null;
+			}
+		}
+		return $kept;
+	}
+
+	/**
+	 * Normalize the platform questions a venue turned off.
+	 *
+	 * @param mixed $hidden Proposed hidden platform keys.
+	 * @return array|\WP_Error
+	 */
+	private function normalize_hidden_platform_fields( $hidden ) {
+		if ( null === $hidden ) {
+			return array();
+		}
+		if ( ! is_array( $hidden ) ) {
+			return new \WP_Error( 'invalid_booking_hidden_platform_fields', __( 'Hidden booking questions must be a list of platform question keys.', 'extrachill-events' ) );
+		}
+		$allowed    = $this->platform_intake_field_keys();
+		$normalized = array();
+		foreach ( $hidden as $key ) {
+			$key = mb_substr( sanitize_key( (string) $key ), 0, 64 );
+			if ( ! in_array( $key, $allowed, true ) ) {
+				return new \WP_Error( 'invalid_booking_hidden_platform_fields', __( 'Only platform booking questions can be hidden.', 'extrachill-events' ) );
+			}
+			if ( ! in_array( $key, $normalized, true ) ) {
+				$normalized[] = $key;
+			}
+		}
+		return $normalized;
+	}
+
 	/** Default disabled venue contract. */
 	public function defaults(): array {
 		return array(
@@ -528,9 +623,10 @@ class VenueBookingConfig {
 			'updated_at'                => null,
 			'enabled'                   => false,
 			'intake'                    => array(
-				'version'      => 1,
-				'fields'       => $this->starter_intake_fields(),
-				'presentation' => $this->normalize_intake_presentation( array() ),
+				'version'                => 1,
+				'fields'                 => array(),
+				'hidden_platform_fields' => array(),
+				'presentation'           => $this->normalize_intake_presentation( array() ),
 			),
 			'consent'                   => array(
 				'id'       => 'booking-privacy',

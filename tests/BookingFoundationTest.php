@@ -1171,7 +1171,7 @@ final class BookingFoundationTest extends BookingTestCase {
 			'intake'          => array(
 				'config_revision' => 3,
 				'message'         => 'A complete performance proposal.',
-				'fields'          => array( 'draw' => '125' ),
+				'fields'          => array( 'draw' => '125', 'played_area_before' => 'Yes', 'listen_link' => 'https://example.com/listen' ),
 				'consent'         => array( 'id' => 'booking-privacy', 'version' => 1, 'accepted' => true ),
 			),
 		);
@@ -1182,6 +1182,7 @@ final class BookingFoundationTest extends BookingTestCase {
 		$stale = $lifecycle->create_inquiry( array_replace_recursive( $input, array( 'idempotency_key' => 'public-stale', 'intake' => array( 'config_revision' => 2 ) ) ) );
 		$this->assertSame( 'booking_config_revision_conflict', $stale->get_error_code() );
 		$missing = $lifecycle->create_inquiry( array_replace_recursive( $input, array( 'idempotency_key' => 'public-missing', 'intake' => array( 'fields' => array( 'draw' => '' ) ) ) ) );
+		$this->assertSame( 'draw', $missing->get_error_data()['field'] );
 		$this->assertSame( 'booking_inquiry_field_required', $missing->get_error_code() );
 	}
 
@@ -1189,6 +1190,9 @@ final class BookingFoundationTest extends BookingTestCase {
 		$config                       = ( new VenueBookingConfig() )->defaults();
 		$config['enabled']            = true;
 		$config['revision']           = 4;
+		// Venue-authored conditionals are the subject, so the platform
+		// questions are turned off for this venue.
+		$config['intake']['hidden_platform_fields'] = ( new VenueBookingConfig() )->platform_intake_field_keys();
 		$config['intake']['fields']   = array(
 			array( 'key' => 'event_type', 'label' => 'Event type', 'type' => 'select', 'required' => true, 'options' => array( 'Concert', 'Market', 'Other' ) ),
 			array( 'key' => 'other_event', 'label' => 'Other event details', 'type' => 'text', 'required' => true, 'options' => array(), 'visible_when' => array( 'field' => 'event_type', 'value' => 'Other' ) ),
@@ -1491,23 +1495,100 @@ final class BookingFoundationTest extends BookingTestCase {
 		$this->assertCount( $authorization_calls + 1, $authorization->calls, 'Missing bookings must not reach authorization with a guessed venue.' );
 	}
 
-	public function test_new_venues_start_with_a_short_answerable_booking_form(): void {
+	public function test_every_venue_asks_the_platform_questions_without_storing_them(): void {
 		$service = new VenueBookingConfig();
-		$fields  = $service->defaults()['intake']['fields'];
+		$defaults = $service->defaults();
 
+		$this->assertSame( array(), $defaults['intake']['fields'], 'Platform questions are owned by code, not copied into venue configuration.' );
+		$this->assertSame( array(), $defaults['intake']['hidden_platform_fields'] );
+
+		$asked = $service->compose_intake_fields( $defaults['intake']['fields'], $defaults['intake']['hidden_platform_fields'] );
 		$this->assertSame(
 			array( 'played_area_before', 'listen_link', 'socials_link' ),
-			array_column( $fields, 'key' ),
+			array_column( $asked, 'key' ),
 			'A venue that never opens the form editor still asks the questions that qualify an inquiry.'
 		);
-		$this->assertSame( array( 'Yes', 'No' ), $fields[0]['options'] );
-		$this->assertSame( array( true, true, false ), array_column( $fields, 'required' ) );
-		$this->assertSame( array( 'select', 'url', 'url' ), array_column( $fields, 'type' ) );
-		$this->assertSame( array( null, null, null ), array_column( $fields, 'visible_when' ) );
+		$this->assertSame( array( 'Yes', 'No' ), $asked[0]['options'] );
+		$this->assertSame( array( true, true, false ), array_column( $asked, 'required' ) );
+		$this->assertSame( array( 'select', 'url', 'url' ), array_column( $asked, 'type' ) );
+	}
 
-		$normalized = $service->normalize( $service->defaults() );
-		$this->assertIsArray( $normalized, 'The starter questions must satisfy the same contract as venue-authored ones.' );
-		$this->assertSame( $fields, $normalized['intake']['fields'] );
+	public function test_platform_questions_lead_the_form_and_hide_individually(): void {
+		$service = new VenueBookingConfig();
+		$venue   = array( array( 'key' => 'stage_size', 'label' => 'Stage size', 'type' => 'text', 'required' => false, 'options' => array(), 'visible_when' => null ) );
+
+		$this->assertSame(
+			array( 'played_area_before', 'listen_link', 'socials_link', 'stage_size' ),
+			array_column( $service->compose_intake_fields( $venue, array() ), 'key' ),
+			'Platform questions lead the form so a venue cannot bury them.'
+		);
+		$this->assertSame(
+			array( 'played_area_before', 'socials_link', 'stage_size' ),
+			array_column( $service->compose_intake_fields( $venue, array( 'listen_link' ) ), 'key' )
+		);
+		$this->assertSame(
+			array( 'stage_size' ),
+			array_column( $service->compose_intake_fields( $venue, $service->platform_intake_field_keys() ), 'key' )
+		);
+	}
+
+	public function test_venue_configuration_cannot_author_or_hide_unknown_platform_questions(): void {
+		$service = new VenueBookingConfig();
+		$config  = $service->defaults();
+
+		$config['intake']['fields'] = array(
+			array( 'key' => 'listen_link', 'label' => 'Our own listen link', 'type' => 'text', 'required' => false, 'options' => array(), 'visible_when' => null ),
+			array( 'key' => 'stage_size', 'label' => 'Stage size', 'type' => 'text', 'required' => false, 'options' => array(), 'visible_when' => null ),
+		);
+		$normalized = $service->normalize( $config );
+		$this->assertIsArray( $normalized );
+		$this->assertSame( array( 'stage_size' ), array_column( $normalized['intake']['fields'], 'key' ), 'A venue copy of a platform question is discarded rather than asked twice.' );
+
+		$config['intake']['fields']                 = array();
+		$config['intake']['hidden_platform_fields'] = array( 'stage_size' );
+		$this->assertSame( 'invalid_booking_hidden_platform_fields', $service->normalize( $config )->get_error_code() );
+
+		$config['intake']['hidden_platform_fields'] = array( 'listen_link', 'listen_link' );
+		$deduped = $service->normalize( $config );
+		$this->assertSame( array( 'listen_link' ), $deduped['intake']['hidden_platform_fields'] );
+	}
+
+	public function test_venue_conditional_on_a_reclaimed_platform_question_is_repaired(): void {
+		$service = new VenueBookingConfig();
+		$config  = $service->defaults();
+		$config['intake']['fields'] = array(
+			array( 'key' => 'played_area_before', 'label' => 'Played here?', 'type' => 'select', 'required' => true, 'options' => array( 'Yes', 'No' ), 'visible_when' => null ),
+			array( 'key' => 'last_show', 'label' => 'When was your last show here?', 'type' => 'text', 'required' => false, 'options' => array(), 'visible_when' => array( 'field' => 'played_area_before', 'value' => 'Yes' ) ),
+		);
+
+		$normalized = $service->normalize( $config );
+
+		$this->assertIsArray( $normalized );
+		$this->assertSame( array( 'last_show' ), array_column( $normalized['intake']['fields'], 'key' ) );
+		$this->assertNull( $normalized['intake']['fields'][0]['visible_when'], 'A conditional pointing at a reclaimed platform question must not survive as a dangling reference.' );
+	}
+
+	public function test_a_venue_configured_before_platform_ownership_asks_the_same_questions(): void {
+		$service = new VenueBookingConfig();
+		$config   = $service->defaults();
+		$config['enabled']  = true;
+		$config['revision'] = 13;
+		// A venue whose stored configuration still carries its own copies.
+		$config['intake']['fields'] = array(
+			array( 'key' => 'played_area_before', 'label' => 'Have you played in the area before?', 'type' => 'select', 'required' => true, 'options' => array( 'Yes', 'No' ), 'visible_when' => null ),
+			array( 'key' => 'listen_link', 'label' => 'Link to listen', 'type' => 'url', 'required' => true, 'options' => array(), 'visible_when' => null ),
+			array( 'key' => 'socials_link', 'label' => 'Link to socials', 'type' => 'url', 'required' => false, 'options' => array(), 'visible_when' => null ),
+		);
+
+		$normalized = $service->normalize( $config );
+
+		$this->assertIsArray( $normalized );
+		$this->assertSame( array(), $normalized['intake']['fields'], 'Stored copies are reclaimed by the platform definition.' );
+		$this->assertSame(
+			array( 'played_area_before', 'listen_link', 'socials_link' ),
+			array_column( $service->compose_intake_fields( $normalized['intake']['fields'], $normalized['intake']['hidden_platform_fields'] ), 'key' ),
+			'The form keeps asking the same questions across the ownership change.'
+		);
 	}
 
 	public function test_default_message_field_asks_for_the_show_vision(): void {

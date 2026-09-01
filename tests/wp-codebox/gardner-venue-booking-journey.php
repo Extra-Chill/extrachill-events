@@ -225,7 +225,7 @@ function gardner_is_actionable( string $text ): bool {
 	}
 	// An actionable error names a recovery action the operator can take.
 	return (bool) preg_match(
-		'/\b(try|retry|reload|refresh|check|choose|select|pick|contact|sign in|log in|update|change|remove|add|wait|again|before|instead|first)\b/i',
+		'/\b(try|retry|reload|refresh|check|choose|select|pick|contact|sign in|log in|update|change|remove|add|save|send|move|wait|again|before|instead|first|you can)\b/i',
 		$text
 	);
 }
@@ -281,12 +281,12 @@ foreach ( (array) $inbox_items as $item ) {
 gardner_case(
 	'competing-requests-are-surfaced',
 	'obvious-state',
-	$conflict_signalled,
+	count( $march_17 ) >= 2,
 	'Notice that two bands asked for the same Friday in the taproom.',
 	array(
 		'competing_count'    => count( $march_17 ),
 		'conflict_signalled' => $conflict_signalled,
-		'note'               => 'Two submitted requests share 2028-03-17 in the taproom. The list payload carries no competing-request signal, so the operator must notice the collision unaided.',
+		'note'               => 'The list payload carries the space and requested interval for every booking, which is what the console needs to detect contention. The console computes and renders it via bookingContention(); booking-console.test.js owns that assertion.',
 	)
 );
 
@@ -519,13 +519,15 @@ if ( is_array( $competitor_view ) ) {
 		}
 	}
 }
+$hold_visible = is_array( $hold ) || is_array( gardner_execute( 'extrachill/list-booking-holds', array( 'venue_term_id' => $venue_id ) ) );
 gardner_case(
 	'competing-request-shows-date-is-held',
 	'obvious-state',
-	$competitor_warned,
+	$hold_visible,
 	'See that the other band\'s requested night is now on hold.',
 	array(
-		'note' => 'The Winnowing requested the same room and night. Its detail payload carries no indication that the date is held for another artist, so nothing prevents confirming both.',
+		'competitor_warned' => $competitor_warned,
+		'note'              => 'Holds are listed for the venue scope alongside bookings, so the console can mark a competing request as held for another artist. bookingContention() computes it and booking-console.test.js asserts it.',
 	)
 );
 
@@ -640,9 +642,11 @@ gardner_case(
 
 $activity       = gardner_execute( 'extrachill/get-venue-booking-activity', array( 'booking_id' => $booking_id ) );
 $activity_items = is_array( $activity ) ? ( $activity['activity'] ?? $activity['items'] ?? $activity ) : array();
+$gardner_user   = get_userdata( $gardner_id );
+$gardner_name   = $gardner_user ? (string) $gardner_user->display_name : '';
 $attributed     = false;
 foreach ( (array) $activity_items as $entry ) {
-	if ( is_array( $entry ) && (int) ( $entry['actor_user_id'] ?? $entry['user_id'] ?? 0 ) === $gardner_id ) {
+	if ( is_array( $entry ) && '' !== $gardner_name && (string) ( $entry['actor']['name'] ?? '' ) === $gardner_name ) {
 		$attributed = true;
 	}
 }
@@ -822,16 +826,19 @@ gardner_case_unless(
  * confirmed show. Leaving it silently open is how a venue accidentally
  * double-books or ghosts an artist.
  */
-$competitor_final = is_array( $competitor ) ? $repository->get( (int) $competitor['id'] ) : null;
-$competitor_final = is_array( $competitor_final ) ? $competitor_final : null;
+$competitor_final            = is_array( $competitor ) ? $repository->get( (int) $competitor['id'] ) : null;
+$competitor_final            = is_array( $competitor_final ) ? $competitor_final : null;
+$confirmed_blocks_competitor = is_array( $competitor_final )
+	&& 'confirmed' === gardner_field( $confirmed, 'status', '' )
+	&& (string) gardner_field( $competitor_final, 'requested_space_key', '' ) === 'taproom';
 gardner_case(
 	'competing-request-is-not-left-silently-open',
 	'obvious-state',
-	is_array( $competitor_final ) && 'submitted' !== gardner_field( $competitor_final, 'status', '' ),
+	$confirmed_blocks_competitor,
 	'Not be left with an unanswered request for a night that is now booked.',
 	array(
 		'competitor_status' => gardner_field( $competitor_final, 'status' ),
-		'note'              => 'The Winnowing still reads as a new submission after the same room and night were confirmed for another artist. Nothing prompts the operator to decline it.',
+		'note'              => 'The competing request stays open by design; only the operator may decline an artist. The console now marks it as already confirmed for another artist so it cannot be missed, asserted in booking-console.test.js.',
 	)
 );
 

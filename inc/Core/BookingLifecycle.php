@@ -140,6 +140,8 @@ class BookingLifecycle {
 		if ( is_wp_error( $config ) ) {
 			return $this->rollback( $config );
 		}
+		// Runtime wpdb can report an error independently of the test double's declared default.
+		// @phpstan-ignore notIdentical.alwaysFalse
 		if ( '' !== (string) $wpdb->last_error ) {
 			return $this->rollback( new \WP_Error( 'booking_inquiry_config_read_failed', __( 'The venue booking admission state could not be read.', 'extrachill-events' ), array( 'database_error' => $wpdb->last_error ) ) );
 		}

@@ -50,7 +50,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 			array(
 				'key'      => 'draw',
 				'label'    => 'Recent draw',
-				'type'     => 'number',
+				'type'     => 'text',
 				'required' => true,
 				'options'  => array(),
 			),

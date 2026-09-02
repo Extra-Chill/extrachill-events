@@ -112,7 +112,7 @@ $config['intake']     = array(
 		),
 		array(
 			'key'      => 'links',
-			'type'     => 'url_list',
+			'type'     => 'url',
 			'label'    => 'Links to your music',
 			'required' => false,
 		),

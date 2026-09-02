@@ -57,7 +57,7 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 			array(
 				'key'      => 'press_links',
 				'label'    => 'Press links',
-				'type'     => 'url_list',
+				'type'     => 'url',
 				'required' => false,
 				'options'  => array(),
 			),

@@ -26,7 +26,6 @@ import {
 	ManagedIdentitySelector,
 	PromoterWorkspacePanel,
 	SharedLinkPageEditor,
-	VenuePromoterRelationships,
 } from './managed-workspace';
 import { ProfileTab } from './profile-tab';
 import { LoadingPanel, Status } from './status';
@@ -39,8 +38,6 @@ export function VenueSettingsApp( { context } ) {
 	const workspace = context.workspace || {
 		identities: [],
 		selection: { reference: '', state: 'empty' },
-		granted_venues: [],
-		promoter_relationships: [],
 	};
 	const promoterMode = workspace.selection?.type === 'promoter';
 	const [ activeTab, setActiveTab ] = useState( 'calendar' );
@@ -585,11 +582,6 @@ export function VenueSettingsApp( { context } ) {
 					syncWithHash
 					contextSurface="venue-settings"
 				/>
-				{ selected?.is_owner && (
-					<VenuePromoterRelationships
-						relationships={ workspace.promoter_relationships || [] }
-					/>
-				) }
 			</>
 		);
 	};

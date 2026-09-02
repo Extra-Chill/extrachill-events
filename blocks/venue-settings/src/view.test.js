@@ -283,8 +283,6 @@ const promoterContext = ( linkPageStatus = 'available' ) =>
 				link_page: { status: linkPageStatus, management_url: '' },
 			},
 			venue: null,
-			granted_venues: [],
-			promoter_relationships: [],
 		},
 	} );
 
@@ -576,14 +574,11 @@ describe( 'venue settings authorization-facing states', () => {
 						},
 					},
 					venue: null,
-					granted_venues: [],
-					promoter_relationships: [],
 				},
 			} )
 		);
 		expect( apiFetch ).not.toHaveBeenCalled();
 		expect( container.textContent ).toContain( 'Extra Chill' );
-		expect( container.textContent ).toContain( 'no active venue grants' );
 		expect( container.textContent ).not.toContain( 'Booking Rules' );
 		await act( async () => root.unmount() );
 	} );

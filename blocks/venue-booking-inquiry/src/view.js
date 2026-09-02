@@ -33,6 +33,9 @@ import {
 import { clearReceipt, loadReceipt, saveReceipt } from './follow-through';
 import { BookingFollowThrough, ReceiptRecovery } from './follow-through-view';
 
+const DRAFT_STORAGE_UNAVAILABLE =
+	'Draft storage is unavailable. Your details will remain only on this page.';
+
 const initialValues = ( config ) => ( {
 	artistName: '',
 	contactName: '',
@@ -185,12 +188,16 @@ export function BookingInquiry( { config, wrapper, preview = false } ) {
 				skipDraftSave.current = false;
 				return;
 			}
-			saveDraft( config, values, draftScope );
+			if ( ! saveDraft( config, values, draftScope ) ) {
+				setDraftStatus( DRAFT_STORAGE_UNAVAILABLE );
+			}
 		}
 	}, [ config, draftScope, values, preview, receipt ] );
 	useEffect( () => {
 		if ( restored.current.outcome === 'restored' ) {
 			setDraftStatus( 'Your saved answers were restored.' );
+		} else if ( restored.current.outcome === 'read-failed' ) {
+			setDraftStatus( DRAFT_STORAGE_UNAVAILABLE );
 		}
 	}, [] );
 	useEffect( () => {

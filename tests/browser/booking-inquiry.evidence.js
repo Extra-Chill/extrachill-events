@@ -409,9 +409,7 @@ const measure = ( page ) =>
 		);
 
 		await mount();
-		await page
-			.getByText( 'Your draft from this browser tab was restored.' )
-			.waitFor();
+		await page.getByText( 'Your saved answers were restored.' ).waitFor();
 		assert.equal(
 			await page.getByLabel( 'Requested date' ).inputValue(),
 			'2030-08-01'
@@ -435,13 +433,6 @@ const measure = ( page ) =>
 		await page.waitForFunction(
 			() => sessionStorage.length === 1 && localStorage.length === 0
 		);
-		await page.evaluate( () => {
-			window.bookingAvailable = true;
-		} );
-		await page
-			.getByRole( 'button', { name: 'Check availability' } )
-			.click();
-		await page.getByLabel( 'Artist or band name' ).waitFor();
 		await page.getByLabel( /I agree that this venue/ ).check();
 		await page
 			.getByRole( 'button', { name: 'Send booking inquiry' } )

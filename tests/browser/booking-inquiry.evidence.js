@@ -278,27 +278,7 @@ const measure = ( page ) =>
 		assert.equal( await page.getByText( 'Signed in' ).count(), 0 );
 		assert.equal(
 			await page.getByText( 'Send a concise booking pitch' ).count(),
-			1
-		);
-		assert.equal(
-			await page
-				.getByText(
-					/saved on this device for reload and Back recovery/
-				)
-				.count(),
-			1
-		);
-		assert.equal(
-			await page
-				.getByLabel( 'Keep this draft on this device for 24 hours' )
-				.isChecked(),
-			false
-		);
-		assert.equal(
-			await page
-				.getByRole( 'button', { name: 'Clear saved draft' } )
-				.count(),
-			1
+			0
 		);
 		assert.equal(
 			await page
@@ -323,35 +303,6 @@ const measure = ( page ) =>
 		assert.equal(
 			await page.locator( 'input[type="datetime-local"]' ).count(),
 			0
-		);
-		await page.getByLabel( 'Requested date' ).fill( '2030-08-01' );
-		const clearDraftButton = page.getByRole( 'button', {
-			name: 'Clear saved draft',
-		} );
-		await clearDraftButton.focus();
-		assert.equal(
-			await clearDraftButton.evaluate(
-				( button ) => button === button.ownerDocument.activeElement
-			),
-			true
-		);
-		await clearDraftButton.press( 'Enter' );
-		assert.equal(
-			await page
-				.locator( '.ec-booking-inquiry__draft-status' )
-				.textContent(),
-			'Saved draft cleared. The form is empty.'
-		);
-		assert.equal(
-			await page.getByLabel( 'Requested date' ).inputValue(),
-			''
-		);
-		assert.deepEqual(
-			await page.evaluate( () => ( {
-				local: Object.keys( localStorage ),
-				session: Object.keys( sessionStorage ),
-			} ) ),
-			{ local: [], session: [] }
 		);
 		await page.getByLabel( 'Requested date' ).fill( '2030-08-01' );
 		await page
@@ -480,25 +431,7 @@ const measure = ( page ) =>
 			await page.getByLabel( /I agree that this venue/ ).isChecked(),
 			false
 		);
-		await page
-			.getByLabel( 'Keep this draft on this device for 24 hours' )
-			.check();
-		await page.waitForFunction(
-			() => localStorage.length === 1 && sessionStorage.length === 0
-		);
-		await mount();
-		await page
-			.getByText( 'Your saved 24-hour device draft was restored.' )
-			.waitFor();
-		assert.equal(
-			await page
-				.getByLabel( 'Keep this draft on this device for 24 hours' )
-				.isChecked(),
-			true
-		);
-		await page
-			.getByLabel( 'Keep this draft on this device for 24 hours' )
-			.uncheck();
+		// Drafts are session-scoped only; the device-scope opt-in was retired.
 		await page.waitForFunction(
 			() => sessionStorage.length === 1 && localStorage.length === 0
 		);

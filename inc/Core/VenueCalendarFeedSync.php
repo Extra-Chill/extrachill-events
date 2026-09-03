@@ -342,7 +342,15 @@ class VenueCalendarFeedSync {
 	private static function find_owned_event( int $venue_term_id, string $identity ): int {
 		$posts = get_posts( self::owned_event_query( $venue_term_id, $identity ) );
 
-		return empty( $posts ) ? 0 : (int) $posts[0];
+		if ( empty( $posts ) ) {
+			return 0;
+		}
+
+		$found = reset( $posts );
+
+		// owned_event_query() requests fields => ids; narrowed explicitly
+		// because get_posts() is typed as int|WP_Post either way.
+		return (int) ( is_object( $found ) ? $found->ID : $found );
 	}
 
 	/**
@@ -447,7 +455,12 @@ class VenueCalendarFeedSync {
 		// disagree with it by the site's UTC offset.
 		$now = current_time( 'mysql' );
 
-		foreach ( $owned as $post_id ) {
+		foreach ( $owned as $owned_post ) {
+			// owned_events_query() requests fields => ids, so these are IDs.
+			// Narrowed explicitly because get_posts() is typed as returning
+			// int|WP_Post regardless of the fields argument.
+			$post_id = (int) ( is_object( $owned_post ) ? $owned_post->ID : $owned_post );
+
 			$identity = (string) get_post_meta( $post_id, '_datamachine_event_source_id', true );
 
 			if ( '' === $identity || in_array( $identity, $seen, true ) ) {

@@ -156,7 +156,9 @@ describe( 'venue calendar feed tab', () => {
 
 		await click( button( container, 'Connect calendar' ) );
 
-		expect( container.textContent ).toContain( 'Found 12 importable events' );
+		expect( container.textContent ).toContain(
+			'Found 12 importable events'
+		);
 	} );
 
 	it( 'surfaces a specific bind failure rather than a generic message', async () => {

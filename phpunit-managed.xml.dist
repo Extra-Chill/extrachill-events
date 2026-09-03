@@ -14,12 +14,11 @@
 			<exclude>tests/Unit/Core/LocalSceneDigestTest.php</exclude>
 			<exclude>tests/Unit/Core/FeatureProviderBootstrapTest.php</exclude>
 			<!--
-				Stubs for WP helpers cannot bind when real WordPress is
-				loaded, so these run under the plain bootstrap instead. See
-				phpunit-venue-calendar-feed.xml.dist.
+				Stubs WP_Error and a few helpers behind function_exists, which
+				cannot bind when real WordPress is loaded. Runs under the plain
+				bootstrap instead. See phpunit-venue-calendar-feed.xml.dist.
 			-->
 			<exclude>tests/Unit/Core/VenueCalendarFeedTest.php</exclude>
-			<exclude>tests/Unit/Core/VenueCalendarFeedSyncTest.php</exclude>
 			<file>tests/Unit/Abilities/VenueQualificationTicketmasterPrecheckTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalLocationsAbilityTest.php</file>
 			<file>tests/Unit/Abilities/PublicEntityProjectionsAbilityTest.php</file>

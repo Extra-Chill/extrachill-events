@@ -340,32 +340,80 @@ class VenueCalendarFeedSync {
 	 * @return int Post ID, or 0.
 	 */
 	private static function find_owned_event( int $venue_term_id, string $identity ): int {
-		$posts = get_posts(
-			array(
-				'post_type'        => 'data_machine_events',
-				'post_status'      => array( 'publish', 'future', 'draft', 'private' ),
-				'numberposts'      => 1,
-				'fields'           => 'ids',
-				'suppress_filters' => false,
-				'meta_query'       => array(
-					'relation' => 'AND',
-					array(
-						'key'   => '_datamachine_event_source',
-						'value' => VenueCalendarFeed::SOURCE_NAME,
-					),
-					array(
-						'key'   => '_datamachine_event_source_id',
-						'value' => $identity,
-					),
-					array(
-						'key'   => self::META_FEED_VENUE,
-						'value' => $venue_term_id,
-					),
-				),
-			)
-		);
+		$posts = get_posts( self::owned_event_query( $venue_term_id, $identity ) );
 
 		return empty( $posts ) ? 0 : (int) $posts[0];
+	}
+
+	/**
+	 * Build the scoped lookup query for one feed-owned event.
+	 *
+	 * Separated from the query execution so the scope constraints can be
+	 * asserted directly. `pending` is deliberately absent from the status
+	 * list — that is scope rule 3.
+	 *
+	 * @param int    $venue_term_id Venue term ID.
+	 * @param string $identity      Stable occurrence identity.
+	 * @return array get_posts() arguments.
+	 */
+	private static function owned_event_query( int $venue_term_id, string $identity ): array {
+		return array(
+			'post_type'        => 'data_machine_events',
+			'post_status'      => array( 'publish', 'future', 'draft', 'private' ),
+			'numberposts'      => 1,
+			'fields'           => 'ids',
+			'suppress_filters' => false,
+			'meta_query'       => array(
+				'relation' => 'AND',
+				array(
+					'key'   => '_datamachine_event_source',
+					'value' => VenueCalendarFeed::SOURCE_NAME,
+				),
+				array(
+					'key'   => '_datamachine_event_source_id',
+					'value' => $identity,
+				),
+				array(
+					'key'   => self::META_FEED_VENUE,
+					'value' => $venue_term_id,
+				),
+			),
+		);
+	}
+
+	/**
+	 * Build the scoped query for every event this venue's feed owns.
+	 *
+	 * Only published events are cancellation candidates; drafts and pending
+	 * posts are deliberately out of reach.
+	 *
+	 * @param int $venue_term_id Venue term ID.
+	 * @return array get_posts() arguments.
+	 */
+	private static function owned_events_query( int $venue_term_id ): array {
+		return array(
+			'post_type'        => 'data_machine_events',
+			'post_status'      => 'publish',
+			// Bounded by construction: this queries only events this one
+			// venue's feed created, and a venue calendar holding more than
+			// this many future shows is not a real case. A hard cap is
+			// preferred over unbounded pagination so a runaway feed cannot
+			// stall the scheduled sweep.
+			'numberposts'      => self::MAX_TRACKED_EVENTS,
+			'fields'           => 'ids',
+			'suppress_filters' => false,
+			'meta_query'       => array(
+				'relation' => 'AND',
+				array(
+					'key'   => '_datamachine_event_source',
+					'value' => VenueCalendarFeed::SOURCE_NAME,
+				),
+				array(
+					'key'   => self::META_FEED_VENUE,
+					'value' => $venue_term_id,
+				),
+			),
+		);
 	}
 
 	/**
@@ -385,31 +433,7 @@ class VenueCalendarFeedSync {
 	 * @return int Count cancelled.
 	 */
 	private static function cancel_absent_events( int $venue_term_id, array $seen ): int {
-		$owned = get_posts(
-			array(
-				'post_type'        => 'data_machine_events',
-				'post_status'      => 'publish',
-				// Bounded by construction: this queries only events this one
-				// venue's feed created, and a venue calendar holding more than
-				// this many future shows is not a real case. A hard cap is
-				// preferred over unbounded pagination so a runaway feed cannot
-				// stall the scheduled sweep.
-				'numberposts'      => self::MAX_TRACKED_EVENTS,
-				'fields'           => 'ids',
-				'suppress_filters' => false,
-				'meta_query'       => array(
-					'relation' => 'AND',
-					array(
-						'key'   => '_datamachine_event_source',
-						'value' => VenueCalendarFeed::SOURCE_NAME,
-					),
-					array(
-						'key'   => self::META_FEED_VENUE,
-						'value' => $venue_term_id,
-					),
-				),
-			)
-		);
+		$owned = get_posts( self::owned_events_query( $venue_term_id ) );
 
 		if ( empty( $owned ) ) {
 			return 0;
@@ -430,7 +454,7 @@ class VenueCalendarFeedSync {
 				continue;
 			}
 
-			if ( ! self::is_future_event( $post_id, $now ) ) {
+			if ( ! self::starts_after( self::event_start( $post_id ), $now ) ) {
 				continue;
 			}
 
@@ -449,18 +473,35 @@ class VenueCalendarFeedSync {
 	/**
 	 * Whether an event starts in the future.
 	 *
-	 * @param int    $post_id Event post ID.
-	 * @param string $now     Current site time as a MySQL datetime string.
-	 * @return bool
+	 * @param int $post_id Event post ID.
+	 * @return string MySQL datetime string, or empty when unknown.
 	 */
-	private static function is_future_event( int $post_id, string $now ): bool {
+	private static function event_start( int $post_id ): string {
 		if ( ! function_exists( 'datamachine_get_event_dates' ) ) {
-			return false;
+			return '';
 		}
 
 		$dates = datamachine_get_event_dates( $post_id );
-		$start = is_object( $dates ) ? (string) ( $dates->start_datetime ?? '' ) : '';
 
+		return is_object( $dates ) ? (string) ( $dates->start_datetime ?? '' ) : '';
+	}
+
+	/**
+	 * Whether an event starts after the given moment.
+	 *
+	 * Compared as MySQL datetime strings in site time, matching
+	 * datamachine_get_event_timing(), which is the canonical upcoming/past
+	 * test for this table. Converting to timestamps would silently disagree
+	 * with it by the site's UTC offset.
+	 *
+	 * An unknown start is never "after" — an event whose date cannot be
+	 * established is not a cancellation candidate.
+	 *
+	 * @param string $start Event start as a MySQL datetime string.
+	 * @param string $now   Current site time as a MySQL datetime string.
+	 * @return bool
+	 */
+	private static function starts_after( string $start, string $now ): bool {
 		if ( '' === $start ) {
 			return false;
 		}

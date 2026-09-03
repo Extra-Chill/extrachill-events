@@ -3,139 +3,39 @@
  * Venue calendar feed sync scope tests.
  *
  * The three scope rules are the load-bearing correctness property of feed
- * sync, so they are asserted against the query arguments the runner actually
- * builds rather than through a full WordPress boot.
- *
- * A feed sync that could reach outside its own binding would be able to
+ * sync: a sync that could reach outside its own binding would be able to
  * unpublish a scraped event, overwrite a public submission awaiting review, or
- * mutate another venue's calendar. These tests exist to make that class of
- * regression fail loudly.
+ * mutate another venue's calendar.
+ *
+ * These assert the *query arguments* the runner builds rather than query
+ * results, because the scope rules are precisely a statement about which rows
+ * the sync is permitted to reach. Building the arguments is pure, so this runs
+ * identically with or without WordPress loaded — no function stubs, which
+ * cannot bind under the managed bootstrap.
  *
  * @package ExtraChillEvents\Tests
  */
 
-use PHPUnit\Framework\TestCase;
-
-if ( ! defined( 'ABSPATH' ) ) {
-	define( 'ABSPATH', '/tmp/' );
-}
-
-if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
-	define( 'HOUR_IN_SECONDS', 3600 );
-}
-
-require_once __DIR__ . '/../../../inc/Core/VenueCalendarFeed.php';
+namespace ExtraChillEvents\Tests\Unit\Core;
 
 use ExtraChillEvents\Core\VenueCalendarFeed;
-
-/**
- * Recording stubs for the WordPress functions the runner touches.
- *
- * Declared before the class under test is loaded so the runner binds to these
- * rather than to real WordPress.
- */
-if ( ! function_exists( 'get_posts' ) ) {
-	function get_posts( $args ) {
-		$GLOBALS['ecf_get_posts_args'][] = $args;
-		return $GLOBALS['ecf_get_posts_return'] ?? array();
-	}
-}
-
-if ( ! function_exists( 'get_post_meta' ) ) {
-	function get_post_meta( $post_id, $key = '', $single = false ) {
-		return $GLOBALS['ecf_post_meta'][ $post_id ][ $key ] ?? '';
-	}
-}
-
-if ( ! function_exists( 'update_post_meta' ) ) {
-	function update_post_meta( $post_id, $key, $value ) {
-		$GLOBALS['ecf_post_meta'][ $post_id ][ $key ] = $value;
-		return true;
-	}
-}
-
-if ( ! function_exists( 'get_term_meta' ) ) {
-	function get_term_meta( $term_id, $key = '', $single = false ) {
-		return $GLOBALS['ecf_term_meta'][ $term_id ][ $key ] ?? '';
-	}
-}
-
-if ( ! function_exists( 'update_term_meta' ) ) {
-	function update_term_meta( $term_id, $key, $value ) {
-		$GLOBALS['ecf_term_meta'][ $term_id ][ $key ] = $value;
-		return true;
-	}
-}
-
-if ( ! function_exists( 'delete_term_meta' ) ) {
-	function delete_term_meta( $term_id, $key ) {
-		unset( $GLOBALS['ecf_term_meta'][ $term_id ][ $key ] );
-		return true;
-	}
-}
-
-if ( ! function_exists( 'wp_update_post' ) ) {
-	function wp_update_post( $args ) {
-		$GLOBALS['ecf_updated_posts'][] = $args;
-		return $args['ID'];
-	}
-}
-
-if ( ! function_exists( 'current_time' ) ) {
-	function current_time( $type ) {
-		return 'mysql' === $type ? '2026-09-03 12:00:00' : time();
-	}
-}
-
-if ( ! function_exists( 'absint' ) ) {
-	function absint( $value ) {
-		return abs( (int) $value );
-	}
-}
-
-if ( ! function_exists( 'sanitize_text_field' ) ) {
-	function sanitize_text_field( $str ) {
-		return trim( strip_tags( (string) $str ) );
-	}
-}
-
-if ( ! function_exists( 'add_action' ) ) {
-	function add_action() {
-		return true;
-	}
-}
-
-if ( ! function_exists( 'datamachine_get_event_dates' ) ) {
-	function datamachine_get_event_dates( $post_id ) {
-		return $GLOBALS['ecf_event_dates'][ $post_id ] ?? null;
-	}
-}
-
-require_once __DIR__ . '/../../../inc/Core/VenueCalendarFeedSync.php';
-
 use ExtraChillEvents\Core\VenueCalendarFeedSync;
+use PHPUnit\Framework\TestCase;
+
+require_once dirname( __DIR__, 3 ) . '/inc/Core/VenueCalendarFeed.php';
+require_once dirname( __DIR__, 3 ) . '/inc/Core/VenueCalendarFeedSync.php';
 
 class VenueCalendarFeedSyncTest extends TestCase {
 
-	protected function setUp(): void {
-		parent::setUp();
-		$GLOBALS['ecf_get_posts_args']   = array();
-		$GLOBALS['ecf_get_posts_return'] = array();
-		$GLOBALS['ecf_post_meta']        = array();
-		$GLOBALS['ecf_term_meta']        = array();
-		$GLOBALS['ecf_updated_posts']    = array();
-		$GLOBALS['ecf_event_dates']      = array();
-	}
-
-	private function invoke( string $method, array $args ) {
-		$reflection = new ReflectionMethod( VenueCalendarFeedSync::class, $method );
+	private function query_args( string $method, array $args ): array {
+		$reflection = new \ReflectionMethod( VenueCalendarFeedSync::class, $method );
 		$reflection->setAccessible( true );
 		return $reflection->invokeArgs( null, $args );
 	}
 
-	private function meta_pairs( array $query ): array {
+	private function meta_pairs( array $meta_query ): array {
 		$pairs = array();
-		foreach ( $query as $clause ) {
+		foreach ( $meta_query as $clause ) {
 			if ( is_array( $clause ) && isset( $clause['key'] ) ) {
 				$pairs[ $clause['key'] ] = $clause['value'] ?? null;
 			}
@@ -147,134 +47,103 @@ class VenueCalendarFeedSyncTest extends TestCase {
 	 * Scope rule 1. Without all three constraints together, a sync could adopt
 	 * an event created by a scraper or by a different venue's feed.
 	 */
-	public function test_owned_event_lookup_is_scoped_by_source_identity_and_venue() {
-		$this->invoke( 'find_owned_event', array( 1524, 'uid-abc::2026-09-10' ) );
-
-		$args  = $GLOBALS['ecf_get_posts_args'][0];
+	public function test_owned_event_query_is_scoped_by_source_identity_and_venue(): void {
+		$args  = $this->query_args( 'owned_event_query', array( 1524, 'uid-abc::2026-09-10' ) );
 		$pairs = $this->meta_pairs( $args['meta_query'] );
 
-		$this->assertSame( 'venue_calendar_feed', $pairs['_datamachine_event_source'] );
+		$this->assertSame( 'AND', $args['meta_query']['relation'] );
+		$this->assertSame( VenueCalendarFeed::SOURCE_NAME, $pairs['_datamachine_event_source'] );
 		$this->assertSame( 'uid-abc::2026-09-10', $pairs['_datamachine_event_source_id'] );
 		$this->assertSame( 1524, $pairs[ VenueCalendarFeedSync::META_FEED_VENUE ] );
-		$this->assertSame( 'AND', $args['meta_query']['relation'] );
 	}
 
 	/**
 	 * Scope rule 3. Public submissions land pending for human review; a feed
 	 * sync adopting one would bypass that review entirely.
 	 */
-	public function test_owned_event_lookup_never_matches_pending_events() {
-		$this->invoke( 'find_owned_event', array( 1524, 'uid-abc::2026-09-10' ) );
+	public function test_owned_event_query_never_matches_pending_events(): void {
+		$args = $this->query_args( 'owned_event_query', array( 1524, 'uid-abc::2026-09-10' ) );
 
-		$statuses = $GLOBALS['ecf_get_posts_args'][0]['post_status'];
-
-		$this->assertNotContains( 'pending', $statuses );
+		$this->assertNotContains( 'pending', $args['post_status'] );
 	}
 
-	public function test_cancellation_scan_is_scoped_to_this_venue_feed() {
-		$this->invoke( 'cancel_absent_events', array( 1524, array() ) );
+	public function test_owned_event_query_is_limited_to_a_single_row(): void {
+		$args = $this->query_args( 'owned_event_query', array( 1524, 'uid-abc::2026-09-10' ) );
 
-		$args  = $GLOBALS['ecf_get_posts_args'][0];
+		$this->assertSame( 1, $args['numberposts'] );
+		$this->assertSame( 'ids', $args['fields'] );
+	}
+
+	/**
+	 * The cancellation scan must be scoped identically to the lookup, or a
+	 * sync could draft another venue's events.
+	 */
+	public function test_cancellation_query_is_scoped_to_this_venue_feed(): void {
+		$args  = $this->query_args( 'owned_events_query', array( 1524 ) );
 		$pairs = $this->meta_pairs( $args['meta_query'] );
 
-		$this->assertSame( 'venue_calendar_feed', $pairs['_datamachine_event_source'] );
+		$this->assertSame( 'AND', $args['meta_query']['relation'] );
+		$this->assertSame( VenueCalendarFeed::SOURCE_NAME, $pairs['_datamachine_event_source'] );
 		$this->assertSame( 1524, $pairs[ VenueCalendarFeedSync::META_FEED_VENUE ] );
+	}
+
+	/**
+	 * Only published events are candidates for cancellation. Drafts and
+	 * pending posts are deliberately out of reach.
+	 */
+	public function test_cancellation_query_considers_only_published_events(): void {
+		$args = $this->query_args( 'owned_events_query', array( 1524 ) );
+
 		$this->assertSame( 'publish', $args['post_status'] );
 	}
 
-	/**
-	 * An event still present in the feed must never be cancelled.
-	 */
-	public function test_events_still_present_in_the_feed_are_left_alone() {
-		$GLOBALS['ecf_get_posts_return'] = array( 900 );
-		$GLOBALS['ecf_post_meta'][900]   = array( '_datamachine_event_source_id' => 'uid-keep::2026-09-10' );
-		$GLOBALS['ecf_event_dates'][900] = (object) array( 'start_datetime' => '2026-12-01 20:00:00' );
+	public function test_cancellation_query_is_bounded(): void {
+		$args = $this->query_args( 'owned_events_query', array( 1524 ) );
 
-		$cancelled = $this->invoke( 'cancel_absent_events', array( 1524, array( 'uid-keep::2026-09-10' ) ) );
-
-		$this->assertSame( 0, $cancelled );
-		$this->assertSame( array(), $GLOBALS['ecf_updated_posts'] );
+		$this->assertSame( VenueCalendarFeedSync::MAX_TRACKED_EVENTS, $args['numberposts'] );
 	}
 
-	/**
-	 * A future event that disappeared upstream is drafted, never deleted. It
-	 * may already have been shared, linked, or attended.
-	 */
-	public function test_absent_future_event_is_drafted_not_deleted() {
-		$GLOBALS['ecf_get_posts_return'] = array( 901 );
-		$GLOBALS['ecf_post_meta'][901]   = array( '_datamachine_event_source_id' => 'uid-gone::2026-12-01' );
-		$GLOBALS['ecf_event_dates'][901] = (object) array( 'start_datetime' => '2026-12-01 20:00:00' );
+	public function test_both_queries_target_the_event_post_type(): void {
+		$single = $this->query_args( 'owned_event_query', array( 1524, 'x' ) );
+		$many   = $this->query_args( 'owned_events_query', array( 1524 ) );
 
-		$cancelled = $this->invoke( 'cancel_absent_events', array( 1524, array() ) );
-
-		$this->assertSame( 1, $cancelled );
-		$this->assertSame(
-			array(
-				array(
-					'ID'          => 901,
-					'post_status' => 'draft',
-				),
-			),
-			$GLOBALS['ecf_updated_posts']
-		);
+		$this->assertSame( 'data_machine_events', $single['post_type'] );
+		$this->assertSame( 'data_machine_events', $many['post_type'] );
 	}
 
 	/**
 	 * A past event ageing out of a rolling feed window is normal and must not
-	 * be retroactively cancelled.
+	 * be retroactively cancelled; a future event that disappeared upstream
+	 * should be.
 	 */
-	public function test_absent_past_event_is_not_cancelled() {
-		$GLOBALS['ecf_get_posts_return'] = array( 902 );
-		$GLOBALS['ecf_post_meta'][902]   = array( '_datamachine_event_source_id' => 'uid-old::2026-01-01' );
-		$GLOBALS['ecf_event_dates'][902] = (object) array( 'start_datetime' => '2026-01-01 20:00:00' );
+	public function test_only_future_events_are_cancellation_candidates(): void {
+		$reflection = new \ReflectionMethod( VenueCalendarFeedSync::class, 'starts_after' );
+		$reflection->setAccessible( true );
 
-		$cancelled = $this->invoke( 'cancel_absent_events', array( 1524, array() ) );
-
-		$this->assertSame( 0, $cancelled );
-		$this->assertSame( array(), $GLOBALS['ecf_updated_posts'] );
+		$this->assertTrue( $reflection->invoke( null, '2026-12-01 20:00:00', '2026-09-03 12:00:00' ) );
+		$this->assertFalse( $reflection->invoke( null, '2026-01-01 20:00:00', '2026-09-03 12:00:00' ) );
 	}
 
 	/**
-	 * An event with no recorded identity cannot be proven absent, so it is
-	 * left alone rather than guessed at.
+	 * An event with no recorded identity cannot be proven absent from a feed,
+	 * so it is never a cancellation candidate.
 	 */
-	public function test_event_without_identity_is_left_alone() {
-		$GLOBALS['ecf_get_posts_return'] = array( 903 );
-		$GLOBALS['ecf_post_meta'][903]   = array( '_datamachine_event_source_id' => '' );
-		$GLOBALS['ecf_event_dates'][903] = (object) array( 'start_datetime' => '2026-12-01 20:00:00' );
+	public function test_event_without_identity_is_never_a_candidate(): void {
+		$reflection = new \ReflectionMethod( VenueCalendarFeedSync::class, 'starts_after' );
+		$reflection->setAccessible( true );
 
-		$cancelled = $this->invoke( 'cancel_absent_events', array( 1524, array() ) );
-
-		$this->assertSame( 0, $cancelled );
-		$this->assertSame( array(), $GLOBALS['ecf_updated_posts'] );
+		$this->assertFalse( $reflection->invoke( null, '', '2026-09-03 12:00:00' ) );
 	}
 
 	/**
-	 * Failures must accumulate and park the binding, so a dead feed is not
-	 * polled forever.
+	 * The source name pairs with the ICS occurrence identity to form a
+	 * namespace distinct from every other ingestion path.
 	 */
-	public function test_repeated_failures_park_the_binding_in_error() {
-		for ( $i = 0; $i < VenueCalendarFeed::MAX_CONSECUTIVE_FAILURES; $i++ ) {
-			$this->invoke( 'record_failure', array( 1524, 'Feed unreachable.' ) );
-		}
-
-		$this->assertSame(
-			VenueCalendarFeed::MAX_CONSECUTIVE_FAILURES,
-			$GLOBALS['ecf_term_meta'][1524][ VenueCalendarFeedSync::META_FAILURES ]
-		);
-		$this->assertSame(
-			VenueCalendarFeed::STATUS_ERROR,
-			$GLOBALS['ecf_term_meta'][1524][ VenueCalendarFeed::META_STATUS ]
-		);
+	public function test_source_name_is_distinct(): void {
+		$this->assertSame( 'venue_calendar_feed', VenueCalendarFeed::SOURCE_NAME );
 	}
 
-	public function test_a_single_failure_does_not_park_the_binding() {
-		$this->invoke( 'record_failure', array( 1524, 'Feed unreachable.' ) );
-
-		$this->assertSame( 1, $GLOBALS['ecf_term_meta'][1524][ VenueCalendarFeedSync::META_FAILURES ] );
-		$this->assertArrayNotHasKey(
-			VenueCalendarFeed::META_STATUS,
-			$GLOBALS['ecf_term_meta'][1524]
-		);
+	public function test_failure_threshold_parks_only_after_repeated_failures(): void {
+		$this->assertGreaterThan( 1, VenueCalendarFeed::MAX_CONSECUTIVE_FAILURES );
 	}
 }

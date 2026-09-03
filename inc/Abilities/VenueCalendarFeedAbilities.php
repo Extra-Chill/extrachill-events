@@ -219,9 +219,7 @@ class VenueCalendarFeedAbilities {
 			);
 		}
 
-		$events = $extractor->extract( $body, $url );
-
-		return is_array( $events ) ? count( $events ) : 0;
+		return count( $extractor->extract( $body, $url ) );
 	}
 
 	/** Register one operation with shared authorization and metadata. */

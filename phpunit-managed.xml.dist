@@ -14,11 +14,11 @@
 			<exclude>tests/Unit/Core/LocalSceneDigestTest.php</exclude>
 			<exclude>tests/Unit/Core/FeatureProviderBootstrapTest.php</exclude>
 			<!--
-				Recording stubs for get_posts/wp_update_post/term meta cannot
-				bind when real WordPress is loaded, so these assert query shape
-				under the plain bootstrap instead. Covered by the
-				qualify-v2-unit suite in phpunit.xml.dist.
+				Stubs for WP helpers cannot bind when real WordPress is
+				loaded, so these run under the plain bootstrap instead. See
+				phpunit-venue-calendar-feed.xml.dist.
 			-->
+			<exclude>tests/Unit/Core/VenueCalendarFeedTest.php</exclude>
 			<exclude>tests/Unit/Core/VenueCalendarFeedSyncTest.php</exclude>
 			<file>tests/Unit/Abilities/VenueQualificationTicketmasterPrecheckTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalLocationsAbilityTest.php</file>

@@ -34,7 +34,9 @@ const formatSynced = ( value ) => {
  * Reporting real counts rather than a generic success message is what lets a
  * venue owner confirm the right calendar is connected — "Added 12 events" is
  * verifiable, "Sync complete" is not.
- * @param result
+ *
+ * @param {Object} result Sync counts returned by the sync ability.
+ * @return {string} Human-readable summary of what changed.
  */
 const summarize = ( result ) => {
 	const parts = [];

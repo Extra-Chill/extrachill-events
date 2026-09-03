@@ -60,6 +60,9 @@ class VenueCalendarFeedSync {
 	/** Consecutive failure counter, stored per venue. */
 	public const META_FAILURES = '_venue_calendar_feed_failures';
 
+	/** Upper bound on feed-owned events examined for cancellation per run. */
+	public const MAX_TRACKED_EVENTS = 500;
+
 	/** Register the recurring sweep and the per-venue worker. */
 	public static function register(): void {
 		add_action( self::SCHEDULE_HOOK, array( self::class, 'run_sweep' ) );
@@ -386,7 +389,12 @@ class VenueCalendarFeedSync {
 			array(
 				'post_type'        => 'data_machine_events',
 				'post_status'      => 'publish',
-				'numberposts'      => 500,
+				// Bounded by construction: this queries only events this one
+				// venue's feed created, and a venue calendar holding more than
+				// this many future shows is not a real case. A hard cap is
+				// preferred over unbounded pagination so a runaway feed cannot
+				// stall the scheduled sweep.
+				'numberposts'      => self::MAX_TRACKED_EVENTS,
 				'fields'           => 'ids',
 				'suppress_filters' => false,
 				'meta_query'       => array(
@@ -408,7 +416,12 @@ class VenueCalendarFeedSync {
 		}
 
 		$cancelled = 0;
-		$now       = current_time( 'timestamp' );
+
+		// Compared as MySQL datetime strings in site time, matching
+		// datamachine_get_event_timing(), which is the canonical upcoming/past
+		// test for this table. Converting to timestamps here would silently
+		// disagree with it by the site's UTC offset.
+		$now = current_time( 'mysql' );
 
 		foreach ( $owned as $post_id ) {
 			$identity = (string) get_post_meta( $post_id, '_datamachine_event_source_id', true );
@@ -436,11 +449,11 @@ class VenueCalendarFeedSync {
 	/**
 	 * Whether an event starts in the future.
 	 *
-	 * @param int $post_id Event post ID.
-	 * @param int $now     Current timestamp.
+	 * @param int    $post_id Event post ID.
+	 * @param string $now     Current site time as a MySQL datetime string.
 	 * @return bool
 	 */
-	private static function is_future_event( int $post_id, int $now ): bool {
+	private static function is_future_event( int $post_id, string $now ): bool {
 		if ( ! function_exists( 'datamachine_get_event_dates' ) ) {
 			return false;
 		}
@@ -452,7 +465,7 @@ class VenueCalendarFeedSync {
 			return false;
 		}
 
-		return strtotime( $start ) > $now;
+		return $start > $now;
 	}
 
 	/**

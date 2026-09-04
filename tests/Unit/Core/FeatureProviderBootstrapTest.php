@@ -24,6 +24,16 @@ final class FeatureProviderBootstrapTest extends TestCase {
 		$this->assertTrue( $result['ability_lifecycle_hooked'] );
 	}
 
+	/** Site ownership is the only thing that differs between owner and subsite boots. */
+	public function test_owner_and_subsite_boots_differ_only_in_site_ownership(): void {
+		$owner     = $this->run_fixture( 'owner' );
+		$unrelated = $this->run_fixture( 'unrelated' );
+
+		$this->assertNotSame( $owner['owner_site'], $unrelated['owner_site'] );
+		unset( $owner['owner_site'], $unrelated['owner_site'] );
+		$this->assertSame( $owner, $unrelated );
+	}
+
 	/** Unrelated subsites load safe hooks while owner-only callbacks remain guarded. */
 	public function test_unrelated_subsite_retains_registration_without_claiming_ownership(): void {
 		$result = $this->run_fixture( 'unrelated' );

@@ -127,6 +127,16 @@ jobs:
           npm ci
           npm run build
 
+      - name: Run isolated unit tests
+        if: ${{ matrix.command == 'review test' }}
+        run: |
+          vendor/bin/phpunit --configuration phpunit-artist-unit.xml.dist
+          vendor/bin/phpunit --configuration phpunit-venue-unit.xml.dist
+          vendor/bin/phpunit --configuration phpunit-local-scene-unit.xml.dist
+          vendor/bin/phpunit --configuration phpunit-network-block.xml.dist
+          vendor/bin/phpunit --configuration phpunit-membership.xml.dist
+          vendor/bin/phpunit --configuration phpunit-venue-calendar-feed.xml.dist
+
       - name: Assert Link Pages coordinated dependency entry
         if: ${{ matrix.command == 'review test' }}
         run: test -f .ci/extrachill-link-pages/extrachill-link-pages.php
@@ -137,10 +147,14 @@ jobs:
           vendor/bin/phpunit --configuration phpunit.xml.dist tests/VenueLinkPagesCoordinatedRuntimeTest.php
           vendor/bin/phpunit --configuration phpunit.xml.dist tests/PromoterLinkPagesCoordinatedRuntimeTest.php
 
+      - name: Select managed WordPress suite
+        if: ${{ matrix.command == 'review test' }}
+        run: cp phpunit-managed.xml.dist phpunit.xml.dist
+
       - name: Run Homeboy ${{ matrix.command }}
         env:
           HOMEBOY_SETTINGS_JSON: >-
-            {"database_type":"mysql","validation_dependencies":["${{ github.workspace }}/.ci/data-machine","${{ github.workspace }}/.ci/data-machine-events","${{ github.workspace }}/.ci/extrachill-network","${{ github.workspace }}/.ci/extrachill-users"],"wp_codebox_multisite":true,"wp_codebox_phpunit_bootstrap_mode":"managed","wp_codebox_phpunit_suites":[{"name":"managed-wordpress","config":"phpunit-managed.xml.dist"},{"name":"artist-unit","config":"phpunit-artist-unit.xml.dist"},{"name":"venue-unit","config":"phpunit-venue-unit.xml.dist"},{"name":"local-scene-unit","config":"phpunit-local-scene-unit.xml.dist"},{"name":"network-block","config":"phpunit-network-block.xml.dist"},{"name":"venue-membership","config":"phpunit-membership.xml.dist"},{"name":"venue-calendar-feed","config":"phpunit-venue-calendar-feed.xml.dist"}]}
+            {"database_type":"mysql","validation_dependencies":["${{ github.workspace }}/.ci/data-machine","${{ github.workspace }}/.ci/data-machine-events","${{ github.workspace }}/.ci/extrachill-network","${{ github.workspace }}/.ci/extrachill-users"],"wp_codebox_multisite":true,"wp_codebox_phpunit_bootstrap_mode":"managed"}
           HOMEBOY_WP_CODEBOX_ARTIFACTS_DIR: ${{ github.workspace }}/wp-codebox-artifacts
           HOMEBOY_WP_CODEBOX_INSTALL_MODE: source
           HOMEBOY_WP_CODEBOX_REF: 82e02165dba2510ca04f5ce7e5a429804952404a

@@ -35,6 +35,36 @@
         ],
         "wp_codebox_phpunit_preload_files": [
           "/wordpress/wp-content/plugins/extrachill-events/tests/MySQLIntegration/booking-schema-multisite-bootstrap.php"
+        ],
+        "wp_codebox_phpunit_suites": [
+          {
+            "name": "managed-wordpress",
+            "config": "phpunit-managed.xml.dist"
+          },
+          {
+            "name": "artist-unit",
+            "config": "phpunit-artist-unit.xml.dist"
+          },
+          {
+            "name": "venue-unit",
+            "config": "phpunit-venue-unit.xml.dist"
+          },
+          {
+            "name": "local-scene-unit",
+            "config": "phpunit-local-scene-unit.xml.dist"
+          },
+          {
+            "name": "network-block",
+            "config": "phpunit-network-block.xml.dist"
+          },
+          {
+            "name": "venue-membership",
+            "config": "phpunit-membership.xml.dist"
+          },
+          {
+            "name": "venue-calendar-feed",
+            "config": "phpunit-venue-calendar-feed.xml.dist"
+          }
         ]
       }
     }

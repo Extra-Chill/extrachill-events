@@ -58,6 +58,13 @@ namespace {
 		public function test_events_requests_match_concrete_data_machine_ability_schemas(): void {
 			$abilities = new DelegatedOperationAbilities( new \DataMachine\Core\DelegatedOperations\DelegatedOperationService() );
 			$abilities->register();
+			// Data Machine's real AbilityRegistration defers registration to
+			// wp_abilities_api_init rather than registering inline. Fire it so
+			// this asserts against real registration behaviour; with the local
+			// stub nothing is hooked and this is a no-op.
+			if ( function_exists( 'do_action' ) ) {
+				do_action( 'wp_abilities_api_init' );
+			}
 			$registered = $GLOBALS['ec_artist_test']['abilities'];
 			$this->assertSame(
 				array(

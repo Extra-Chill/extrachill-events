@@ -347,7 +347,7 @@ function extrachill_events_find_or_create_location_child( string $name, int $par
 			'number'     => 1,
 		)
 	);
-	if ( ! is_wp_error( $existing ) && ! empty( $existing ) && $existing[0] instanceof \WP_Term ) {
+	if ( ! is_wp_error( $existing ) && ! empty( $existing ) ) {
 		return $existing[0];
 	}
 

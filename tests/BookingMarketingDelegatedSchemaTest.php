@@ -27,13 +27,19 @@ namespace DataMachine\Core\DelegatedOperations {
 }
 
 namespace DataMachine\Abilities {
-	class AbilityRegistration {
-		public static function on_abilities_api_init( callable $callback ): void {
-			unset( $callback );
+	// Guarded because Data Machine ships these. Whenever it is a loaded
+	// dependency the real classes already exist and redeclaring them is fatal.
+	if ( ! class_exists( 'DataMachine\\Abilities\\AbilityRegistration' ) ) {
+		class AbilityRegistration {
+			public static function on_abilities_api_init( callable $callback ): void {
+				unset( $callback );
+			}
 		}
 	}
 
-	class ExecutionScope {
+	if ( ! class_exists( 'DataMachine\\Abilities\\ExecutionScope' ) ) {
+		class ExecutionScope {
+		}
 	}
 }
 

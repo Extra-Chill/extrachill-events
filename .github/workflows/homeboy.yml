@@ -155,6 +155,7 @@ jobs:
         uses: Extra-Chill/homeboy-action@beedc218296bf2b66b04794f669611abf4e7cc7f
         with:
           binary-path: ${{ runner.temp }}/homeboy-0.367.6/homeboy
+          php-version: '8.4'
           commands: ${{ matrix.command }}
           args: ${{ github.event_name == 'workflow_dispatch' && '--changed-since=origin/main' || '' }}
           auto-issue: ${{ github.event_name == 'workflow_dispatch' && 'false' || '' }}

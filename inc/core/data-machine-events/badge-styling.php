@@ -27,6 +27,21 @@ function extrachill_events_init_badge_styling() {
 	add_filter( 'data_machine_events_badge_wrapper_classes', 'extrachill_events_add_wrapper_classes', 10, 2 );
 	add_filter( 'data_machine_events_badge_classes', 'extrachill_events_add_badge_classes', 10, 4 );
 	add_filter( 'data_machine_events_excluded_taxonomies', 'extrachill_events_exclude_taxonomies', 10, 2 );
+	add_filter( 'extrachill_taxonomy_badges_skip_term', 'extrachill_events_skip_hidden_taxonomy_badges', 10, 3 );
+}
+
+/**
+ * Taxonomies that must not render as reader-facing badges.
+ *
+ * `event_type` carries the closed Schema.org vocabulary seeded by
+ * data-machine-events (`MusicEvent`, `ComedyEvent`, ...). Those names are
+ * `@type` identifiers, not labels. Keep the taxonomy out of every badge
+ * surface until the Extra Chill editorial vocabulary lands (#802).
+ *
+ * @return string[] Taxonomy slugs.
+ */
+function extrachill_events_hidden_badge_taxonomies() {
+	return array( 'event_type' );
 }
 
 /**
@@ -81,7 +96,9 @@ function extrachill_events_add_badge_classes( $badge_classes, $taxonomy_slug, $t
 /**
  * Exclude taxonomies from badge and modal display
  *
- * Artist taxonomy excluded to prevent redundant display with artist-specific metadata.
+ * Artist taxonomy excluded to prevent redundant display with artist-specific
+ * metadata. Hidden taxonomies (see extrachill_events_hidden_badge_taxonomies())
+ * are excluded from calendar cards, related-event cards, and REST badge HTML.
  *
  * @param array  $excluded Array of taxonomy slugs to exclude.
  * @param string $context  Context identifier: 'badge', 'modal'.
@@ -89,6 +106,7 @@ function extrachill_events_add_badge_classes( $badge_classes, $taxonomy_slug, $t
  */
 function extrachill_events_exclude_taxonomies( $excluded, $context = '' ) {
 	$excluded[] = 'artist';
+	$excluded   = array_merge( $excluded, extrachill_events_hidden_badge_taxonomies() );
 
 	if ( 'modal' !== $context ) {
 		return array_values( array_unique( $excluded ) );
@@ -112,4 +130,26 @@ function extrachill_events_exclude_taxonomies( $excluded, $context = '' ) {
 	}
 
 	return array_values( array_unique( $excluded ) );
+}
+
+/**
+ * Skip hidden taxonomies in the theme's above-title badge strip.
+ *
+ * The theme's extrachill_display_taxonomy_badges() iterates every taxonomy
+ * registered on the post type and only offers a per-term skip filter, so this
+ * is the hook that keeps hidden taxonomies off single event pages.
+ *
+ * @param bool    $skip     Whether to skip this term.
+ * @param WP_Term $term     The term being rendered.
+ * @param string  $taxonomy The taxonomy slug.
+ * @return bool True for hidden taxonomies, unchanged otherwise.
+ */
+function extrachill_events_skip_hidden_taxonomy_badges( $skip, $term, $taxonomy ) {
+	unset( $term );
+
+	if ( in_array( $taxonomy, extrachill_events_hidden_badge_taxonomies(), true ) ) {
+		return true;
+	}
+
+	return $skip;
 }

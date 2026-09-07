@@ -3,7 +3,7 @@
   "changelog_target": "docs/CHANGELOG.md",
   "extensions": {
     "wordpress": {
-      "php": "8.3",
+      "php": "8.4",
       "database_type": "mysql",
       "settings": {
         "wp_codebox_database_service": {

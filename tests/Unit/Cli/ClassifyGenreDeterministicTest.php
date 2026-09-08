@@ -114,14 +114,17 @@ class ClassifyGenreDeterministicTest extends TestCase {
 	/**
 	 * Assert performer text fills the gap at 0.70 when the name does not resolve.
 	 */
-	public function test_performer_description_resolves_when_name_does_not(): void {
+	public function test_performer_text_never_fills_the_gap_without_a_name_match(): void {
+		// The performer attribute is a per-event act name ("Sebastian (Space
+		// Punk Discoteca)"), so on its own it is per-event evidence, which
+		// #30 forbids. It may only corroborate a name match.
 		$signals                    = $this->neutral_signals();
-		$signals['performer_texts'] = array( 'an indie rock trio from Charleston' );
+		$signals['performer_texts'] = array( 'Sebastian (Space Punk Discoteca)', 'an indie rock trio from Charleston' );
 
 		$result = ClassifyGenreCommand::deterministic( $signals, $this->fake_resolver() );
 
-		$this->assertSame( array( 'indie' ), $result['genres'] );
-		$this->assertSame( 0.70, $result['confidence'] );
+		$this->assertSame( array(), $result['genres'] );
+		$this->assertSame( 0.0, $result['confidence'] );
 	}
 
 	/**

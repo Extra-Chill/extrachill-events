@@ -431,7 +431,7 @@ class ClassifyGenreCommand {
 			}
 		}
 
-		// (a) Performer attribute text: corroborates, or fills the gap.
+		// (a) Performer attribute text: corroborates a name match only.
 		foreach ( $performer as $text ) {
 			if ( ! is_string( $text ) || '' === $text ) {
 				continue;
@@ -442,10 +442,13 @@ class ClassifyGenreCommand {
 				continue;
 			}
 
+			// The performer attribute is a per-event act name, not a
+			// description ("Sebastian (Space Punk Discoteca)", "this.is.emo
+			// VS this.is.nu-metal Night" under "Various DJs"). One event's
+			// billing must never decide an artist's genre on its own — that
+			// is the per-event classification #30 rules out. It may only
+			// corroborate a match already made from the artist's own name.
 			if ( empty( $genres ) ) {
-				$genres    = $resolved['genres'];
-				$conf      = $resolved['whole'] ? 0.75 : 0.70;
-				$reasons[] = sprintf( 'performer attribute "%s" resolves through the genre resolver', $text );
 				continue;
 			}
 

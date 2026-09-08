@@ -243,7 +243,7 @@ class ClassifyVenueTierCommand {
 	public function __invoke( array $args, array $assoc_args ): void {
 		unset( $args );
 
-		if ( ! defined( 'WP_CLI' ) || ! \WP_CLI ) {
+		if ( ! defined( 'WP_CLI' ) ) {
 			return;
 		}
 
@@ -275,8 +275,7 @@ class ClassifyVenueTierCommand {
 		// Upstream version guard. Dry-run only reads events/venues and works
 		// against any deployed data-machine-events; --apply writes through
 		// the human write path that shipped with #786, so it requires it.
-		$upstream_ready = class_exists( '\DataMachineEvents\Core\Venue_Taxonomy' )
-			&& method_exists( '\DataMachineEvents\Core\Venue_Taxonomy', 'get_venue_tier_vocabulary' );
+		$upstream_ready = method_exists( '\DataMachineEvents\Core\Venue_Taxonomy', 'get_venue_tier_vocabulary' );
 
 		if ( $apply && ! $upstream_ready ) {
 			\WP_CLI::error(
@@ -904,7 +903,7 @@ class ClassifyVenueTierCommand {
 			$term = get_term( (int) $selector, 'venue' );
 		}
 
-		if ( ! $term instanceof \WP_Term || is_wp_error( $term ) ) {
+		if ( ! $term instanceof \WP_Term ) {
 			\WP_CLI::error( sprintf( 'Venue "%s" not found.', $selector ) );
 			return;
 		}

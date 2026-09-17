@@ -1,7 +1,7 @@
 /**
  * useEventSearch period scoping and reset behavior (#837).
  */
-/* global afterAll, beforeAll, beforeEach, describe, expect, it, jest */
+/* global afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, jest */
 
 /**
  * WordPress dependencies

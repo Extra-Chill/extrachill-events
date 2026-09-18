@@ -1096,7 +1096,9 @@ final class AccountMarketTest extends TestCase {
 		$this->assertStringContainsString( 'Nothing changes until you confirm.', $output );
 		$this->assertStringContainsString( 'Confirm: save and subscribe', $output );
 		$this->assertStringContainsString( 'autofocus', $output );
-		$this->assertStringContainsString( 'extrachill_events_subscribe_scene_', $output );
+		// The confirm affordance posts the digest intent through the merged scene form.
+		$this->assertStringContainsString( 'name="extrachill_events_scene_action" value="subscribe_digest"', $output );
+		$this->assertStringContainsString( 'name="extrachill_events_scene_nonce"', $output );
 		$this->assertSame( 1, substr_count( $output, '<aside class="events-market-context' ) );
 	}
 

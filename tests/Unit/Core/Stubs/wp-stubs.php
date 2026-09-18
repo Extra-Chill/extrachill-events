@@ -3,10 +3,12 @@
  * Shared WordPress function stubs for the Core unit tests that run without
  * the managed WordPress runtime.
  *
- * Extracted from the inline preludes of AccountMarketTest and
- * ArchiveEventsFirstTest so each test file keeps a single OO declaration.
- * Every stub is guarded: when the managed suite loads real WordPress, these
- * definitions are skipped entirely.
+ * Extracted from the inline prelude of AccountMarketTest (with the union of
+ * ArchiveEventsFirstTest's stubs at extraction time) so the test file keeps
+ * a single OO declaration. Every stub is guarded: when the managed suite
+ * loads real WordPress, these definitions are skipped entirely. Suites with
+ * their own expectations own their doubles locally — see
+ * Stubs/archive-layout-stubs.php and the near-me-unit precedent.
  *
  * @package ExtraChillEvents\Tests\Unit\Core
  */

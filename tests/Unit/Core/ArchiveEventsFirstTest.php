@@ -13,7 +13,7 @@
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/Stubs/wp-stubs.php';
+require_once __DIR__ . '/Stubs/archive-layout-stubs.php';
 
 if ( ! defined( 'EXTRACHILL_EVENTS_PLUGIN_URL' ) ) {
 	define( 'EXTRACHILL_EVENTS_PLUGIN_URL', 'https://events.example/wp-content/plugins/extrachill-events/' );

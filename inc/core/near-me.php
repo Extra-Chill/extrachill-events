@@ -263,16 +263,23 @@ function extrachill_events_near_me_content( string $content ): string {
 
 	// City browsing remains available while browser location is unresolved.
 	// Uses the same upcoming-count source and ordering as the events home
-	// "Active scenes" block (inc/home/location-badges.php): the shared
-	// /extrachill/v1/events/upcoming-counts route, backed by the
+	// "Active scenes" block (inc/home/location-badges.php): the
 	// extrachill/events-upcoming-counts ability and its inventory cache.
-	$request = new WP_REST_Request( 'GET', '/extrachill/v1/events/upcoming-counts' );
-	$request->set_query_params( array( 'taxonomy' => 'location' ) );
-	$response = rest_do_request( $request );
+	// The render path runs on the events site, so the owning ability is
+	// called directly instead of dispatching an internal REST request at
+	// itself; /extrachill/v1/events/upcoming-counts remains the HTTP surface
+	// for external consumers and mirrors this exact ability call.
+	$ability = wp_get_ability( 'extrachill/events-upcoming-counts' );
+	$results = $ability
+		? $ability->execute( array( 'taxonomy' => 'location' ) )
+		: new WP_Error(
+			'ability_unavailable',
+			__( 'extrachill/events-upcoming-counts ability is not available.', 'extrachill-events' )
+		);
 
-	$locations = $response->is_error()
+	$locations = is_wp_error( $results )
 		? array()
-		: extrachill_events_near_me_city_rows( (array) $response->get_data() );
+		: extrachill_events_near_me_city_rows( (array) $results );
 
 	if ( ! empty( $locations ) ) {
 		$cities_display = $has_location ? 'none' : 'block';

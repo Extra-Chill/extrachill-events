@@ -262,39 +262,30 @@ function extrachill_events_near_me_content( string $content ): string {
 	$html = (string) ob_get_clean() . $html;
 
 	// City browsing remains available while browser location is unresolved.
-	$locations = get_terms(
-		array(
-			'taxonomy'   => 'location',
-			'hide_empty' => true,
-			'orderby'    => 'count',
-			'order'      => 'DESC',
-			'number'     => 20,
-			'meta_query' => array(
-				array(
-					'key'     => '_location_coordinates',
-					'compare' => 'EXISTS',
-				),
-			),
-		)
-	);
+	// Uses the same upcoming-count source and ordering as the events home
+	// "Active scenes" block (inc/home/location-badges.php): the shared
+	// /extrachill/v1/events/upcoming-counts route, backed by the
+	// extrachill/events-upcoming-counts ability and its inventory cache.
+	$request = new WP_REST_Request( 'GET', '/extrachill/v1/events/upcoming-counts' );
+	$request->set_query_params( array( 'taxonomy' => 'location' ) );
+	$response = rest_do_request( $request );
 
-	if ( ! is_wp_error( $locations ) && ! empty( $locations ) ) {
+	$locations = $response->is_error()
+		? array()
+		: extrachill_events_near_me_city_rows( (array) $response->get_data() );
+
+	if ( ! empty( $locations ) ) {
 		$cities_display = $has_location ? 'none' : 'block';
 		$html          .= '<div class="near-me-cities" style="display:' . $cities_display . ';">';
 		$html          .= '<h2>' . esc_html__( 'Browse by City', 'extrachill-events' ) . '</h2>';
 		$html          .= '<div class="near-me-city-grid">';
 
 		foreach ( $locations as $location ) {
-			$url = get_term_link( $location );
-			if ( is_wp_error( $url ) ) {
-				continue;
-			}
-
 			$html .= sprintf(
 				'<a href="%s" class="near-me-city-card"><span class="near-me-city-name">%s</span><span class="near-me-city-count">%d events</span></a>',
-				esc_url( $url ),
-				esc_html( $location->name ),
-				$location->count
+				esc_url( $location['url'] ),
+				esc_html( $location['name'] ),
+				$location['count']
 			);
 		}
 

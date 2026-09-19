@@ -131,17 +131,11 @@ jobs:
         if: ${{ matrix.command == 'review test' }}
         run: test -f .ci/extrachill-link-pages/extrachill-link-pages.php
 
-      # phpunit comes from the Homeboy wordpress extension rather than a local
-      # vendor/bin, which this repository no longer populates.
       - name: Run coordinated Link Pages tests
         if: ${{ matrix.command == 'review test' }}
         run: |
-          homeboy extension exec wordpress -- \
-            "$HOMEBOY_EXTENSION_PATH/vendor/bin/phpunit" \
-            --configuration phpunit.xml.dist tests/VenueLinkPagesCoordinatedRuntimeTest.php
-          homeboy extension exec wordpress -- \
-            "$HOMEBOY_EXTENSION_PATH/vendor/bin/phpunit" \
-            --configuration phpunit.xml.dist tests/PromoterLinkPagesCoordinatedRuntimeTest.php
+          vendor/bin/phpunit --configuration phpunit.xml.dist tests/VenueLinkPagesCoordinatedRuntimeTest.php
+          vendor/bin/phpunit --configuration phpunit.xml.dist tests/PromoterLinkPagesCoordinatedRuntimeTest.php
 
       - name: Select managed WordPress suite
         if: ${{ matrix.command == 'review test' }}

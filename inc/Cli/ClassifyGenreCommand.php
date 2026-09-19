@@ -177,7 +177,10 @@ class ClassifyGenreCommand {
 	 *
 	 * [--ai]
 	 * : Run the constrained AI pass for artists the deterministic pass could
-	 *   not resolve. On by default.
+	 *   not resolve. On by default. Declared so WP-CLI accepts `--no-ai`:
+	 *   it resolves a negation to `ai => false` and rejects it outright
+	 *   unless the positive flag exists, so declaring only `[--no-ai]`
+	 *   made the zero-cost run fail with "unknown --ai parameter".
 	 *
 	 * [--no-ai]
 	 * : Skip the AI pass entirely (deterministic proposals only; zero AI
@@ -227,14 +230,6 @@ class ClassifyGenreCommand {
 
 		$apply          = ! empty( $assoc_args['apply'] );
 		$overwrite      = ! empty( $assoc_args['overwrite'] );
-		/*
-		 * WP-CLI resolves `--no-ai` to `ai => false` rather than leaving a
-		 * literal `no-ai` key, and it rejects the negation outright unless the
-		 * positive flag is declared in the synopsis too. Declaring only
-		 * `[--no-ai]` therefore made the documented zero-cost run fail with
-		 * "unknown --ai parameter" — the one path that avoids spending money
-		 * was the one that could not be invoked.
-		 */
 		$no_ai          = ! \WP_CLI\Utils\get_flag_value( $assoc_args, 'ai', true );
 		$min_confidence = isset( $assoc_args['min-confidence'] ) ? (float) $assoc_args['min-confidence'] : 0.7;
 		$min_events     = isset( $assoc_args['min-events'] ) ? (int) $assoc_args['min-events'] : 5;

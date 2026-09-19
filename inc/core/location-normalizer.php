@@ -232,7 +232,21 @@ function extrachill_events_get_country_continent_map(): array {
  * @return string Display name, or '' when the country is not recognised.
  */
 function extrachill_events_get_country_display_name( string $country ): string {
-	$names = array(
+	$names = extrachill_events_get_country_display_name_map();
+
+	return $names[ $country ] ?? '';
+}
+
+/**
+ * Canonical country display names keyed by lowercase identity.
+ *
+ * Extracted so repair tooling can tell structural country roots from
+ * polluted city/venue roots (#854).
+ *
+ * @return array<string, string> Lowercase identity => display name.
+ */
+function extrachill_events_get_country_display_name_map(): array {
+	return array(
 		'united states'  => 'United States',
 		'canada'         => 'Canada',
 		'mexico'         => 'Mexico',
@@ -303,8 +317,33 @@ function extrachill_events_get_country_display_name( string $country ): string {
 		'brasil'         => 'Brasil',
 		'br'             => 'Brasil',
 	);
+}
 
-	return $names[ $country ] ?? '';
+/**
+ * Whether a root location term name is structural — a continent or a known
+ * country display name — rather than a city or venue-named term (#854).
+ *
+ * @param string $name Root term name.
+ * @return bool
+ */
+function extrachill_events_is_structural_location_root_name( string $name ): bool {
+	$key = extrachill_events_location_identity_key( $name );
+
+	$continents = array(
+		'africa',
+		'antarctica',
+		'asia',
+		'europe',
+		'north america',
+		'oceania',
+		'south america',
+	);
+	if ( in_array( $key, $continents, true ) ) {
+		return true;
+	}
+
+	$countries = array_map( 'extrachill_events_location_identity_key', array_values( extrachill_events_get_country_display_name_map() ) );
+	return in_array( $key, $countries, true );
 }
 
 /**
@@ -328,6 +367,112 @@ function extrachill_events_city_looks_like_venue( string $city ): bool {
 	}
 
 	return mb_strlen( $city ) > 40;
+}
+
+/**
+ * Whether a candidate city name positively resolves to a real populated
+ * place in a country, via the GeoNames search API.
+ *
+ * Positive validation for term creation (#854): keyword blacklists cannot
+ * generalise across languages, so a candidate that survives the venue-shape
+ * guard must still name a real city in the venue's country before a term is
+ * created. Outcomes:
+ *
+ * - true  — GeoNames lists a populated place whose name matches the candidate.
+ * - false — GeoNames answered but lists no such place: the candidate is junk.
+ * - null  — cannot validate (no username, unrecognised country, transport
+ *           or API failure). Callers MUST fail closed: refuse creation and
+ *           leave the event unassigned. An unassigned event is recoverable;
+ *           a polluted taxonomy root is not.
+ *
+ * Results are cached in transients: positive and negative answers for 30
+ * days, unknown outcomes for an hour so a failing API is not hammered.
+ *
+ * @param string $city          Candidate city name.
+ * @param string $country_name  Canonical country display name.
+ * @return bool|null Validated-present, validated-absent, or unknown.
+ */
+function extrachill_events_validate_city_in_country( string $city, string $country_name ): ?bool {
+	$city         = trim( $city );
+	$country_name = trim( $country_name );
+	if ( '' === $city || '' === $country_name ) {
+		return null;
+	}
+
+	$iso2 = extrachill_events_get_country_iso2_map()[ $country_name ] ?? '';
+	if ( '' === $iso2 ) {
+		return null;
+	}
+
+	$cache_key = 'ec_events_city_check_' . md5( extrachill_events_location_identity_key( $city ) . '|' . $iso2 );
+	$cached    = get_transient( $cache_key );
+	if ( false !== $cached ) {
+		if ( '1' === $cached ) {
+			return true;
+		}
+		if ( '0' === $cached ) {
+			return false;
+		}
+		return null;
+	}
+
+	$username = apply_filters( 'extrachill_events_geonames_username', extrachill_events_get_geonames_username() );
+	if ( '' === trim( (string) $username ) ) {
+		return null;
+	}
+
+	$url = add_query_arg(
+		array(
+			'name_startsWith' => $city,
+			'featureClass'    => 'P',
+			'country'         => $iso2,
+			'maxRows'         => 10,
+			'username'        => (string) $username,
+		),
+		'https://secure.geonames.org/searchJSON'
+	);
+
+	$response = wp_remote_get( $url, array( 'timeout' => 10 ) );
+	if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+		set_transient( $cache_key, 'unknown', HOUR_IN_SECONDS );
+		return null;
+	}
+
+	$data = json_decode( (string) wp_remote_retrieve_body( $response ), true );
+	if ( ! is_array( $data ) || isset( $data['status'] ) || ! isset( $data['geonames'] ) || ! is_array( $data['geonames'] ) ) {
+		set_transient( $cache_key, 'unknown', HOUR_IN_SECONDS );
+		return null;
+	}
+
+	$city_key = extrachill_events_location_identity_key( $city );
+	foreach ( $data['geonames'] as $place ) {
+		if ( ! is_array( $place ) || ! isset( $place['name'] ) ) {
+			continue;
+		}
+		if ( extrachill_events_location_identity_key( (string) $place['name'] ) === $city_key ) {
+			set_transient( $cache_key, '1', 30 * DAY_IN_SECONDS );
+			return true;
+		}
+	}
+
+	set_transient( $cache_key, '0', 30 * DAY_IN_SECONDS );
+	return false;
+}
+
+/**
+ * GeoNames API username for city validation.
+ *
+ * Reuses the Data Machine Events setting when the substrate is active so
+ * operators configure one credential; otherwise empty (validation is
+ * unavailable and term creation fails closed for international cities).
+ *
+ * @return string Username, or '' when unconfigured.
+ */
+function extrachill_events_get_geonames_username(): string {
+	if ( class_exists( \DataMachineEvents\Core\GeoNamesService::class ) ) {
+		return (string) \DataMachineEvents\Core\GeoNamesService::getUsername();
+	}
+	return '';
 }
 
 /**
@@ -370,8 +515,11 @@ function extrachill_events_find_or_create_location_child( string $name, int $par
  * Builds `Continent > Country > City` (or `Country > City` when the country
  * has no known continent parent), and `Country > State > City` for the US.
  * Only fires when nothing matched, and refuses to create anything for an
- * unrecognised country or a city that looks like a venue/address. Never
- * uses AI free text — inputs are the venue term's own normalized metadata.
+ * unrecognised country or a city that looks like a venue/address. For
+ * international venues the candidate city must additionally validate
+ * positively against GeoNames (#854): a candidate that cannot be validated
+ * fails closed instead of creating a root or misparented term. Never uses
+ * AI free text — inputs are the venue term's own normalized metadata.
  *
  * @param string $venue_city  Venue city (trimmed).
  * @param string $venue_state Venue state, used only for US-style hierarchies.
@@ -385,6 +533,23 @@ function extrachill_events_create_location_term_from_venue( string $venue_city, 
 
 	$country_name = extrachill_events_get_country_display_name( extrachill_events_normalize_country_name( $country ) );
 	if ( '' === $country_name ) {
+		return null;
+	}
+
+	// Positive validation for international candidates (#854). The US path
+	// resolves through curated market maps and the state tree and is
+	// exempt; everything else must name a real populated place in the
+	// venue's country, and an unknown answer refuses creation.
+	if ( 'United States' !== $country_name && true !== extrachill_events_validate_city_in_country( $venue_city, $country_name ) ) {
+		do_action(
+			'datamachine_log',
+			'info',
+			'Location term creation refused: city failed country validation',
+			array(
+				'city'    => $venue_city,
+				'country' => $country_name,
+			)
+		);
 		return null;
 	}
 
@@ -443,9 +608,14 @@ function extrachill_events_create_location_term_from_venue( string $venue_city, 
 /**
  * Filter same-named location terms using canonical state/country ancestry.
  *
- * Location terms are hierarchical (Country > State > City). Compares the
- * venue's state (abbreviation or full name) against each candidate's parent
- * (state-level) term name.
+ * Location terms are hierarchical: `Country > State > City` (US) and
+ * `Continent > Country > City` (international, #854). A candidate matches
+ * when its direct parent is the venue's country (international trees), or
+ * — US-style — when the parent matches the venue's state and the
+ * grandparent matches the venue's country. The direct-country rule is
+ * authoritative: a venue's country beats any state/region string for
+ * international input, where `_venue_state` carries region names
+ * ("England", "Hamburg") that never appear as tree parents.
  *
  * @param array<int, \WP_Term> $matches     Location terms sharing a city name.
  * @param string               $venue_state Venue state ("SC" or "South Carolina").
@@ -460,7 +630,12 @@ function extrachill_events_filter_locations_by_hierarchy( array $matches, string
 	if ( $full_name ) {
 		$state_names[] = extrachill_events_location_identity_key( $full_name );
 	}
+
+	// Compare country identity through the canonical display name so code
+	// values ("DE", 47 live venues) match country tree terms ("Germany").
 	$country_name = extrachill_events_normalize_country_name( $country );
+	$display_name = extrachill_events_get_country_display_name( $country_name );
+	$country_key  = '' !== $display_name ? extrachill_events_location_identity_key( $display_name ) : $country_name;
 	$filtered     = array();
 
 	foreach ( $matches as $match ) {
@@ -473,13 +648,21 @@ function extrachill_events_filter_locations_by_hierarchy( array $matches, string
 			continue;
 		}
 
-		if ( '' !== $venue_state && ! in_array( extrachill_events_location_identity_key( $parent->name ), $state_names, true ) ) {
+		$parent_name = extrachill_events_location_identity_key( $parent->name );
+
+		if ( '' !== $country && $parent_name === $country_key ) {
+			// Direct country parent — the `Continent > Country > City` shape.
+			$filtered[] = $match;
+			continue;
+		}
+
+		if ( '' !== $venue_state && ! in_array( $parent_name, $state_names, true ) ) {
 			continue;
 		}
 
 		if ( '' !== $country ) {
 			$country_term = $parent->parent > 0 ? get_term( $parent->parent, 'location' ) : null;
-			if ( ! $country_term instanceof \WP_Term || extrachill_events_normalize_country_name( $country_term->name ) !== $country_name ) {
+			if ( ! $country_term instanceof \WP_Term || extrachill_events_location_identity_key( $country_term->name ) !== $country_key ) {
 				continue;
 			}
 		}
@@ -513,6 +696,7 @@ function extrachill_events_normalize_country_name( string $country ): string {
 		'us'                       => 'united states',
 		'usa'                      => 'united states',
 		'united states of america' => 'united states',
+		'unites states'            => 'united states',
 		'ca'                       => 'canada',
 		'can'                      => 'canada',
 		'mx'                       => 'mexico',
@@ -520,9 +704,54 @@ function extrachill_events_normalize_country_name( string $country ): string {
 		'gb'                       => 'united kingdom',
 		'gbr'                      => 'united kingdom',
 		'uk'                       => 'united kingdom',
+		// Endonyms seen in live venue metadata (#854). Identity keys are
+		// accent-folded, so accented source spellings land here unaccented.
+		'deutschland'              => 'germany',
+		'nederland'                => 'netherlands',
+		'espana'                   => 'spain',
 	);
 
 	return $aliases[ $country ] ?? $country;
+}
+
+/**
+ * Canonical country display name → ISO 3166-1 alpha-2 code.
+ *
+ * Used to scope GeoNames city validation to the venue's country (#854).
+ * Keys are the display names produced by extrachill_events_get_country_display_name().
+ *
+ * @return array<string, string>
+ */
+function extrachill_events_get_country_iso2_map(): array {
+	return array(
+		'United States'  => 'US',
+		'Canada'         => 'CA',
+		'Mexico'         => 'MX',
+		'United Kingdom' => 'GB',
+		'Sweden'         => 'SE',
+		'Norway'         => 'NO',
+		'Denmark'        => 'DK',
+		'Finland'        => 'FI',
+		'Iceland'        => 'IS',
+		'Germany'        => 'DE',
+		'France'         => 'FR',
+		'Spain'          => 'ES',
+		'Portugal'       => 'PT',
+		'Italy'          => 'IT',
+		'Netherlands'    => 'NL',
+		'Belgium'        => 'BE',
+		'Austria'        => 'AT',
+		'Switzerland'    => 'CH',
+		'Poland'         => 'PL',
+		'Czech Republic' => 'CZ',
+		'Ireland'        => 'IE',
+		'Greece'         => 'GR',
+		'Hungary'        => 'HU',
+		'Australia'      => 'AU',
+		'New Zealand'    => 'NZ',
+		'Japan'          => 'JP',
+		'Brasil'         => 'BR',
+	);
 }
 
 /**

@@ -33,12 +33,17 @@ function ec_events_enqueue_related_assets() {
 		wp_enqueue_style( 'wp-block-data-machine-events-calendar' );
 	}
 
-	// Enqueue custom related events styles
+	// Enqueue custom related events styles. filemtime() returns int|false,
+	// while wp_enqueue_style()'s $ver expects bool|string|null — cast, and fall
+	// back to null when the file is missing rather than emitting ver="".
+	$related_css = EXTRACHILL_EVENTS_PLUGIN_DIR . 'assets/css/related-events.css';
+	$related_ver = file_exists( $related_css ) ? (string) filemtime( $related_css ) : null;
+
 	wp_enqueue_style(
 		'ec-related-events',
 		EXTRACHILL_EVENTS_PLUGIN_URL . 'assets/css/related-events.css',
 		array(),
-		filemtime( EXTRACHILL_EVENTS_PLUGIN_DIR . 'assets/css/related-events.css' )
+		$related_ver
 	);
 }
 add_action( 'wp_enqueue_scripts', 'ec_events_enqueue_related_assets' );

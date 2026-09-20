@@ -54,11 +54,14 @@ final class ReconcileRootLocationsCommand {
 			$this->assert_apply_ready();
 		}
 
+		// 'fields' => 'all' is the default, but declaring it lets static analysis
+		// narrow the return to WP_Term[] instead of WP_Term[]|int[]|string[].
 		$terms = get_terms(
 			array(
 				'taxonomy'   => 'location',
 				'hide_empty' => false,
 				'number'     => 0,
+				'fields'     => 'all',
 			)
 		);
 		if ( is_wp_error( $terms ) ) {

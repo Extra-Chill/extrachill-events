@@ -490,6 +490,7 @@ function extrachill_events_find_or_create_location_child( string $name, int $par
 			'parent'     => $parent_id,
 			'name'       => $name,
 			'number'     => 1,
+			'fields'     => 'all',
 		)
 	);
 	if ( ! is_wp_error( $existing ) && ! empty( $existing ) ) {
@@ -782,6 +783,7 @@ function extrachill_events_get_location_terms_by_name( bool $reset = false ): ar
 			'taxonomy'   => 'location',
 			'hide_empty' => false,
 			'number'     => 0,
+			'fields'     => 'all',
 		)
 	);
 

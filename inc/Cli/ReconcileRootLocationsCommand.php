@@ -46,6 +46,7 @@ final class ReconcileRootLocationsCommand {
 		unset( $args );
 		if ( ! taxonomy_exists( 'location' ) ) {
 			\WP_CLI::error( 'The location taxonomy is not registered. Use --url=events.extrachill.com.' );
+			return;
 		}
 
 		$apply = ! empty( $assoc_args['apply'] );
@@ -62,6 +63,7 @@ final class ReconcileRootLocationsCommand {
 		);
 		if ( is_wp_error( $terms ) ) {
 			\WP_CLI::error( $terms->get_error_message() );
+			return;
 		}
 
 		$repair = $apply ? $this->repair_service() : null;
@@ -282,10 +284,9 @@ final class ReconcileRootLocationsCommand {
 			return null;
 		}
 
+		// $venues is a non-empty WP_Term[] here: the guard above rejects false,
+		// WP_Error and the empty array, so reset() cannot return false.
 		$venue = reset( $venues );
-		if ( ! $venue instanceof \WP_Term ) {
-			return null;
-		}
 
 		return extrachill_events_resolve_location_term_for_venue_city(
 			(string) get_term_meta( $venue->term_id, '_venue_city', true ),
@@ -318,10 +319,9 @@ final class ReconcileRootLocationsCommand {
 			return false;
 		}
 
+		// $venues is a non-empty WP_Term[] here: the guard above rejects false,
+		// WP_Error and the empty array, so reset() cannot return false.
 		$venue = reset( $venues );
-		if ( ! $venue instanceof \WP_Term ) {
-			return false;
-		}
 
 		$city    = trim( (string) get_term_meta( $venue->term_id, '_venue_city', true ) );
 		$country = trim( (string) get_term_meta( $venue->term_id, '_venue_country', true ) );
@@ -420,10 +420,12 @@ final class ReconcileRootLocationsCommand {
 			$ability = wp_get_ability( $ability_name );
 			if ( ! $ability ) {
 				\WP_CLI::error( sprintf( 'Apply requires the %s ability, but it is unavailable.', $ability_name ) );
+				return;
 			}
 
 			if ( true !== $ability->check_permissions() ) {
 				\WP_CLI::error( 'Apply requires an authorized WordPress administrator context for redirect management. Re-run with --user=<administrator-login-or-id>.' );
+				return;
 			}
 		}
 	}

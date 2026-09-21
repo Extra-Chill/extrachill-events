@@ -200,7 +200,7 @@ class PersistedQualificationContextTest extends TestCase {
 			do_action( 'wp_abilities_api_init' );
 
 		if ( null !== $existing ) {
-			$wp_filter['wp_abilities_api_init'] = $existing;
+			$wp_filter['wp_abilities_api_init'] = $existing; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Restoring the exact hook registry entries present before this isolated firing, same convention as ConcertStatsPublicProfileRenderTest::restore_url_policy_filters().
 		} else {
 			unset( $wp_filter['wp_abilities_api_init'] );
 		}

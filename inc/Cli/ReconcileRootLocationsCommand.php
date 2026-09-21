@@ -144,12 +144,12 @@ final class ReconcileRootLocationsCommand {
 	 * polluted root being repaired.
 	 *
 	 * @param object                 $term    Root candidate.
-	 * @param array<object>          $terms   All location terms.
+	 * @param array<\WP_Term>        $terms   All location terms.
 	 * @param bool                   $apply   Whether this is an apply run.
 	 * @param RootLocationRepair|null $repair Repair service (apply only).
 	 * @return array|null Report row, or null when the root is structural.
 	 */
-	public function polluted_root_row( object $term, array $terms, bool $apply, ?RootLocationRepair $repair ): ?array {
+	public function polluted_root_row( \WP_Term $term, array $terms, bool $apply, ?RootLocationRepair $repair ): ?array {
 		if ( 0 !== (int) ( $term->parent ?? 0 ) ) {
 			return null;
 		}
@@ -457,10 +457,10 @@ final class ReconcileRootLocationsCommand {
 	/**
 	 * Preflight redirect URLs, abilities, and existing-rule conflicts.
 	 *
-	 * @param object $duplicate Duplicate root location term.
-	 * @param object $canonical Canonical hierarchy location term.
+	 * @param \WP_Term $duplicate Duplicate root location term.
+	 * @param \WP_Term $canonical Canonical hierarchy location term.
 	 */
-	public function prepare_redirect( object $duplicate, object $canonical ) {
+	public function prepare_redirect( \WP_Term $duplicate, \WP_Term $canonical ) {
 		$from_link = get_term_link( $duplicate );
 		$to_link   = get_term_link( $canonical );
 		if ( is_wp_error( $from_link ) || is_wp_error( $to_link ) ) {

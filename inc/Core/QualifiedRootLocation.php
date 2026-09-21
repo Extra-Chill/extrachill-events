@@ -15,12 +15,12 @@ final class QualifiedRootLocation {
 	/**
 	 * Match a root "City, subdivision" term to one canonical hierarchy term.
 	 *
-	 * @param object        $root             Root candidate.
-	 * @param array<object> $terms            All location terms.
+	 * @param \WP_Term        $root             Root candidate.
+	 * @param array<\WP_Term> $terms            All location terms.
 	 * @param callable|null $hierarchy_filter Optional test seam matching the shared resolver callback.
-	 * @return array{status:string,canonical:?object,reason:string}
+	 * @return array{status:string,canonical:?\WP_Term,reason:string}
 	 */
-	public static function match( object $root, array $terms, ?callable $hierarchy_filter = null ): array {
+	public static function match( \WP_Term $root, array $terms, ?callable $hierarchy_filter = null ): array {
 		if ( 0 !== (int) ( $root->parent ?? 0 ) ) {
 			return self::result( 'not_candidate', null, 'term_is_not_root' );
 		}

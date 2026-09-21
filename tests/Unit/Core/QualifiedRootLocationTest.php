@@ -10,6 +10,26 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__, 3 ) . '/inc/Core/QualifiedRootLocation.php';
 
+// QualifiedRootLocation::match() is typed against WP_Term because production
+// only ever passes location terms from get_terms(). This pure suite has no
+// WordPress, so provide the minimal double the contract needs.
+if ( ! class_exists( 'WP_Term' ) ) {
+	// phpcs:disable Generic.Files.OneObjectStructurePerFile, Universal.Files.SeparateFunctionsFromOO -- Suite-local WP double; see #862.
+	class WP_Term {
+		public $term_id = 0;
+		public $name    = '';
+		public $parent  = 0;
+		public $count   = 0;
+
+		public function __construct( $data = null ) {
+			foreach ( (array) $data as $key => $value ) {
+				$this->$key = $value;
+			}
+		}
+	}
+	// phpcs:enable
+}
+
 /** Verifies exact U.S. and Canadian hierarchy matching. */
 final class QualifiedRootLocationTest extends TestCase {
 
@@ -92,12 +112,14 @@ final class QualifiedRootLocationTest extends TestCase {
 	 * @param string $name      Term name.
 	 * @param int    $parent_id Parent term ID.
 	 */
-	private function term( int $id, string $name, int $parent_id ): object {
-		return (object) array(
-			'term_id' => $id,
-			'name'    => $name,
-			'parent'  => $parent_id,
-			'count'   => 0,
+	private function term( int $id, string $name, int $parent_id ): \WP_Term {
+		return new \WP_Term(
+			(object) array(
+				'term_id' => $id,
+				'name'    => $name,
+				'parent'  => $parent_id,
+				'count'   => 0,
+			)
 		);
 	}
 }

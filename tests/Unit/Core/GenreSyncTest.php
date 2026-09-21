@@ -90,7 +90,10 @@ class GenreSyncTest extends TestCase {
 
 	public function test_union_returns_empty_for_no_usable_input(): void {
 		$this->assertSame( array(), GenreSync::union_genres( array() ) );
-		$this->assertSame( array(), GenreSync::union_genres( array( 11 => array(), 22 => 'nope' ) ) );
+		$this->assertSame( array(), GenreSync::union_genres( array(
+			11 => array(),
+			22 => 'nope',
+		) ) );
 	}
 
 	// --- decode_genre_slugs() ---

@@ -94,9 +94,13 @@ function extrachill_events_init_genre_sync() {
  * through the network CLI or abilities still runs — the network filter
  * guards only the automatic path.
  *
- * @param bool    $should_classify Whether the network will classify the post.
- * @param WP_Post $post            Post being considered.
- * @param string  $site_key        Network site key.
+ * @param bool   $should_classify Whether the network will classify the post.
+ * @param mixed  $post            Post under consideration. Typed loosely
+ *                                because a filter argument is whatever the
+ *                                caller passed, and this plugin does not own
+ *                                the call site — the instanceof below is a
+ *                                real guard, not a formality.
+ * @param string $site_key        Network site key.
  * @return bool False for the locked event post type, otherwise the input.
  */
 function extrachill_events_skip_network_genre_classification( $should_classify, $post, $site_key ) {

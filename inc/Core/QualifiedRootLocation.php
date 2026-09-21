@@ -21,16 +21,16 @@ final class QualifiedRootLocation {
 	 * @return array{status:string,canonical:?\WP_Term,reason:string}
 	 */
 	public static function match( \WP_Term $root, array $terms, ?callable $hierarchy_filter = null ): array {
-		if ( 0 !== (int) ( $root->parent ?? 0 ) ) {
+		if ( 0 !== (int) $root->parent ) {
 			return self::result( 'not_candidate', null, 'term_is_not_root' );
 		}
 
-		if ( ! preg_match( '/^(.+),\s*([^,]+)$/', trim( (string) ( $root->name ?? '' ) ), $parts ) ) {
+		if ( ! preg_match( '/^(.+),\s*([^,]+)$/', trim( (string) $root->name ), $parts ) ) {
 			return self::result( 'not_candidate', null, 'name_has_no_subdivision_qualifier' );
 		}
 
 		foreach ( $terms as $term ) {
-			if ( (int) ( $term->parent ?? 0 ) === (int) ( $root->term_id ?? 0 ) ) {
+			if ( (int) $term->parent === (int) $root->term_id ) {
 				return self::result( 'ambiguous', null, 'candidate_has_children' );
 			}
 		}
@@ -40,7 +40,7 @@ final class QualifiedRootLocation {
 		$matches     = array_values(
 			array_filter(
 				$terms,
-				static fn( object $term ): bool => self::key( $term->name ?? '' ) === $city && (int) ( $term->parent ?? 0 ) > 0
+				static fn( \WP_Term $term ): bool => self::key( $term->name ) === $city && $term->parent > 0
 			)
 		);
 
@@ -79,7 +79,7 @@ final class QualifiedRootLocation {
 	 * @param object|null $canonical Canonical term, when uniquely resolved.
 	 * @param string      $reason    Machine-readable reason.
 	 */
-	private static function result( string $status, ?object $canonical, string $reason ): array {
+	private static function result( string $status, ?\WP_Term $canonical, string $reason ): array {
 		return array(
 			'status'    => $status,
 			'canonical' => $canonical,

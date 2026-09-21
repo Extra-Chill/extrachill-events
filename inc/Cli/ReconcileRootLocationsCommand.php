@@ -143,19 +143,19 @@ final class ReconcileRootLocationsCommand {
 	 * left orphaning events, and an event is never pointed back at the
 	 * polluted root being repaired.
 	 *
-	 * @param object                 $term    Root candidate.
+	 * @param \WP_Term                 $term    Root candidate.
 	 * @param array<\WP_Term>        $terms   All location terms.
 	 * @param bool                   $apply   Whether this is an apply run.
 	 * @param RootLocationRepair|null $repair Repair service (apply only).
 	 * @return array|null Report row, or null when the root is structural.
 	 */
 	public function polluted_root_row( \WP_Term $term, array $terms, bool $apply, ?RootLocationRepair $repair ): ?array {
-		if ( 0 !== (int) ( $term->parent ?? 0 ) ) {
+		if ( 0 !== (int) $term->parent ) {
 			return null;
 		}
 
 		foreach ( $terms as $other ) {
-			if ( (int) ( $other->parent ?? 0 ) === (int) $term->term_id ) {
+			if ( (int) $other->parent === (int) $term->term_id ) {
 				return null;
 			}
 		}
@@ -351,7 +351,7 @@ final class ReconcileRootLocationsCommand {
 	 * Snapshots the original relationships and rolls back on any failure or
 	 * verification miss, mirroring RootLocationRepair's compensation.
 	 *
-	 * @param object        $term      Polluted root term.
+	 * @param \WP_Term        $term      Polluted root term.
 	 * @param array<int>    $event_ids Attached event post IDs.
 	 * @return bool Whether every event ended at its canonical location.
 	 */

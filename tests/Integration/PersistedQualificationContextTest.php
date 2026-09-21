@@ -2,12 +2,20 @@
 /**
  * Persisted-flow qualification integration coverage.
  *
+ * This suite runs under a sandbox runtime where core's real Abilities API
+ * (wp-includes/abilities-api.php) is already loaded. Test doubles are
+ * registered as genuine abilities via wp_register_ability() rather than
+ * through a hand-rolled global wp_get_ability() override — that override
+ * duplicated a capability the managed runtime already provides and fataled
+ * with "Cannot redeclare function wp_get_ability()" the moment this file
+ * was reachable from a sandbox suite. See
+ * https://github.com/Extra-Chill/extrachill-events/issues/846.
+ *
  * @package ExtraChillEvents\Tests\Unit\Core
  */
 
 namespace ExtraChillEvents\Tests\Unit\Core;
 
-	require_once __DIR__ . '/Stubs/persisted-qualification-global-stubs.php';
 	require_once __DIR__ . '/Stubs/persisted-qualification-stubs.php';
 	require_once __DIR__ . '/Stubs/wp-cli-stubs.php';
 
@@ -19,39 +27,101 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 	use PHPUnit\Framework\TestCase;
 
 	class PersistedQualificationContextTest extends TestCase {
+		/**
+		 * Ability names registered by the current test, for teardown cleanup.
+		 *
+		 * @var array<int,string>
+		 */
+		private array $registered_ability_names = array();
+
 		protected function setUp(): void {
 			parent::setUp();
-			$GLOBALS['ec_persisted_qualification_abilities'] = array();
-			ExecutionContext::$scope                           = array();
-			ExecutionContext::$classify_calls                  = 0;
-			ExecutionContext::$lifecycle_writes                = 0;
-			ExecutionContext::$classified_identifiers         = array();
-			FlowOps::$repairs                                  = array();
-			\WP_CLI::$logs                                    = array();
-			\WP_CLI::$formatted                               = array();
+			ExecutionContext::$scope                  = array();
+			ExecutionContext::$classify_calls         = 0;
+			ExecutionContext::$lifecycle_writes       = 0;
+			ExecutionContext::$classified_identifiers = array();
+			FlowOps::$repairs                         = array();
+			\WP_CLI::$logs                             = array();
+			\WP_CLI::$formatted                        = array();
+		}
+
+		protected function tearDown(): void {
+			foreach ( $this->registered_ability_names as $name ) {
+				if ( wp_get_ability( $name ) ) {
+					wp_unregister_ability( $name );
+				}
+			}
+			$this->registered_ability_names = array();
+			parent::tearDown();
+		}
+
+		/**
+		 * Registers a real ability for the duration of the current test only.
+		 *
+		 * `wp_register_ability()` requires `doing_action( 'wp_abilities_api_init' )`
+		 * to be true, and that hook has already fired once for every real
+		 * plugin ability by the time a test method runs. Re-firing it naively
+		 * would re-invoke every other subscriber too — each hitting an
+		 * "already registered" `_doing_it_wrong()` notice, which would trip
+		 * this suite's `beStrictAboutOutputDuringTests`/`failOnRisky` gates.
+		 *
+		 * Instead, every other subscriber on `wp_abilities_api_init` is
+		 * temporarily detached, the hook is fired with only this test's
+		 * registrar attached, and the original subscriber list is restored
+		 * immediately after — satisfying `doing_action()` for our own
+		 * registration without touching any real ability's registration
+		 * state.
+		 *
+		 * @param string   $name             Ability name, e.g. 'data-machine-events/test-event-scraper'.
+		 * @param callable $execute_callback Callback invoked with the ability's input.
+		 * @param array    $input_schema     JSON-Schema-shaped input schema. Defaults to a
+		 *                                   permissive object schema so callers that pass an
+		 *                                   array (every production call site here does) are
+		 *                                   forwarded to $execute_callback rather than rejected
+		 *                                   by validate_input().
+		 */
+		private function register_test_ability( string $name, callable $execute_callback, array $input_schema = array( 'type' => 'object' ) ): void {
+			if ( wp_get_ability( $name ) ) {
+				wp_unregister_ability( $name );
+			}
+
+			global $wp_filter;
+			$existing = $wp_filter['wp_abilities_api_init'] ?? null;
+			unset( $wp_filter['wp_abilities_api_init'] );
+
+			$registrar = static function () use ( $name, $execute_callback, $input_schema ): void {
+				wp_register_ability(
+					$name,
+					array(
+						'label'               => $name,
+						'description'         => 'Test double registered by PersistedQualificationContextTest.',
+						'category'            => 'extrachill-events',
+						'input_schema'        => $input_schema,
+						'execute_callback'    => $execute_callback,
+						'permission_callback' => '__return_true',
+					)
+				);
+			};
+
+			add_action( 'wp_abilities_api_init', $registrar );
+			do_action( 'wp_abilities_api_init' );
+
+			if ( null !== $existing ) {
+				$wp_filter['wp_abilities_api_init'] = $existing;
+			} else {
+				unset( $wp_filter['wp_abilities_api_init'] );
+			}
+
+			$this->registered_ability_names[] = $name;
 		}
 
 		public function test_real_ability_caller_passes_persisted_config_and_classifies_all_processed(): void {
-			$scraper = new class() {
-				public array $input = array();
+			$scraper_input = array();
 
-				public function get_input_schema(): array {
-					return array(
-						'properties' => array(
-							'handler_config' => array(
-								'properties' => array(
-									'source_url'       => array(),
-									'exclude_keywords' => array(),
-									'venue'            => array(),
-									'max_items'        => array(),
-								),
-							),
-						),
-					);
-				}
-
-				public function execute( array $input ): array {
-					$this->input = $input;
+			$this->register_test_ability(
+				'data-machine-events/test-event-scraper',
+				function ( $input ) use ( &$scraper_input ) {
+					$scraper_input = $input;
 					return array(
 						'success'         => true,
 						'extraction_info' => array(
@@ -69,12 +139,27 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 							),
 						),
 					);
-				}
-			};
+				},
+				array(
+					'type'       => 'object',
+					'properties' => array(
+						'target_url'     => array( 'type' => 'string' ),
+						'handler_config' => array(
+							'type'       => 'object',
+							'properties' => array(
+								'source_url'       => array( 'type' => 'string' ),
+								'exclude_keywords' => array( 'type' => 'string' ),
+								'venue'            => array( 'type' => 'integer' ),
+								'max_items'        => array( 'type' => 'integer' ),
+							),
+						),
+					),
+				)
+			);
 
-			$GLOBALS['ec_persisted_qualification_abilities']['data-machine-events/test-event-scraper'] = $scraper;
-			$GLOBALS['ec_persisted_qualification_abilities']['datamachine/test-handler']                = new class() {
-				public function execute(): array {
+			$this->register_test_ability(
+				'datamachine/test-handler',
+				function () {
 					return array(
 						'success'    => true,
 						'packets'    => array(
@@ -84,7 +169,7 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 						'truncation' => array( 'truncated' => false ),
 					);
 				}
-			};
+			);
 
 			$ability = new class() extends VenueQualificationAbilities {
 				protected function loadPersistedFlowContext( int $flow_id ): array {
@@ -116,16 +201,17 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 			$this->assertSame( 2, $result['production_context']['processed'] );
 			$this->assertSame( 0, $result['production_context']['production_eligible'] );
 			$this->assertTrue( $result['production_context']['complete'] );
-			$this->assertSame( 'comedy', $scraper->input['handler_config']['exclude_keywords'] );
-			$this->assertSame( 1491, $scraper->input['handler_config']['venue'] );
-			$this->assertArrayNotHasKey( 'venue_coordinates', $scraper->input['handler_config'] );
+			$this->assertSame( 'comedy', $scraper_input['handler_config']['exclude_keywords'] );
+			$this->assertSame( 1491, $scraper_input['handler_config']['venue'] );
+			$this->assertArrayNotHasKey( 'venue_coordinates', $scraper_input['handler_config'] );
 			$this->assertSame( 'step-42', ExecutionContext::$scope['flow_step_id'] );
 			$this->assertSame( '9001', ExecutionContext::$scope['job_id'] );
 		}
 
 		public function test_ad_hoc_mode_reports_missing_production_context(): void {
-			$GLOBALS['ec_persisted_qualification_abilities']['data-machine-events/test-event-scraper'] = new class() {
-				public function execute(): array {
+			$this->register_test_ability(
+				'data-machine-events/test-event-scraper',
+				function () {
 					return array(
 						'success'         => true,
 						'extraction_info' => array(
@@ -138,7 +224,7 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 						'event_data'      => array( 'items' => array( array(), array() ) ),
 					);
 				}
-			};
+			);
 
 			$result = ( new VenueQualificationAbilities() )->executeQualifyVenue(
 				array(
@@ -220,20 +306,13 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 			$this->install_inventory_abilities( 115 );
 			$qualification = $this->new_qualification_ability();
 			$calls         = array();
-			$GLOBALS['ec_persisted_qualification_abilities']['extrachill/qualify-venue'] = new class( $qualification, $calls ) {
-				private VenueQualificationAbilities $qualification;
-				public array $calls;
-
-				public function __construct( VenueQualificationAbilities $qualification, array &$calls ) {
-					$this->qualification = $qualification;
-					$this->calls         = &$calls;
+			$this->register_test_ability(
+				'extrachill/qualify-venue',
+				function ( $input ) use ( $qualification, &$calls ) {
+					$calls[] = $input;
+					return $qualification->executeQualifyVenue( $input );
 				}
-
-				public function execute( array $input ): array {
-					$this->calls[] = $input;
-					return $this->qualification->executeQualifyVenue( $input );
-				}
-			};
+			);
 
 			$this->new_command()->__invoke( array(), array( 'dry-run' => true, 'min-runs' => 1 ) );
 			$row = \WP_CLI::$formatted[0]['items'][0];
@@ -252,15 +331,12 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 		public function test_command_renders_incomplete_lifecycle_counts_as_non_authoritative(): void {
 			$this->install_inventory_abilities( 501 );
 			$qualification = $this->new_qualification_ability();
-			$GLOBALS['ec_persisted_qualification_abilities']['extrachill/qualify-venue'] = new class( $qualification ) {
-				private VenueQualificationAbilities $qualification;
-				public function __construct( VenueQualificationAbilities $qualification ) {
-					$this->qualification = $qualification;
+			$this->register_test_ability(
+				'extrachill/qualify-venue',
+				function ( $input ) use ( $qualification ) {
+					return $qualification->executeQualifyVenue( $input );
 				}
-				public function execute( array $input ): array {
-					return $this->qualification->executeQualifyVenue( $input );
-				}
-			};
+			);
 
 			$this->new_command()->__invoke( array(), array( 'dry-run' => true, 'min-runs' => 1 ) );
 			$row = \WP_CLI::$formatted[0]['items'][0];
@@ -273,8 +349,9 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 		}
 
 		public function test_stale_zero_command_proposes_in_dry_run_then_applies_only_when_confirmed(): void {
-			$GLOBALS['ec_persisted_qualification_abilities']['data-machine-events/test-event-scraper'] = new class() {
-				public function execute( array $input ): array {
+			$this->register_test_ability(
+				'data-machine-events/test-event-scraper',
+				function ( $input ) {
 					$qualified = 'https://venue.example/events' === $input['target_url'];
 					$items     = $qualified
 						? array(
@@ -294,30 +371,28 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 						'event_data'      => array( 'items' => $items ),
 					);
 				}
-			};
-			$GLOBALS['ec_persisted_qualification_abilities']['datamachine/test-handler'] = new class() {
-				public function execute(): array {
+			);
+			$this->register_test_ability(
+				'datamachine/test-handler',
+				function () {
 					return array(
 						'success'    => true,
 						'packets'    => array(),
 						'truncation' => array( 'truncated' => false ),
 					);
 				}
-			};
+			);
 			$qualification = $this->new_qualification_ability( 'https://venue.example/stale' );
 			$result        = $qualification->executeQualifyVenue( array( 'flow_id' => 42, 'persist_verdict' => false ) );
 			$this->assertSame( 0, $result['production_context']['production_eligible'] );
 			$this->assertSame( 'https://venue.example/events', $result['repair_proposal']['proposed'] );
 
-			$GLOBALS['ec_persisted_qualification_abilities']['extrachill/qualify-venue'] = new class( $result ) {
-				private array $result;
-				public function __construct( array $result ) {
-					$this->result = $result;
+			$this->register_test_ability(
+				'extrachill/qualify-venue',
+				function () use ( $result ) {
+					return $result;
 				}
-				public function execute(): array {
-					return $this->result;
-				}
-			};
+			);
 
 			$this->new_command()->__invoke( array(), array( 'dry-run' => true, 'min-runs' => 1 ) );
 			$this->assertSame( 'repair_proposed', \WP_CLI::$formatted[0]['items'][0]['action'] );
@@ -347,13 +422,11 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 					'startDate' => sprintf( '2026-08-%02d', ( ( $index - 1 ) % 28 ) + 1 ),
 				);
 			}
-			$GLOBALS['ec_persisted_qualification_abilities']['data-machine-events/test-event-scraper'] = new class( $items ) {
-				private array $items;
-				public function __construct( array $items ) {
-					$this->items = $items;
-				}
-				public function execute(): array {
-					$count = count( $this->items );
+
+			$this->register_test_ability(
+				'data-machine-events/test-event-scraper',
+				function () use ( $items ) {
+					$count = count( $items );
 					return array(
 						'success'         => true,
 						'extraction_info' => array(
@@ -363,20 +436,16 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 							'extracted_packet_count'    => $count,
 							'unique_source_event_count' => $count,
 						),
-						'event_data'      => array( 'items' => $this->items ),
+						'event_data'      => array( 'items' => $items ),
 					);
 				}
-			};
-			$GLOBALS['ec_persisted_qualification_abilities']['datamachine/test-handler'] = new class( $items ) {
-				private array $items;
-				public int $calls = 0;
-				public function __construct( array $items ) {
-					$this->items = $items;
-				}
-				public function execute(): array {
-					++$this->calls;
+			);
+
+			$this->register_test_ability(
+				'datamachine/test-handler',
+				function () use ( $items ) {
 					$packets = array();
-					foreach ( array_slice( $this->items, 0, 100 ) as $item ) {
+					foreach ( array_slice( $items, 0, 100 ) as $item ) {
 						$packets[] = array(
 							'data'     => array( 'body' => '{"event":{}}' ),
 							'metadata' => array(
@@ -391,10 +460,10 @@ namespace ExtraChillEvents\Tests\Unit\Core;
 					return array(
 						'success'    => true,
 						'packets'    => $packets,
-						'truncation' => array( 'truncated' => count( $this->items ) > 100 ),
+						'truncation' => array( 'truncated' => count( $items ) > 100 ),
 					);
 				}
-			};
+			);
 		}
 
 		private function new_qualification_ability( string $source_url = 'https://venue.example/events' ): VenueQualificationAbilities {

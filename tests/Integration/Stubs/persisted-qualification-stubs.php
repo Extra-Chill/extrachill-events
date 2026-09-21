@@ -7,9 +7,15 @@
 
 namespace ExtraChillEvents\Core;
 
-function wp_get_ability( string $name ) {
-	return $GLOBALS['ec_persisted_qualification_abilities'][ $name ] ?? null;
-}
+// wp_get_ability() is intentionally NOT stubbed here. QualifyFingerprinter
+// (this namespace) calls the bareword wp_get_ability(), which PHP resolves
+// against this namespace before falling back to the global function. This
+// suite runs under a sandbox runtime where core's real global
+// wp_get_ability() (wp-includes/abilities-api.php) is already loaded and
+// PersistedQualificationContextTest registers real test-double abilities
+// via wp_register_ability() — shadowing it here would silently defeat that
+// and resurrect the redeclaration risk fixed in
+// https://github.com/Extra-Chill/extrachill-events/issues/846.
 
 /**
  * @phpstan-assert-if-true \WP_Error $thing

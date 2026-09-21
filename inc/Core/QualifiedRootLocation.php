@@ -75,9 +75,10 @@ final class QualifiedRootLocation {
 	/**
 	 * Build one classification result.
 	 *
-	 * @param string      $status    Classification status.
-	 * @param object|null $canonical Canonical term, when uniquely resolved.
-	 * @param string      $reason    Machine-readable reason.
+	 * @param string        $status    Classification status.
+	 * @param \WP_Term|null $canonical Canonical term, when uniquely resolved.
+	 * @param string        $reason    Machine-readable reason.
+	 * @return array{status:string,canonical:?\WP_Term,reason:string}
 	 */
 	private static function result( string $status, ?\WP_Term $canonical, string $reason ): array {
 		return array(

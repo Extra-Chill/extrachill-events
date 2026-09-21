@@ -13,43 +13,7 @@
 
 use PHPUnit\Framework\TestCase;
 
-if ( ! function_exists( 'add_action' ) ) {
-	function add_action() {
-		return true;
-	}
-}
-
-if ( ! function_exists( 'apply_filters' ) ) {
-	function apply_filters( $name, $value ) {
-		unset( $name );
-		return $value;
-	}
-}
-
-if ( ! function_exists( 'do_blocks' ) ) {
-	function do_blocks( $content ) {
-		return $content;
-	}
-}
-
-if ( ! function_exists( 'wp_json_encode' ) ) {
-	function wp_json_encode( $data ) {
-		return (string) json_encode( $data );
-	}
-}
-
-if ( ! function_exists( 'is_tax' ) ) {
-	function is_tax( $taxonomies = array() ) {
-		unset( $taxonomies );
-		return (bool) ( $GLOBALS['test_is_tax'] ?? false );
-	}
-}
-
-if ( ! function_exists( 'wp_enqueue_script' ) ) {
-	function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $in_footer = false ) {
-		$GLOBALS['test_enqueued_scripts'][ $handle ] = compact( 'src', 'deps', 'ver', 'in_footer' );
-	}
-}
+require_once __DIR__ . '/Stubs/archive-layout-stubs.php';
 
 if ( ! defined( 'EXTRACHILL_EVENTS_PLUGIN_URL' ) ) {
 	define( 'EXTRACHILL_EVENTS_PLUGIN_URL', 'https://events.example/wp-content/plugins/extrachill-events/' );
@@ -105,9 +69,15 @@ final class ArchiveEventsFirstTest extends TestCase {
 		$this->assertStringContainsString( "add_action( 'extrachill_archive_below_calendar', 'extrachill_events_render_archive_scene_cta', 10 )", $cta );
 		$this->assertStringNotContainsString( 'extrachill_archive_below_description', $cta );
 
+		// Deliberate exception: the venue operator disclosure stays ABOVE the
+		// calendar. It is the claim entry point on every venue archive and is a
+		// collapsed <details> (about a heading's height), unlike the ~400px map
+		// and the sign-in prompt this test pins below. See
+		// VenueBookingInquiryRenderTest, which asserts the rendered order
+		// heading -> booking CTA -> operator action -> calendar.
 		$workspace = file_get_contents( $base . 'booking-console.php' );
-		$this->assertStringContainsString( "add_action( 'extrachill_archive_below_calendar', 'ec_events_render_venue_archive_workspace_action', 30 )", $workspace );
-		$this->assertStringNotContainsString( 'extrachill_archive_below_description', $workspace );
+		$this->assertStringContainsString( "add_action( 'extrachill_archive_below_description', 'ec_events_render_venue_archive_workspace_action', 8 )", $workspace );
+		$this->assertStringNotContainsString( 'extrachill_archive_below_calendar', $workspace );
 
 		// The standalone digest opt-in no longer renders as its own panel.
 		$digest = file_get_contents( $base . 'local-scene-digest.php' );

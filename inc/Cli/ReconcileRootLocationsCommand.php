@@ -2,6 +2,14 @@
 /**
  * Dry-run-first repair for qualified root location terms.
  *
+ * Handles two root-pollution classes (#854):
+ *  1. Qualified "City, Subdivision" duplicates — matched by
+ *     QualifiedRootLocation and repaired with a verified redirect.
+ *  2. Venue-named and unqualified city roots (e.g. "The Abbey",
+ *     "Hamburg") — classified here, repaired by resolving every attached
+ *     event's canonical location from its own venue metadata, then
+ *     deleting the polluted root only when no event is orphaned.
+ *
  * @package ExtraChillEvents\Cli
  */
 
@@ -12,11 +20,11 @@ use ExtraChillEvents\Core\RootLocationRepair;
 
 defined( 'ABSPATH' ) || exit;
 
-/** Reports and optionally repairs exact qualified root location duplicates. */
+/** Reports and optionally repairs root location terms that violate the canonical hierarchy. */
 final class ReconcileRootLocationsCommand {
 
 	/**
-	 * Report or reconcile safe "City, State/Province" root terms.
+	 * Report or reconcile unsafe root location terms.
 	 *
 	 * ## OPTIONS
 	 *
@@ -38,6 +46,7 @@ final class ReconcileRootLocationsCommand {
 		unset( $args );
 		if ( ! taxonomy_exists( 'location' ) ) {
 			\WP_CLI::error( 'The location taxonomy is not registered. Use --url=events.extrachill.com.' );
+			return;
 		}
 
 		$apply = ! empty( $assoc_args['apply'] );
@@ -45,15 +54,19 @@ final class ReconcileRootLocationsCommand {
 			$this->assert_apply_ready();
 		}
 
+		// 'fields' => 'all' is the default, but declaring it lets static analysis
+		// narrow the return to WP_Term[] instead of WP_Term[]|int[]|string[].
 		$terms = get_terms(
 			array(
 				'taxonomy'   => 'location',
 				'hide_empty' => false,
 				'number'     => 0,
+				'fields'     => 'all',
 			)
 		);
 		if ( is_wp_error( $terms ) ) {
 			\WP_CLI::error( $terms->get_error_message() );
+			return;
 		}
 
 		$repair = $apply ? $this->repair_service() : null;
@@ -61,13 +74,10 @@ final class ReconcileRootLocationsCommand {
 
 		foreach ( $terms as $term ) {
 			$match = QualifiedRootLocation::match( $term, $terms );
-			if ( 'not_candidate' === $match['status'] ) {
-				continue;
-			}
 
-			$status = $match['status'];
-			$reason = $match['reason'];
-			if ( 'safe_match' === $status ) {
+			if ( 'safe_match' === $match['status'] ) {
+				$status = $match['status'];
+				$reason = $match['reason'];
 				if ( $apply ) {
 					$result = $repair->repair( $term, $match['canonical'] );
 					$status = $result['status'];
@@ -75,17 +85,39 @@ final class ReconcileRootLocationsCommand {
 				} else {
 					$status = 'would_reconcile';
 				}
+
+				$rows[] = array(
+					'candidate_id'  => (int) $term->term_id,
+					'candidate'     => $term->name,
+					'canonical_id'  => $match['canonical'] ? (int) $match['canonical']->term_id : '',
+					'canonical'     => $match['canonical'] ? $match['canonical']->name : '',
+					'relationships' => (int) $term->count,
+					'status'        => $status,
+					'reason'        => $reason,
+				);
+				continue;
 			}
 
-			$rows[] = array(
-				'candidate_id'  => (int) $term->term_id,
-				'candidate'     => $term->name,
-				'canonical_id'  => $match['canonical'] ? (int) $match['canonical']->term_id : '',
-				'canonical'     => $match['canonical'] ? $match['canonical']->name : '',
-				'relationships' => (int) $term->count,
-				'status'        => $status,
-				'reason'        => $reason,
-			);
+			if ( 'not_candidate' !== $match['status'] && 'unresolved' !== $match['status'] ) {
+				$rows[] = array(
+					'candidate_id'  => (int) $term->term_id,
+					'candidate'     => $term->name,
+					'canonical_id'  => '',
+					'canonical'     => '',
+					'relationships' => (int) $term->count,
+					'status'        => $match['status'],
+					'reason'        => $match['reason'],
+				);
+				continue;
+			}
+
+			// #854: classify venue-named and unqualified city roots the
+			// qualified matcher cannot resolve. Structural roots
+			// (continents, countries, parent nodes) produce no row.
+			$row = $this->polluted_root_row( $term, $terms, $apply, $repair );
+			if ( null !== $row ) {
+				$rows[] = $row;
+			}
 		}
 
 		\WP_CLI\Utils\format_items(
@@ -96,6 +128,286 @@ final class ReconcileRootLocationsCommand {
 
 		if ( ! $apply ) {
 			\WP_CLI::log( 'Dry run: no redirects, relationships, or terms changed. Re-run with --apply only after reviewing every row.' );
+		}
+	}
+
+	/**
+	 * Build the report/repair row for one polluted root candidate.
+	 *
+	 * Returns null for structural roots: anything with children, any
+	 * continent, and any known country display name. Venue-named and
+	 * unqualified city roots are classified, and their attached events are
+	 * resolved to canonical locations derived from each event's own venue
+	 * metadata. A root is only deleted when every attached event resolves
+	 * (and, on apply, is reassigned and verified) — a root term is never
+	 * left orphaning events, and an event is never pointed back at the
+	 * polluted root being repaired.
+	 *
+	 * @param \WP_Term                 $term    Root candidate.
+	 * @param array<\WP_Term>        $terms   All location terms.
+	 * @param bool                   $apply   Whether this is an apply run.
+	 * @param RootLocationRepair|null $repair Repair service (apply only).
+	 * @return array|null Report row, or null when the root is structural.
+	 */
+	public function polluted_root_row( \WP_Term $term, array $terms, bool $apply, ?RootLocationRepair $repair ): ?array {
+		if ( 0 !== (int) $term->parent ) {
+			return null;
+		}
+
+		foreach ( $terms as $other ) {
+			if ( (int) $other->parent === (int) $term->term_id ) {
+				return null;
+			}
+		}
+
+		if ( ! function_exists( 'extrachill_events_is_structural_location_root_name' )
+			|| extrachill_events_is_structural_location_root_name( (string) $term->name ) ) {
+			return null;
+		}
+
+		$row = array(
+			'candidate_id'  => (int) $term->term_id,
+			'candidate'     => $term->name,
+			'canonical_id'  => '',
+			'canonical'     => '',
+			'relationships' => (int) $term->count,
+			'status'        => 'skipped',
+			'reason'        => 'classifier_unavailable',
+		);
+
+		if ( ! function_exists( 'extrachill_events_city_looks_like_venue' )
+			|| ! function_exists( 'extrachill_events_resolve_location_term_for_venue_city' ) ) {
+			return $row;
+		}
+
+		$class         = extrachill_events_city_looks_like_venue( (string) $term->name ) ? 'venue_named_root' : 'unqualified_city_root';
+		$row['reason'] = $class;
+
+		$event_ids = get_objects_in_term( (int) $term->term_id, 'location' );
+		if ( is_wp_error( $event_ids ) ) {
+			$event_ids = array();
+		}
+		$event_ids = array_map( 'intval', array_values( $event_ids ) );
+
+		if ( array() === $event_ids ) {
+			$row['status'] = 'not_candidate';
+			$row['reason'] = $class . '_empty_prune_orphans_scope';
+			return $row;
+		}
+
+		// Resolve every attached event against its own venue. In dry runs
+		// term creation stays off; unresolved events that the create path
+		// would still handle are predicted instead of resolved.
+		$canonical_ids     = array();
+		$predicted_creates = 0;
+		$unresolved        = 0;
+		foreach ( $event_ids as $event_id ) {
+			$canonical = $this->resolve_event_location( $event_id, $apply );
+			if ( $canonical instanceof \WP_Term && (int) $canonical->term_id !== (int) $term->term_id ) {
+				$canonical_ids[ (int) $canonical->term_id ] = (int) $canonical->term_id;
+				continue;
+			}
+			if ( ! $apply && $this->creation_would_succeed( $event_id ) ) {
+				++$predicted_creates;
+				continue;
+			}
+			++$unresolved;
+		}
+
+		if ( $unresolved > 0 ) {
+			$row['status'] = 'skipped';
+			$row['reason'] = $class . '_unresolved_events_block_deletion';
+			return $row;
+		}
+
+		if ( 0 === count( $canonical_ids ) && $predicted_creates > 0 ) {
+			$row['status'] = 'would_create_and_reconcile';
+			$row['reason'] = $class . '_canonical_created_on_apply';
+			return $row;
+		}
+
+		if ( 1 === count( $canonical_ids ) ) {
+			$canonical_id = (int) reset( $canonical_ids );
+			$canonical    = get_term( $canonical_id, 'location' );
+			if ( ! $canonical instanceof \WP_Term ) {
+				$row['status'] = 'failed';
+				$row['reason'] = $class . '_canonical_term_unreadable';
+				return $row;
+			}
+			$row['canonical_id'] = $canonical_id;
+			$row['canonical']    = $canonical->name;
+
+			if ( ! $apply ) {
+				$row['status'] = $predicted_creates > 0 ? 'would_create_and_reconcile' : 'would_reconcile';
+				$row['reason'] = $class . '_events_to_canonical_redirect_and_delete';
+				return $row;
+			}
+
+			$result = $repair instanceof RootLocationRepair ? $repair->repair( $term, $canonical ) : array(
+				'status' => 'failed',
+				'reason' => 'repair_service_unavailable',
+			);
+			$this->reset_location_name_cache();
+			$row['status'] = 'reconciled' === $result['status'] ? 'reconciled' : 'failed';
+			$row['reason'] = $class . '_' . $result['reason'];
+			return $row;
+		}
+
+		// Multiple canonicals: reassign each event to its own canonical and
+		// leave the emptied root for prune-orphans. No deletion here.
+		if ( ! $apply ) {
+			$row['status'] = $predicted_creates > 0 ? 'would_create_and_reassign' : 'would_reassign_only';
+			$row['reason'] = $class . '_multiple_canonicals_left_for_prune_orphans';
+			return $row;
+		}
+
+		$moved = $this->reassign_events( $term, $event_ids );
+		$this->reset_location_name_cache();
+		$row['status'] = $moved ? 'reassigned_no_delete' : 'failed';
+		$row['reason'] = $moved
+			? $class . '_events_reassigned_left_for_prune_orphans'
+			: $class . '_reassignment_failed_rolled_back';
+		return $row;
+	}
+
+	/**
+	 * Resolve one event's canonical location from its own venue metadata.
+	 *
+	 * @param int  $event_id Event post ID.
+	 * @param bool $create   Allow the resolver to create the canonical chain.
+	 * @return \WP_Term|null
+	 */
+	public function resolve_event_location( int $event_id, bool $create ): ?\WP_Term {
+		if ( ! function_exists( 'extrachill_events_resolve_location_term_for_venue_city' ) ) {
+			return null;
+		}
+
+		$venues = get_the_terms( $event_id, 'venue' );
+		if ( ! $venues || is_wp_error( $venues ) ) {
+			return null;
+		}
+
+		// $venues is a non-empty WP_Term[] here: the guard above rejects false,
+		// WP_Error and the empty array, so reset() cannot return false.
+		$venue = reset( $venues );
+
+		return extrachill_events_resolve_location_term_for_venue_city(
+			(string) get_term_meta( $venue->term_id, '_venue_city', true ),
+			(string) get_term_meta( $venue->term_id, '_venue_state', true ),
+			(string) get_term_meta( $venue->term_id, '_venue_zip', true ),
+			(string) get_term_meta( $venue->term_id, '_venue_country', true ),
+			$create
+		);
+	}
+
+	/**
+	 * Whether the create path would handle an event the match path could not.
+	 *
+	 * Dry-run prediction only — no terms are written. Mirrors the resolver's
+	 * own gates: venue-shaped cities and unrecognised countries refuse; an
+	 * international candidate must also validate positively against GeoNames.
+	 *
+	 * @param int $event_id Event post ID.
+	 * @return bool
+	 */
+	private function creation_would_succeed( int $event_id ): bool {
+		if ( ! function_exists( 'extrachill_events_get_country_display_name' )
+			|| ! function_exists( 'extrachill_events_normalize_country_name' )
+			|| ! function_exists( 'extrachill_events_city_looks_like_venue' ) ) {
+			return false;
+		}
+
+		$venues = get_the_terms( $event_id, 'venue' );
+		if ( ! $venues || is_wp_error( $venues ) ) {
+			return false;
+		}
+
+		// $venues is a non-empty WP_Term[] here: the guard above rejects false,
+		// WP_Error and the empty array, so reset() cannot return false.
+		$venue = reset( $venues );
+
+		$city    = trim( (string) get_term_meta( $venue->term_id, '_venue_city', true ) );
+		$country = trim( (string) get_term_meta( $venue->term_id, '_venue_country', true ) );
+		if ( '' === $city || extrachill_events_city_looks_like_venue( $city ) ) {
+			return false;
+		}
+
+		$country_name = extrachill_events_get_country_display_name( extrachill_events_normalize_country_name( $country ) );
+		if ( '' === $country_name ) {
+			return false;
+		}
+
+		if ( 'United States' === $country_name ) {
+			return true;
+		}
+
+		return function_exists( 'extrachill_events_validate_city_in_country' )
+			&& true === extrachill_events_validate_city_in_country( $city, $country_name );
+	}
+
+	/**
+	 * Reassign every attached event to its own canonical location.
+	 *
+	 * Snapshots the original relationships and rolls back on any failure or
+	 * verification miss, mirroring RootLocationRepair's compensation.
+	 *
+	 * @param \WP_Term        $term      Polluted root term.
+	 * @param array<int>    $event_ids Attached event post IDs.
+	 * @return bool Whether every event ended at its canonical location.
+	 */
+	private function reassign_events( object $term, array $event_ids ): bool {
+		$original = array();
+		foreach ( $event_ids as $event_id ) {
+			$terms = wp_get_object_terms( $event_id, 'location', array( 'fields' => 'ids' ) );
+			if ( is_wp_error( $terms ) ) {
+				return false;
+			}
+			$original[ $event_id ] = array_map( 'intval', (array) $terms );
+		}
+
+		$targets = array();
+		foreach ( $event_ids as $event_id ) {
+			$canonical = $this->resolve_event_location( $event_id, true );
+			if ( ! $canonical instanceof \WP_Term || (int) $canonical->term_id === (int) $term->term_id ) {
+				return $this->rollback_reassignment( $original );
+			}
+			$targets[ $event_id ] = (int) $canonical->term_id;
+		}
+
+		foreach ( $targets as $event_id => $canonical_id ) {
+			$result = wp_set_object_terms( $event_id, array( $canonical_id ), 'location', false );
+			if ( is_wp_error( $result ) ) {
+				return $this->rollback_reassignment( $original );
+			}
+		}
+
+		foreach ( $targets as $event_id => $canonical_id ) {
+			$terms = wp_get_object_terms( $event_id, 'location', array( 'fields' => 'ids' ) );
+			if ( is_wp_error( $terms ) || ! in_array( $canonical_id, array_map( 'intval', (array) $terms ), true ) ) {
+				return $this->rollback_reassignment( $original );
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Restore original event locations after a failed reassignment.
+	 *
+	 * @param array<int, array<int>> $original Original relationships by event ID.
+	 * @return bool False — the reassignment did not complete.
+	 */
+	private function rollback_reassignment( array $original ): bool {
+		foreach ( $original as $event_id => $term_ids ) {
+			wp_set_object_terms( $event_id, $term_ids, 'location', false );
+		}
+		return false;
+	}
+
+	/** Drop the resolver's per-request location-name cache after term writes. */
+	private function reset_location_name_cache(): void {
+		if ( function_exists( 'extrachill_events_get_location_terms_by_name' ) ) {
+			extrachill_events_get_location_terms_by_name( true );
 		}
 	}
 
@@ -111,10 +423,12 @@ final class ReconcileRootLocationsCommand {
 			$ability = wp_get_ability( $ability_name );
 			if ( ! $ability ) {
 				\WP_CLI::error( sprintf( 'Apply requires the %s ability, but it is unavailable.', $ability_name ) );
+				return;
 			}
 
 			if ( true !== $ability->check_permissions() ) {
 				\WP_CLI::error( 'Apply requires an authorized WordPress administrator context for redirect management. Re-run with --user=<administrator-login-or-id>.' );
+				return;
 			}
 		}
 	}
@@ -143,10 +457,10 @@ final class ReconcileRootLocationsCommand {
 	/**
 	 * Preflight redirect URLs, abilities, and existing-rule conflicts.
 	 *
-	 * @param object $duplicate Duplicate root location term.
-	 * @param object $canonical Canonical hierarchy location term.
+	 * @param \WP_Term $duplicate Duplicate root location term.
+	 * @param \WP_Term $canonical Canonical hierarchy location term.
 	 */
-	public function prepare_redirect( object $duplicate, object $canonical ) {
+	public function prepare_redirect( \WP_Term $duplicate, \WP_Term $canonical ) {
 		$from_link = get_term_link( $duplicate );
 		$to_link   = get_term_link( $canonical );
 		if ( is_wp_error( $from_link ) || is_wp_error( $to_link ) ) {

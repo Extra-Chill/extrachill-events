@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="tests/bootstrap.php" colors="true" beStrictAboutOutputDuringTests="true" beStrictAboutTestsThatDoNotTestAnything="true" failOnRisky="true" failOnWarning="true">
+	<testsuites>
+		<!--
+			qualified-root-unit: pure-PHP unit tests for root-location
+			qualification. Owns its file-level WP_Term double because sibling
+			pure suites define the same symbol; a shared suite would make
+			whichever file loads first win. See phpunit-near-me-unit.xml.dist
+			for the same reasoning, and #862 for paying the pattern down.
+		-->
+		<testsuite name="qualified-root-unit">
+			<file>tests/Unit/Core/QualifiedRootLocationTest.php</file>
+		</testsuite>
+	</testsuites>
+</phpunit>

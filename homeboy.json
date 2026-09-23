@@ -99,8 +99,8 @@
             "runtime": "host"
           },
           {
-            "name": "archive-layout-unit",
-            "config": "phpunit-archive-layout-unit.xml.dist",
+            "name": "qualified-root-unit",
+            "config": "phpunit-qualified-root-unit.xml.dist",
             "runtime": "host"
           },
           {

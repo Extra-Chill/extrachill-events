@@ -30,7 +30,8 @@
  */
 
 if ( ! function_exists( 'switch_to_blog' ) ) {
-	function switch_to_blog( $new_blog_id ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound -- shimming a WordPress core multisite function absent from this single-site runtime.
+	// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound,Generic.CodeAnalysis.UnusedFunctionParameter.Found -- shimming a WordPress core multisite function absent from this single-site runtime; $new_blog_id is required to match switch_to_blog()'s real signature, and is unused because there is only ever one blog to "switch" to.
+	function switch_to_blog( $new_blog_id ) {
 		return true;
 	}
 }

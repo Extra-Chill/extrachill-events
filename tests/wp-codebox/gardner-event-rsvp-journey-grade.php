@@ -23,10 +23,10 @@ if ( ! is_array( $fixture ) || empty( $fixture['event_id'] ) ) {
 	throw new RuntimeException( 'The Gardner event-RSVP fixture is missing; the journey cannot be graded.' );
 }
 
-$event_id              = (int) $fixture['event_id'];
-$gardner_id            = (int) $fixture['gardner_id'];
+$event_id                = (int) $fixture['event_id'];
+$gardner_id              = (int) $fixture['gardner_id'];
 $returning_subscriber_id = (int) $fixture['returning_subscriber_id'];
-$blog_id               = get_current_blog_id();
+$current_blog_id         = get_current_blog_id();
 
 $cases    = array();
 $findings = array();
@@ -101,7 +101,7 @@ $notif_table   = extrachill_users_notifications_table_name();
  * Gardner: single deliberate "Going" click (recipe step 4-5).
  * ---------------------------------------------------------------------------
  */
-$gardner_marked = function_exists( 'ec_users_is_event_marked' ) && ec_users_is_event_marked( $gardner_id, $event_id, $blog_id );
+$gardner_marked = function_exists( 'ec_users_is_event_marked' ) && ec_users_is_event_marked( $gardner_id, $event_id, $current_blog_id );
 gardner_case(
 	'gardner-going-completes',
 	'task-completion',
@@ -115,7 +115,7 @@ $gardner_rows = (int) $wpdb->get_var(
 		"SELECT COUNT(*) FROM {$concert_table} WHERE user_id = %d AND event_id = %d AND blog_id = %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is a trusted WordPress table identifier.
 		$gardner_id,
 		$event_id,
-		$blog_id
+		$current_blog_id
 	)
 );
 gardner_case(
@@ -152,7 +152,7 @@ gardner_case(
 );
 
 $reminder_pending = function_exists( 'as_next_scheduled_action' )
-	? as_next_scheduled_action( 'ec_users_send_show_reminder', array( $gardner_id, $event_id, $blog_id ) )
+	? as_next_scheduled_action( 'ec_users_send_show_reminder', array( $gardner_id, $event_id, $current_blog_id ) )
 	: false;
 gardner_case(
 	'free-beer-only-produces-reminder-no-confirmation',
@@ -160,9 +160,9 @@ gardner_case(
 	false !== $reminder_pending && ( ! is_array( $milestone_row ) || null === $milestone_row['emailed_at'] ),
 	'Find out what he needs to show at the door to claim "first beer is on Extra Chill".',
 	array(
-		'reminder_scheduled'        => false !== $reminder_pending,
-		'milestone_emailed_at'      => is_array( $milestone_row ) ? $milestone_row['emailed_at'] : null,
-		'note'                      => 'Product reality (verified, not a harness gap): marking Going produces only an in-app milestone notification now and a reminder ~2 days before the event. No confirmation screen, code, email, or anything else names how the free beer is claimed at the door. Filed as a product-decision/copy finding, not resolved here.',
+		'reminder_scheduled'   => false !== $reminder_pending,
+		'milestone_emailed_at' => is_array( $milestone_row ) ? $milestone_row['emailed_at'] : null,
+		'note'                 => 'Product reality (verified, not a harness gap): marking Going produces only an in-app milestone notification now and a reminder ~2 days before the event. No confirmation screen, code, email, or anything else names how the free beer is claimed at the door. Filed as a product-decision/copy finding, not resolved here.',
 	)
 );
 
@@ -177,7 +177,7 @@ $subscriber_rows = (int) $wpdb->get_var(
 		"SELECT COUNT(*) FROM {$concert_table} WHERE user_id = %d AND event_id = %d AND blog_id = %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$returning_subscriber_id,
 		$event_id,
-		$blog_id
+		$current_blog_id
 	)
 );
 gardner_case(
@@ -194,7 +194,10 @@ gardner_case(
 	'server-authorization',
 	'' === $subscriber_visibility || 'private' === $subscriber_visibility,
 	'Not have his RSVP made publicly visible just because he never opened a settings screen.',
-	array( 'stored_meta' => $subscriber_visibility, 'note' => 'Empty string is correct: absent meta is the private-by-default state extrachill-users#415 shipped.' )
+	array(
+		'stored_meta' => $subscriber_visibility,
+		'note'        => 'Empty string is correct: absent meta is the private-by-default state extrachill-users#415 shipped.',
+	)
 );
 
 /*
@@ -207,11 +210,11 @@ gardner_case(
  * runtime -- not re-litigated, not re-filed.
  */
 wp_set_current_user( 0 );
-$attendance = gardner_execute(
+$attendance     = gardner_execute(
 	'extrachill/get-event-attendance',
 	array(
 		'event_id'          => $event_id,
-		'blog_id'           => $blog_id,
+		'blog_id'           => $current_blog_id,
 		'include_attendees' => true,
 		'limit'             => 20,
 	)
@@ -220,7 +223,7 @@ $attendee_names = array();
 if ( is_array( $attendance ) && is_array( $attendance['attendees'] ?? null ) ) {
 	$attendee_names = wp_list_pluck( $attendance['attendees'], 'display_name' );
 }
-$count       = is_array( $attendance ) ? (int) ( $attendance['count'] ?? 0 ) : 0;
+$count                              = is_array( $attendance ) ? (int) ( $attendance['count'] ?? 0 ) : 0;
 $door_list_matches_shipped_decision = ! is_wp_error( $attendance )
 	&& in_array( 'Chris Gardner (Test Persona)', $attendee_names, true )
 	&& ! in_array( 'Returning Community Member (Test Persona)', $attendee_names, true )
@@ -231,10 +234,10 @@ gardner_case(
 	$door_list_matches_shipped_decision,
 	'Check the public attendee list at the door and understand who is actually coming.',
 	array(
-		'count'           => $count,
-		'listed_count'    => count( $attendee_names ),
-		'listed'          => $attendee_names,
-		'note'            => 'This is the known, already-decided product tension documented in extrachill-users#414/#415: a host at the door cannot verify a private attendee from this list. Not re-filed; verified only.',
+		'count'        => $count,
+		'listed_count' => count( $attendee_names ),
+		'listed'       => $attendee_names,
+		'note'         => 'This is the known, already-decided product tension documented in extrachill-users#414/#415: a host at the door cannot verify a private attendee from this list. Not re-filed; verified only.',
 	)
 );
 
@@ -245,7 +248,7 @@ gardner_case(
  * independent, PHP-level read of the same rendered content.
  * ---------------------------------------------------------------------------
  */
-$rendered = get_post_field( 'post_content', $event_id );
+$rendered    = get_post_field( 'post_content', $event_id );
 $event_block = has_block( 'data-machine-events/event-details', $rendered );
 gardner_case(
 	'event-still-shows-end-time-nowhere-visible',
@@ -254,7 +257,7 @@ gardner_case(
 	'Know what time the event actually ends without reading the whole description.',
 	array(
 		'has_event_block' => $event_block,
-		'note'             => 'Confirmed via EventDetails/render.php source read and the browser-step assertion on .event-date-time: only startTime ever renders in the visible info grid; endTime is captured in event data and schema.org JSON-LD but has no visible UI path. Filed against data-machine-events.',
+		'note'            => 'Confirmed via EventDetails/render.php source read and the browser-step assertion on .event-date-time: only startTime ever renders in the visible info grid; endTime is captured in event data and schema.org JSON-LD but has no visible UI path. Filed against data-machine-events.',
 	)
 );
 

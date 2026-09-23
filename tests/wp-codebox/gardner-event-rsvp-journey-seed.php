@@ -257,7 +257,7 @@ $post_content = "<!-- wp:data-machine-events/event-details {$block_attrs} -->\n"
 	. '<div class="wp-block-data-machine-events-event-details">' . $block_inner . "</div>\n"
 	. '<!-- /wp:data-machine-events/event-details -->';
 
-$event_id = wp_insert_post(
+$event_id                        = wp_insert_post(
 	array(
 		'post_type'    => 'data_machine_events',
 		'post_status'  => 'publish',
@@ -299,11 +299,17 @@ update_term_meta( $venue_id, '_venue_website', 'https://lofibrewing.com' );
  * Charleston (charleston) -- the same three-level structure the real
  * `/location/usa/south-carolina/charleston` archive URL reflects.
  */
-$usa = wp_insert_term( 'United States', 'location', array( 'slug' => 'usa' ) );
-$usa_id = is_wp_error( $usa ) ? (int) get_term_by( 'slug', 'usa', 'location' )->term_id : (int) $usa['term_id'];
-$sc = wp_insert_term( 'South Carolina', 'location', array( 'slug' => 'south-carolina', 'parent' => $usa_id ) );
-$sc_id = is_wp_error( $sc ) ? (int) get_term_by( 'slug', 'south-carolina', 'location' )->term_id : (int) $sc['term_id'];
-$charleston = wp_insert_term( 'Charleston', 'location', array( 'slug' => 'charleston', 'parent' => $sc_id ) );
+$usa        = wp_insert_term( 'United States', 'location', array( 'slug' => 'usa' ) );
+$usa_id     = is_wp_error( $usa ) ? (int) get_term_by( 'slug', 'usa', 'location' )->term_id : (int) $usa['term_id'];
+$sc         = wp_insert_term( 'South Carolina', 'location', array(
+	'slug'   => 'south-carolina',
+	'parent' => $usa_id,
+) );
+$sc_id      = is_wp_error( $sc ) ? (int) get_term_by( 'slug', 'south-carolina', 'location' )->term_id : (int) $sc['term_id'];
+$charleston = wp_insert_term( 'Charleston', 'location', array(
+	'slug'   => 'charleston',
+	'parent' => $sc_id,
+) );
 if ( is_wp_error( $charleston ) ) {
 	throw new RuntimeException( esc_html( 'Could not create the Charleston location term: ' . $charleston->get_error_message() ) );
 }
@@ -319,7 +325,7 @@ wp_set_object_terms( $event_id, 'Other', 'event_type', false );
  * _extrachill_priority_event = 1, which drives the promoted-event callout on
  * the Charleston location archive.
  */
-$priority = gardner_seed_execute(
+$priority                            = gardner_seed_execute(
 	'extrachill/set-priority-event',
 	array(
 		'event'    => (string) $event_id,
@@ -334,10 +340,10 @@ if ( is_wp_error( $priority ) ) {
 	$evidence['steps']['priority_event']['fallback'] = true;
 }
 
-$location_terms    = wp_get_post_terms( $event_id, 'location' );
-$venue_terms        = wp_get_post_terms( $event_id, 'venue' );
-$promoter_terms     = wp_get_post_terms( $event_id, 'promoter' );
-$event_type_terms   = wp_get_post_terms( $event_id, 'event_type' );
+$location_terms   = wp_get_post_terms( $event_id, 'location' );
+$venue_terms      = wp_get_post_terms( $event_id, 'venue' );
+$promoter_terms   = wp_get_post_terms( $event_id, 'promoter' );
+$event_type_terms = wp_get_post_terms( $event_id, 'event_type' );
 
 $evidence['steps']['taxonomy'] = array(
 	'location'   => wp_list_pluck( $location_terms, 'name' ),
@@ -353,7 +359,7 @@ $evidence['steps']['taxonomy'] = array(
  * startDate/startTime/endDate/endTime attributes) -- confirmed live in this
  * run. No separate write needed; just verify it actually landed.
  */
-$dates_row = \DataMachineEvents\Core\EventDatesTable::get( $event_id );
+$dates_row                        = \DataMachineEvents\Core\EventDatesTable::get( $event_id );
 $evidence['steps']['event_dates'] = array(
 	'ok'    => null !== $dates_row,
 	'start' => $dates_row->start_datetime ?? null,

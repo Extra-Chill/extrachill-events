@@ -23,7 +23,7 @@
  * @package ExtraChillEvents\Tests\MySQLIntegration
  */
 
-// phpcs:disable Generic.Files.OneObjectStructurePerFile.MultipleFound,Squiz.Commenting.FunctionComment.MissingParamTag,WordPress.DB.RestrictedFunctions,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- PHPUnit fixture keeps its probe provider local and requires a second raw MySQL session.
+// phpcs:disable Generic.Files.OneObjectStructurePerFile.MultipleFound,Squiz.Commenting.FunctionComment.MissingParamTag,WordPress.DB.RestrictedFunctions,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents,WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents,WordPress.WP.AlternativeFunctions.file_system_operations_fopen,WordPress.WP.AlternativeFunctions.file_system_operations_fwrite,WordPress.WP.AlternativeFunctions.unlink_unlink -- PHPUnit fixture keeps its probe provider local and requires a second raw MySQL session; forked-process proofs coordinate readiness/results via disposable local marker files (never user input), matching InternalBookingHoldConcurrencyMySQLProof's own established pattern (extrachill-events#870/#882).
 
 require_once __DIR__ . '/BookingMySQLIntegrationTestCase.php';
 

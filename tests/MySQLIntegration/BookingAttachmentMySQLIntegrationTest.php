@@ -213,7 +213,7 @@ class BookingAttachmentMySQLIntegrationTest extends BookingSecondSessionMySQLInt
 			. "mysql-csv-1,2026-07-01 00:00:00,2026-07-01 23:59:59,10,0,10000,500,0,0,9500,USD\n"
 			. "mysql-csv-2,2026-07-02 00:00:00,2026-07-02 23:59:59,5,0,5000,250,0,0,4750,USD\n";
 		$path               = wp_tempnam( 'ticket-sales.csv' );
-		file_put_contents( $path, $csv );
+		file_put_contents( $path, $csv ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- Disposable local test fixture file, not a filesystem operation on user-facing content.
 		$reference  = $this->provider->stage( $path, 'ticket-sales.csv', 'other_private_evidence' );
 		$attachment = $attachment_service->attach(
 			array(
@@ -242,7 +242,7 @@ class BookingAttachmentMySQLIntegrationTest extends BookingSecondSessionMySQLInt
 		$uncertain = new BookingCommitUncertainWpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
 		$uncertain->set_prefix( $original->base_prefix );
 		$uncertain->set_blog_id( $original->blogid, $original->siteid );
-		$wpdb = $uncertain;
+		$wpdb = $uncertain; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Swaps the connection to prove a lost commit acknowledgement; restored in the finally block below.
 		try {
 			$input   = array(
 				'booking_id'       => $booking['id'],
@@ -293,10 +293,10 @@ class BookingAttachmentMySQLIntegrationTest extends BookingSecondSessionMySQLInt
 			$this->assertSame( 'settlement_csv_evidence_invalid', $service->finalize( $finalize, $this->actor_id )->get_error_code() );
 			$this->assertSame( $settlement['id'], $service->get( $booking['id'], $this->actor_id )['id'] );
 		} finally {
-			$wpdb = $original;
+			$wpdb = $original; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Restores the real connection this test intentionally swapped above.
 			$uncertain->dbh->close();
 			if ( file_exists( $path ) ) {
-				unlink( $path );
+				unlink( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Disposable local test fixture file.
 			}
 		}
 	}
@@ -536,7 +536,7 @@ class BookingAttachmentMySQLIntegrationTest extends BookingSecondSessionMySQLInt
 		do_action( 'wp_abilities_api_init' );
 		remove_all_actions( 'wp_abilities_api_init' );
 		if ( null !== $previous ) {
-			$GLOBALS['wp_filter']['wp_abilities_api_init'] = $previous;
+			$GLOBALS['wp_filter']['wp_abilities_api_init'] = $previous; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- Restores the real wp_abilities_api_init hook state this test intentionally cleared above to isolate its own ability registration.
 		}
 		$abilities = array();
 		foreach ( $names as $name ) {

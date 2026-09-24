@@ -207,11 +207,11 @@
 		}
 
 		const button = result.querySelector( '.ec-rsvp-verify__redeem' );
-		const status = result.querySelector( '.ec-rsvp-verify__status' );
 		if ( ! button ) {
 			return;
 		}
 
+		const status = result.querySelector( '.ec-rsvp-verify__status' );
 		const eventId = parseInt( result.getAttribute( 'data-event-id' ), 10 );
 		const userId = parseInt( result.getAttribute( 'data-user-id' ), 10 );
 

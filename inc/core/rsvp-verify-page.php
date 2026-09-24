@@ -23,10 +23,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const EXTRACHILL_EVENTS_RSVP_VERIFY_REWRITE_VERSION = '1';
-
 /**
  * Register the /rsvp-verify/ rewrite rule.
+ *
+ * No dedicated flush-once mechanism here: inc/core/router-pages.php already
+ * owns exactly that job for this plugin's virtual pages
+ * (extrachill_events_maybe_flush_router_rewrites()) — this rule is folded
+ * into its existing version-bump rather than duplicating a second,
+ * independent site-wide flush_rewrite_rules() call. Check what already
+ * exists before adding new infrastructure.
  *
  * @hook init
  */
@@ -48,22 +53,6 @@ add_action( 'init', 'extrachill_events_rsvp_verify_rewrite_rules' );
 function extrachill_events_is_rsvp_verify_page(): bool {
 	return function_exists( 'ec_is_events_site' ) && ec_is_events_site() && '1' === (string) get_query_var( 'ec_rsvp_verify', '' );
 }
-
-/**
- * Flush rewrites once when this route is introduced.
- *
- * @hook init
- */
-function extrachill_events_maybe_flush_rsvp_verify_rewrites(): void {
-	if ( get_option( 'extrachill_events_rsvp_verify_rewrite_version' ) === EXTRACHILL_EVENTS_RSVP_VERIFY_REWRITE_VERSION ) {
-		return;
-	}
-
-	extrachill_events_rsvp_verify_rewrite_rules();
-	flush_rewrite_rules( false );
-	update_option( 'extrachill_events_rsvp_verify_rewrite_version', EXTRACHILL_EVENTS_RSVP_VERIFY_REWRITE_VERSION, false );
-}
-add_action( 'init', 'extrachill_events_maybe_flush_rsvp_verify_rewrites', 20 );
 
 /**
  * Prevent core from 404ing the virtual verify page before the template

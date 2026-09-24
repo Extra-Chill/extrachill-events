@@ -94,5 +94,20 @@ function extrachill_events_serve_rsvp_pass_qr(): void {
 	echo base64_decode( (string) $result['image'] );
 	exit;
 }
-add_action( 'admin_post_ec_rsvp_pass_qr', 'extrachill_events_serve_rsvp_pass_qr' );
-add_action( 'admin_post_nopriv_ec_rsvp_pass_qr', 'extrachill_events_serve_rsvp_pass_qr' );
+/**
+ * Register the QR endpoint's hooks, guarded on the canonical events site —
+ * matching every other hook registration in this plugin (this one was
+ * initially unguarded; not a functional bug on production, where this
+ * Network:false plugin only ever loads on events.extrachill.com, but
+ * inconsistent with the established pattern and a real gap on any
+ * multi-blog test/CI environment that loads the plugin more broadly).
+ */
+function extrachill_events_register_rsvp_pass_qr_hooks(): void {
+	if ( ! function_exists( 'ec_is_events_site' ) || ! ec_is_events_site() ) {
+		return;
+	}
+
+	add_action( 'admin_post_ec_rsvp_pass_qr', 'extrachill_events_serve_rsvp_pass_qr' );
+	add_action( 'admin_post_nopriv_ec_rsvp_pass_qr', 'extrachill_events_serve_rsvp_pass_qr' );
+}
+add_action( 'init', 'extrachill_events_register_rsvp_pass_qr_hooks', 1 );

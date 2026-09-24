@@ -31,7 +31,7 @@
 	 * @param {string} path
 	 * @param {string} method
 	 * @param {Object} data
-	 * @return {Promise}
+	 * @return {Promise} The apiFetch response promise.
 	 */
 	function apiFetch( path, method, data ) {
 		if ( ! window.wp || ! window.wp.apiFetch ) {

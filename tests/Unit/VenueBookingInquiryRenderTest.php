@@ -183,7 +183,14 @@ final class VenueBookingInquiryRenderTest extends WP_UnitTestCase {
 			$this->go_to( $archive_url );
 			$this->setExpectedDeprecated( 'Theme without header.php' );
 			$this->setExpectedDeprecated( 'Theme without footer.php' );
-			$this->setExpectedIncorrectUsage( 'WP_Styles::add' );
+			// A WP_Styles::add incorrect-usage notice used to fire during this
+			// render (presumably from the data-machine-events calendar block's
+			// style registration); it no longer does — setExpectedIncorrectUsage()
+			// now fails at tear-down because the expected notice never triggers.
+			// No product code here changed to cause this; whatever pinned
+			// dependency previously triggered it was fixed upstream. Removing a
+			// stale "expect this warning" assertion does not weaken any of this
+			// test's actual output assertions below (#884).
 			$output            = $this->render_archive();
 			$heading_position  = strpos( $output, 'class="page-title"' );
 			$cta_position      = strpos( $output, 'Submit a booking inquiry' );

@@ -233,7 +233,9 @@ class RsvpPassAbilities {
 			$rows[]  = array(
 				'user_id'      => $user_id,
 				'display_name' => (string) $attendee['display_name'],
-				'marked_at'    => (string) ( $attendee['marked_at'] ?? '' ),
+				// ec_users_get_event_attendees_full() always returns marked_at
+				// (non-nullable) — no ?? fallback needed here.
+				'marked_at'    => (string) $attendee['marked_at'],
 				'pass_status'  => $pass ? (string) $pass['status'] : '',
 				'redeemed_at'  => $pass && ! empty( $pass['redeemed_at'] ) ? (string) $pass['redeemed_at'] : '',
 			);

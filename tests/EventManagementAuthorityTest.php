@@ -247,6 +247,25 @@ final class EventManagementAuthorityTest extends TestCase {
 		$this->assertFalse( extrachill_events_user_can_manage_event( 15, self::EVENT_ID ) );
 	}
 
+	/**
+	 * Pins the privacy boundary the review flagged: consolidating onto this
+	 * one shared check WIDENS door-list access (which shows private
+	 * attendees) to anyone with edit_post on the event — acceptable on
+	 * this install because events are authored by a shared "Extra Chill
+	 * Staff" account and only two admins/editors hold edit_others_posts;
+	 * author/contributor/extra_chill_team can only edit_post on posts they
+	 * personally authored. A contributor who did NOT author this event
+	 * therefore has no edit_post capability on it, and — with no
+	 * promoter/venue membership either — must still be denied.
+	 */
+	public function test_a_contributor_who_did_not_author_the_event_cannot_see_its_door_list(): void {
+		// The contributor authored some OTHER post, never this event — the
+		// same shape WordPress's own map_meta_cap would produce.
+		$GLOBALS['event_management_test']['editable_posts'][30] = array( 111111 );
+
+		$this->assertFalse( extrachill_events_user_can_manage_event( 30, self::EVENT_ID ) );
+	}
+
 	public function test_a_nonexistent_event_is_denied(): void {
 		$this->assertFalse( extrachill_events_user_can_manage_event( 42, 999999 ) );
 	}

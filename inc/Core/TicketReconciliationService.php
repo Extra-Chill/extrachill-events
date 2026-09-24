@@ -731,7 +731,7 @@ class TicketReconciliationService {
 			return $this->csv_record_error( 'sales_csv_line_too_long', __( 'A CSV record exceeds the bounded line length.', 'extrachill-events' ), $row );
 		}
 		$line   = rtrim( $line, "\r\n" );
-		$values = str_getcsv( $line );
+		$values = str_getcsv( $line, ',', '"', '\\' );
 		if ( false !== strpos( $line, '"' ) && 1 === substr_count( $line, '"' ) % 2 ) {
 			return $this->csv_record_error( 'sales_csv_multiline_forbidden', __( 'Multiline or unterminated CSV fields are not supported.', 'extrachill-events' ), $row );
 		}

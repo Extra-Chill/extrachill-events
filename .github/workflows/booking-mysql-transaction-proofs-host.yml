@@ -134,6 +134,15 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      - name: Install Data Machine Events dependencies
+        # BookingEventSyncMySQLIntegrationTest exercises DME's real public
+        # data-machine-events/upsert-event ability. Its class
+        # (EventUpsertAbilities) needs DME's own PSR-4 autoloader for
+        # transitive dependencies (e.g. EventSchemaProvider) — this checkout
+        # is source-only otherwise, with no generated vendor/autoload.php.
+        working-directory: .ci/data-machine-events
+        run: composer install --no-dev --no-interaction --no-progress --prefer-dist
+
       - name: Download WordPress core ${{ env.WP_PROOF_VERSION }}
         run: |
           curl --fail --silent --show-error --location \

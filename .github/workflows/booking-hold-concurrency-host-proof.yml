@@ -121,13 +121,12 @@ jobs:
 
       - name: Check out the matching WordPress core PHPUnit test library
         run: |
+          git clone --quiet --depth 1 --branch "${WP_PROOF_VERSION}" \
+            https://github.com/WordPress/wordpress-develop.git /tmp/wordpress-develop
           mkdir -p /tmp/wp-tests-lib
-          svn export --quiet \
-            "https://develop.svn.wordpress.org/tags/${WP_PROOF_VERSION}/tests/phpunit/includes/" \
-            /tmp/wp-tests-lib/includes
-          svn export --quiet \
-            "https://develop.svn.wordpress.org/tags/${WP_PROOF_VERSION}/tests/phpunit/data/" \
-            /tmp/wp-tests-lib/data
+          cp -R /tmp/wordpress-develop/tests/phpunit/includes /tmp/wp-tests-lib/includes
+          cp -R /tmp/wordpress-develop/tests/phpunit/data /tmp/wp-tests-lib/data
+          rm -rf /tmp/wordpress-develop
 
       - name: Wait for MySQL and create the disposable test database
         run: |

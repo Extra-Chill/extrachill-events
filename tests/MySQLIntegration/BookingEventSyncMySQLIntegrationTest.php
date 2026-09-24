@@ -83,6 +83,16 @@ final class BookingEventSyncMySQLIntegrationTest extends WP_UnitTestCase {
 		parent::tear_down();
 	}
 
+	/**
+	 * @group host-dme-abilities-registry-gap
+	 *
+	 * Needs the real `data-machine-events/upsert-event` ability. The managed
+	 * sandbox activates the full data-machine-events plugin and registers it
+	 * naturally; the booking-mysql host proof job's bootstrap does not yet
+	 * (see booking-mysql-host-bootstrap.php and extrachill-events#888), so
+	 * this one test is excluded there via --exclude-group. Runs normally
+	 * everywhere else.
+	 */
 	public function test_public_service_keeps_combined_update_invisible_and_multisite_scoped(): void {
 		global $wpdb;
 		$upsert = wp_get_ability( 'data-machine-events/upsert-event' );

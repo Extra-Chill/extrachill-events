@@ -30,8 +30,12 @@ require_once dirname( __DIR__, 3 ) . '/inc/admin/priority-events.php';
  */
 final class PromotedEventsResolverTest extends TestCase {
 
+	/** @var mixed Whatever $wpdb held before this test swapped in the fake — restored, never assumed null (#884). */
+	private $original_wpdb;
+
 	protected function setUp(): void {
 		parent::setUp();
+		$this->original_wpdb                   = $GLOBALS['wpdb'] ?? null;
 		$GLOBALS['promoted_events_test_cache'] = array();
 		global $wpdb;
 		$wpdb = new \PromotedEventsFakeWpdb();
@@ -50,7 +54,7 @@ final class PromotedEventsResolverTest extends TestCase {
 			$GLOBALS['test_local_scene']
 		);
 		global $wpdb;
-		$wpdb = null;
+		$wpdb = $this->original_wpdb;
 		parent::tearDown();
 	}
 

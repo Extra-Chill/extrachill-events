@@ -148,6 +148,7 @@ class PromotedEventsFakeWpdb {
 
 	public string $prefix             = 'wp_';
 	public string $posts              = 'wp_posts';
+	public string $postmeta           = 'wp_postmeta';
 	public string $term_relationships = 'wp_term_relationships';
 	public string $term_taxonomy      = 'wp_term_taxonomy';
 

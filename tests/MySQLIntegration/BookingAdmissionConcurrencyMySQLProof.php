@@ -1,7 +1,7 @@
 <?php
 /** Genuine two-process booking-admission MySQL integration proof. */
 
-require_once __DIR__ . '/BookingAttachmentMySQLIntegrationTest.php';
+require_once __DIR__ . '/BookingSecondSessionMySQLIntegrationTestCase.php';
 
 use ExtraChillEvents\Core\BookingActivityRepository;
 use ExtraChillEvents\Core\BookingAttachmentRepository;
@@ -47,8 +47,18 @@ final class ShowSettlementMySQLAttachmentService extends BookingAttachmentServic
 	}
 }
 
-/** Prove overlapping application processes converge on one complete winner. */
-final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
+/**
+ * Prove overlapping application processes converge on one complete winner.
+ *
+ * A sibling of BookingAttachmentMySQLIntegrationTest, not a descendant — see
+ * BookingSecondSessionMySQLIntegrationTestCase's docblock (#871/#884). This
+ * class's own tests use raw mysqli transactions
+ * (begin_transaction()/commit()) that PHP-WASM also traps
+ * (Automattic/wp-codebox#2518); every public test_* method below is guarded
+ * to skip cleanly in the sandbox and run for real in the host MySQL proof
+ * workflow.
+ */
+final class BookingAdmissionConcurrencyMySQLProof extends BookingSecondSessionMySQLIntegrationTestCase {
 	/** Prove overlapping source and report registrations converge after real lock contention. */
 	public function test_concurrent_source_and_report_registrations_converge_or_conflict_exactly(): void {
 		global $wpdb;
@@ -245,10 +255,20 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		);
 	}
 
-	/** Prove the loser replays the completed exact winner without duplicate effects. */
+	/**
+	 * Prove the loser replays the completed exact winner without duplicate effects.
+	 *
+	 * PHP-WASM has no pcntl; skip cleanly in the sandbox and run for real in
+	 * the host MySQL proof job (extrachill-events#870/#884). This was
+	 * previously a hard assertTrue() that would fail rather than skip — it
+	 * only ever ran that far because an earlier trap in this same suite
+	 * always killed the interpreter first (#871).
+	 */
 	public function test_concurrent_exact_inquiry_retry_reuses_one_complete_winner(): void {
+		if ( ! function_exists( 'pcntl_fork' ) ) {
+			$this->markTestSkipped( 'This proof requires pcntl_fork(), which is unavailable in the managed sandbox (PHP-WASM cannot fork real OS processes). It executes against real MySQL and real pcntl in the host MySQL proof workflow — see extrachill-events#870/#884.' );
+		}
 		global $wpdb;
-		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The MySQL concurrency proof requires pcntl_fork().' );
 		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );
 		$config_service    = new VenueBookingConfig();
 		$config            = $config_service->get( $this->venue_id );
@@ -490,8 +510,19 @@ final class BookingAdmissionConcurrencyMySQLProof extends BookingAttachmentMySQL
 		$this->assertTrue( in_array( $show->get_error_code(), array( 'show_settlement_not_found', 'show_settlement_commission_invalid' ), true ) );
 	}
 
-	/** Run two service calls while both are blocked behind the same booking lock. */
+	/**
+	 * Run two service calls while both are blocked behind the same booking lock.
+	 *
+	 * PHP-WASM has neither pcntl_fork() (used below via fork_service_call())
+	 * nor a working mysqli::begin_transaction()/rollback() (used here to hold
+	 * the booking lock the two forked contenders race against) — skip
+	 * cleanly in the sandbox and run for real in the host MySQL proof job
+	 * (Automattic/wp-codebox#2518, extrachill-events#870/#884).
+	 */
 	private function race_booking_services( int $booking_id, callable $first, callable $second, bool $first_commit_uncertain = false, bool $order_first = false ): array {
+		if ( ! function_exists( 'pcntl_fork' ) ) {
+			$this->markTestSkipped( 'This proof requires pcntl_fork() and a real mysqli::begin_transaction()/rollback(), neither of which is available in the managed sandbox (PHP-WASM). It executes against real MySQL and real pcntl in the host MySQL proof workflow — see extrachill-events#870/#884.' );
+		}
 		$bookings = BookingSchema::bookings_table();
 		$this->assertTrue( $this->contender->begin_transaction() );
 		$locked = $this->contender->query( "SELECT id FROM {$bookings} WHERE id = {$booking_id} FOR UPDATE" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Independent fixture connection deliberately owns the application lock.

@@ -76,6 +76,35 @@ function extrachill_events_rsvp_verify_query_flags( $query ): void {
 add_action( 'parse_query', 'extrachill_events_rsvp_verify_query_flags' );
 
 /**
+ * Exempt the verify route from page caching and answer its 200.
+ *
+ * Split out from the pre_handle_404 callback itself so this — the actual
+ * interesting behavior — is unit-testable without a real \WP_Query: this
+ * page's whole output depends on WHO is viewing and WHICH code is in the
+ * query string, so extrachill-cache's page cache (which keys anonymous 200
+ * GET responses by full URL including the query string — see
+ * wp-content/plugins/extrachill-cache/inc/cache-store.php — for a day)
+ * would otherwise cache the first logged-out visitor's result (including a
+ * "could not be verified" miss) and serve it to every later anonymous
+ * visitor of that exact ?code= URL for the cache's TTL. Both constants
+ * matter: DONOTCACHEPAGE is what extrachill-cache's own page-cache.php
+ * actually checks before storing a response; nocache_headers() covers
+ * browsers/any intermediate proxy on top of that.
+ *
+ * @return bool Always true — this is only called once the route is
+ *              confirmed to be the verify page.
+ */
+function extrachill_events_rsvp_verify_answer_uncached(): bool {
+	if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+		define( 'DONOTCACHEPAGE', true );
+	}
+	nocache_headers();
+
+	status_header( 200 );
+	return true;
+}
+
+/**
  * @hook pre_handle_404
  * @param bool|null $preempt Existing 404 preemption result.
  * @param \WP_Query $query   Main query.
@@ -86,8 +115,7 @@ function extrachill_events_rsvp_verify_pre_handle_404( $preempt, $query ) {
 		return $preempt;
 	}
 
-	status_header( 200 );
-	return true;
+	return extrachill_events_rsvp_verify_answer_uncached();
 }
 add_filter( 'pre_handle_404', 'extrachill_events_rsvp_verify_pre_handle_404', 10, 2 );
 

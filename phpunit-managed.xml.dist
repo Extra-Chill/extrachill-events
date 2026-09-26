@@ -22,6 +22,15 @@
 			     swapped out from under the shared test transaction. -->
 			<exclude>tests/Unit/Core/RsvpPassesTableTest.php</exclude>
 			<exclude>tests/Unit/Core/EventPerkTest.php</exclude>
+			<!-- PromotedEventsResolverTest is pure-PHP with its own $wpdb/wp_cache_*
+			     doubles (see phpunit-promoted-events-unit.xml.dist's own docblock);
+			     against real WordPress in this sandbox, the file-level
+			     function_exists()/class_exists() guards in Stubs/promoted-events-*
+			     lose to the real WP functions/classes, so the doubles never engage
+			     and $wpdb->postmeta resolves against a fake wpdb that never defined
+			     it. Missed when #866/#867 added this file, before the RSVP-perk
+			     exclusions above established the pattern (#884). -->
+			<exclude>tests/Unit/Core/PromotedEventsResolverTest.php</exclude>
 			<file>tests/Unit/Abilities/VenueQualificationTicketmasterPrecheckTest.php</file>
 			<file>tests/Unit/Abilities/CanonicalLocationsAbilityTest.php</file>
 			<file>tests/Unit/Abilities/PublicEntityProjectionsAbilityTest.php</file>

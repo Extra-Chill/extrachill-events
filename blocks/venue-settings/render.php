@@ -134,7 +134,11 @@ foreach ( $managed_venues as &$venue ) {
 	$venue_data              = function_exists( 'data_machine_events_get_venue_data' ) ? data_machine_events_get_venue_data( $venue_id ) : null;
 	$venue['timezone']       = is_array( $venue_data ) ? (string) ( $venue_data['timezone'] ?? '' ) : '';
 	$venue['link_page']      = array( 'status' => 'unavailable' );
-	if ( function_exists( 'ec_link_page_editor_is_available' ) && ec_link_page_editor_is_available() && function_exists( 'ec_get_link_page_id_for_owner' ) ) {
+	if (
+		function_exists( 'ec_link_page_editor_is_available' ) && ec_link_page_editor_is_available()
+		&& function_exists( 'ec_get_link_page_id_for_owner' )
+		&& class_exists( '\\ExtraChillEvents\\Core\\VenueLinkPages' )
+	) {
 		$reference = \ExtraChillEvents\Core\VenueLinkPages::owner_reference( $venue_id );
 		$page_id   = is_wp_error( $reference ) ? $reference : ec_get_link_page_id_for_owner( $reference );
 		if ( ! is_wp_error( $page_id ) ) {

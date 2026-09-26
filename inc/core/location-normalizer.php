@@ -353,7 +353,7 @@ function extrachill_events_find_or_create_location_child( string $name, int $par
 			'order'      => 'ASC',
 		)
 	);
-	if ( ! is_wp_error( $existing ) && ! empty( $existing ) && $existing[0] instanceof \WP_Term ) {
+	if ( ! is_wp_error( $existing ) && ! empty( $existing ) && $existing[0] instanceof \WP_Term ) { // @phpstan-ignore instanceof.alwaysTrue (get_terms()'s static return type is narrowed to WP_Term[] here, but a 'terms_clauses'/'get_terms' filter could still inject something else at runtime; kept as a genuine runtime guard.)
 		return $existing[0];
 	}
 
@@ -420,7 +420,7 @@ function extrachill_events_create_location_term_from_venue( string $venue_city, 
 				'number'     => 1,
 			)
 		);
-		if ( ! is_wp_error( $continent_terms ) && ! empty( $continent_terms ) && $continent_terms[0] instanceof \WP_Term ) {
+		if ( ! is_wp_error( $continent_terms ) && ! empty( $continent_terms ) && $continent_terms[0] instanceof \WP_Term ) { // @phpstan-ignore instanceof.alwaysTrue (same runtime guard as extrachill_events_find_or_create_location_child() above — a 'get_terms' filter could still inject something else at runtime.)
 			$parent_id = (int) $continent_terms[0]->term_id;
 		}
 	}

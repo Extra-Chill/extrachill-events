@@ -1,4 +1,5 @@
 <?php
+// phpcs:disable -- Purpose-built WordPress runtime stubs must share one isolated fixture.
 /**
  * Self-contained runtime-version contract fixture for
  * VenueLinkPagesProvider::validate_runtime().

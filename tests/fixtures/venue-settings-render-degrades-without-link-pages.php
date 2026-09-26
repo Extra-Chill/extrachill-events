@@ -1,4 +1,5 @@
 <?php
+// phpcs:disable -- Purpose-built WordPress runtime stubs must share one isolated fixture.
 /**
  * Regression fixture for #899: a Link Pages runtime contract mismatch (any
  * reason `VenueLinkPagesProvider::validate_runtime()` fails) leaves

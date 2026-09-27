@@ -53,6 +53,14 @@
 			<file>tests/Unit/Abilities/CanonicalAdapterContractsTest.php</file>
 			<file>tests/Unit/Abilities/ManagedVenueVoicesRestTest.php</file>
 			<file>tests/Unit/Abilities/PriorityBoostAbilityTest.php</file>
+			<!-- Needs the real WP test framework (WP_UnitTestCase) plus a live
+			     Data Machine install for datamachine/execute-workflow — both are
+			     present in this managed sandbox (data-machine and
+			     data-machine-events are validation_dependencies in
+			     homeboy.json). phpunit.xml.dist's qualify-v2-unit suite runs
+			     tests/bootstrap.php's plain-PHP doubles instead and cannot host
+			     this suite; see the comment there. -->
+			<file>tests/Unit/Abilities/EventSubmissionAbilitiesTest.php</file>
 			<file>tests/Unit/SingleEventNetworkBridgeTest.php</file>
 			<file>tests/Unit/ConcertStatsPublicProfileRenderTest.php</file>
 			<file>tests/Unit/VenueBookingInquiryRenderTest.php</file>

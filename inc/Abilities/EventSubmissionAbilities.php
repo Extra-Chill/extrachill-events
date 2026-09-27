@@ -453,9 +453,9 @@ class EventSubmissionAbilities {
 		);
 
 		if ( function_exists( 'datamachine_resolve_system_agent_context' ) ) {
-			$resolved          = (array) datamachine_resolve_system_agent_context();
-			$owner['agent_id'] = (int) ( $resolved['agent_id'] ?? 0 );
-			$owner['user_id']  = (int) ( $resolved['user_id'] ?? 0 );
+			$resolved          = datamachine_resolve_system_agent_context();
+			$owner['agent_id'] = (int) $resolved['agent_id'];
+			$owner['user_id']  = (int) $resolved['user_id'];
 		}
 
 		if ( ( $owner['agent_id'] <= 0 || $owner['user_id'] <= 0 ) && class_exists( '\\DataMachine\\Core\\FilesRepository\\DirectoryManager' ) ) {

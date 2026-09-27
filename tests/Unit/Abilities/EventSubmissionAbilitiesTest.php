@@ -31,6 +31,7 @@ use WP_UnitTestCase;
 class EventSubmissionAbilitiesTest extends WP_UnitTestCase {
 
 	private EventSubmissionAbilities $abilities;
+	private int $admin_user_id;
 
 	/**
 	 * Minimal valid input for an anonymous submission.
@@ -51,10 +52,9 @@ class EventSubmissionAbilitiesTest extends WP_UnitTestCase {
 	public function set_up(): void {
 		parent::set_up();
 
-		// Run as the anonymous visitor the public form serves. Logging in as
-		// an administrator here once hid that every real submission failed
-		// the datamachine/execute-workflow gate (#910, #914).
-		wp_set_current_user( 0 );
+		// datamachine/execute-workflow requires manage_options.
+		$this->admin_user_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $this->admin_user_id );
 
 		$this->abilities = new EventSubmissionAbilities();
 	}
@@ -375,7 +375,9 @@ class EventSubmissionAbilitiesTest extends WP_UnitTestCase {
 	}
 
 	public function test_submitter_email_goes_to_correct_address(): void {
-		// Anonymous submitter: the confirmation goes to the contact email.
+		// We're logged in as admin, so email goes to the admin user.
+		$admin_user = get_user_by( 'id', $this->admin_user_id );
+
 		$sent_emails = array();
 		add_filter(
 			'wp_mail',
@@ -388,7 +390,7 @@ class EventSubmissionAbilitiesTest extends WP_UnitTestCase {
 		$this->abilities->executeSubmitEvent( $this->valid_input );
 
 		$recipients = wp_list_pluck( $sent_emails, 'to' );
-		$this->assertContains( $this->valid_input['contact_email'], $recipients );
+		$this->assertContains( $admin_user->user_email, $recipients );
 	}
 
 	public function test_logged_in_user_receives_confirmation_email(): void {

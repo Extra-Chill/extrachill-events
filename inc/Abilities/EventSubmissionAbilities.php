@@ -259,7 +259,7 @@ class EventSubmissionAbilities {
 
 		$username = function_exists( 'ec_generate_username_from_email' )
 			? ec_generate_username_from_email( $email )
-			: sanitize_title( substr( strstr( $email, '@', true ) ? strstr( $email, '@', true ) : 'user', 0, 50 ) );
+			: sanitize_title( substr( (string) ( strstr( $email, '@', true ) ?: 'user' ), 0, 50 ) );
 
 		$result = $create->execute(
 			array(
@@ -419,6 +419,11 @@ class EventSubmissionAbilities {
 			return null;
 		}
 
+		$flyer_name = (string) ( $flyer['name'] ?? '' );
+		if ( '' === $flyer_name ) {
+			return new \WP_Error( 'upload_failed', __( 'The flyer upload is missing a file name.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		$upload = wp_handle_upload( $flyer, array( 'test_form' => false ) );
 		if ( isset( $upload['error'] ) ) {
@@ -428,7 +433,7 @@ class EventSubmissionAbilities {
 		$storage = new \DataMachine\Core\FilesRepository\FileStorage();
 		$stored  = $storage->store_file(
 			$upload['file'],
-			$flyer['name'],
+			$flyer_name,
 			array(
 				'pipeline_id' => $pipeline_id,
 				'flow_id'     => $flow_id,
@@ -443,10 +448,10 @@ class EventSubmissionAbilities {
 			return new \WP_Error( 'storage_failed', __( 'Could not save the flyer.', 'extrachill-events' ), array( 'status' => 500 ) );
 		}
 
-		$file_info = wp_check_filetype( $flyer['name'] );
+		$file_info = wp_check_filetype( $flyer_name );
 
 		return array(
-			'filename'    => sanitize_file_name( $flyer['name'] ),
+			'filename'    => sanitize_file_name( $flyer_name ),
 			'stored_path' => $stored,
 			'mime_type'   => $file_info['type'] ? $file_info['type'] : 'application/octet-stream',
 		);

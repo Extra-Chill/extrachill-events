@@ -257,9 +257,10 @@ class EventSubmissionAbilities {
 			);
 		}
 
-		$username = function_exists( 'ec_generate_username_from_email' )
+		$local_part = strstr( $email, '@', true );
+		$username   = function_exists( 'ec_generate_username_from_email' )
 			? ec_generate_username_from_email( $email )
-			: sanitize_title( substr( (string) ( strstr( $email, '@', true ) ?: 'user' ), 0, 50 ) );
+			: sanitize_title( substr( false !== $local_part && '' !== $local_part ? $local_part : 'user', 0, 50 ) );
 
 		$result = $create->execute(
 			array(

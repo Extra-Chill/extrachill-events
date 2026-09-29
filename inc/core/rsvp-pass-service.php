@@ -136,8 +136,8 @@ function extrachill_events_send_rsvp_pass_email( int $event_id, int $user_id, ar
 			array(
 				'event_id'   => $event_id,
 				'user_id'    => $user_id,
-				'error_code' => is_array( $result ) ? (string) ( $result['error_code'] ?? '' ) : '',
-				'error'      => is_array( $result ) ? (string) ( $result['error'] ?? '' ) : 'non-array result',
+				'error_code' => (string) ( $result['error_code'] ?? '' ),
+				'error'      => (string) ( $result['error'] ?? '' ),
 			)
 		);
 	}
@@ -164,7 +164,7 @@ function extrachill_events_rsvp_pass_email_queued( $result ): bool {
  * escapes again, showed `&amp;amp;`. Decode once here; callers escape for
  * their own output context.
  *
- * @param WP_Post|object $post Event post.
+ * @param WP_Post $post Event post.
  * @return string
  */
 function extrachill_events_rsvp_pass_event_title( $post ): string {

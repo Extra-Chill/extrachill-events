@@ -7,325 +7,13 @@
 
 use PHPUnit\Framework\TestCase;
 
-if ( ! function_exists( 'add_filter' ) ) {
-	function add_filter() {
-		return true;
-	}
-}
-
-if ( ! function_exists( 'add_action' ) ) {
-	function add_action() {
-		return true;
-	}
-}
-
-if ( ! function_exists( 'add_rewrite_tag' ) ) {
-	function add_rewrite_tag( $tag, $regex ) {
-		$GLOBALS['test_rewrite_tags'][] = array(
-			'tag'   => $tag,
-			'regex' => $regex,
-		);
-	}
-}
-
-if ( ! function_exists( 'add_rewrite_rule' ) ) {
-	function add_rewrite_rule( $regex, $query, $after ) {
-		$GLOBALS['test_rewrite_rules'][] = array(
-			'regex' => $regex,
-			'query' => $query,
-			'after' => $after,
-		);
-	}
-}
-
-if ( ! function_exists( 'is_user_logged_in' ) ) {
-	function is_user_logged_in() {
-		return (bool) ( $GLOBALS['test_is_user_logged_in'] ?? false );
-	}
-}
-
-if ( ! function_exists( 'wp_get_ability' ) ) {
-	function wp_get_ability( $name ) {
-		if ( 'extrachill/get-user-settings' === $name ) {
-			return $GLOBALS['test_account_market_ability'] ?? null;
-		}
-		return 'extrachill/update-user-settings' === $name ? ( $GLOBALS['test_update_scene_ability'] ?? null ) : null;
-	}
-}
-
-if ( ! function_exists( 'is_wp_error' ) ) {
-	function is_wp_error() {
-		return false;
-	}
-}
-
-if ( ! function_exists( 'sanitize_title' ) ) {
-	function sanitize_title( $value ) {
-		return strtolower( preg_replace( '/[^a-z0-9]+/i', '-', trim( (string) $value ) ) );
-	}
-}
-
-if ( ! function_exists( 'absint' ) ) {
-	function absint( $value ) {
-		return abs( (int) $value );
-	}
-}
-
-if ( ! function_exists( 'sanitize_text_field' ) ) {
-	function sanitize_text_field( $value ) {
-		return trim( (string) $value );
-	}
-}
-
-if ( ! function_exists( 'esc_url_raw' ) ) {
-	function esc_url_raw( $value ) {
-		return filter_var( $value, FILTER_SANITIZE_URL );
-	}
-}
-
-if ( ! function_exists( 'wp_unslash' ) ) {
-	function wp_unslash( $value ) {
-		return $value;
-	}
-}
-
-if ( ! function_exists( 'wp_salt' ) ) {
-	function wp_salt( $scheme = 'auth' ) {
-		unset( $scheme );
-		return 'account-market-test-secret';
-	}
-}
-
-if ( ! function_exists( 'sanitize_key' ) ) {
-	function sanitize_key( $value ) {
-		return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $value ) );
-	}
-}
-
-if ( ! function_exists( 'is_tax' ) ) {
-	function is_tax() {
-		return (bool) ( $GLOBALS['test_is_tax'] ?? false );
-	}
-}
-
-if ( ! function_exists( 'get_current_blog_id' ) ) {
-	function get_current_blog_id() {
-		if ( isset( $GLOBALS['venue_membership_test']['current_blog_id'] ) ) {
-			return (int) $GLOBALS['venue_membership_test']['current_blog_id'];
-		}
-		if ( isset( $GLOBALS['ec_artist_test']['blog_id'] ) ) {
-			return (int) $GLOBALS['ec_artist_test']['blog_id'];
-		}
-		return (int) ( $GLOBALS['ec_locations_blog_id'] ?? 7 );
-	}
-}
-
-if ( ! function_exists( 'is_front_page' ) ) {
-	function is_front_page() {
-		return (bool) ( $GLOBALS['test_is_front_page'] ?? false );
-	}
-}
-
-if ( ! function_exists( 'is_page' ) ) {
-	function is_page( $slug = '' ) {
-		return ( $GLOBALS['test_page_slug'] ?? '' ) === $slug;
-	}
-}
-
-if ( ! function_exists( 'get_current_user_id' ) ) {
-	function get_current_user_id() {
-		return (int) ( $GLOBALS['test_current_user_id'] ?? 0 );
-	}
-}
-
-if ( ! function_exists( 'is_admin' ) ) {
-	function is_admin() {
-		return false;
-	}
-}
-
-if ( ! function_exists( 'status_header' ) ) {
-	function status_header( $code ) {
-		$GLOBALS['test_status_header'] = $code;
-	}
-}
-
-if ( ! function_exists( 'ec_is_events_site' ) ) {
-	function ec_is_events_site() {
-		return true;
-	}
-}
-
-if ( ! function_exists( 'extrachill_events_is_near_me_page' ) ) {
-	function extrachill_events_is_near_me_page() {
-		return (bool) ( $GLOBALS['test_is_near_me_page'] ?? false );
-	}
-}
-
-if ( ! function_exists( 'apply_filters' ) ) {
-	function apply_filters( $name, $value ) {
-		return $value;
-	}
-}
-
-if ( ! function_exists( 'get_query_var' ) ) {
-	function get_query_var( $name, $default = '' ) {
-		if ( array_key_exists( $name, $GLOBALS['test_query_vars'] ?? array() ) ) {
-			return $GLOBALS['test_query_vars'][ $name ];
-		}
-		if ( 'ec_events_router' === $name && ! empty( $GLOBALS['test_is_all_events_page'] ) ) {
-			return 'all';
-		}
-		return $default;
-	}
-}
-
-if ( ! function_exists( 'esc_html' ) ) {
-	function esc_html( $value ) {
-		return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' );
-	}
-}
-
-if ( ! function_exists( 'esc_html__' ) ) {
-	function esc_html__( $value ) {
-		return esc_html( $value );
-	}
-}
-
-if ( ! function_exists( '__' ) ) {
-	function __( $value ) {
-		return $value;
-	}
-}
-
-if ( ! function_exists( '_n' ) ) {
-	function _n( $single, $plural, $number ) {
-		return 1 === (int) $number ? $single : $plural;
-	}
-}
-
-if ( ! function_exists( 'number_format_i18n' ) ) {
-	function number_format_i18n( $number ) {
-		return number_format( (int) $number );
-	}
-}
-
-if ( ! function_exists( 'esc_html_e' ) ) {
-	function esc_html_e( $value ) {
-		echo esc_html( $value );
-	}
-}
-
-if ( ! function_exists( 'esc_attr_e' ) ) {
-	function esc_attr_e( $value ) {
-		echo esc_html( $value );
-	}
-}
-
-if ( ! function_exists( 'esc_attr' ) ) {
-	function esc_attr( $value ) {
-		return esc_html( $value );
-	}
-}
-
-if ( ! function_exists( 'esc_url' ) ) {
-	function esc_url( $value ) {
-		return esc_html( $value );
-	}
-}
-
-if ( ! function_exists( 'trailingslashit' ) ) {
-	function trailingslashit( $value ) {
-		return rtrim( $value, '/' ) . '/';
-	}
-}
-
-if ( ! function_exists( 'ec_get_site_url' ) ) {
-	function ec_get_site_url() {
-		return 'https://community.example';
-	}
-}
-
-if ( ! function_exists( 'remove_query_arg' ) ) {
-	function remove_query_arg() {
-		return 'https://events.example/all/';
-	}
-}
-
-if ( ! function_exists( 'add_query_arg' ) ) {
-	function add_query_arg( $key, $value = null, $url = '' ) {
-		if ( is_array( $key ) ) {
-			$url = (string) $value;
-			return $url . '?' . http_build_query( $key );
-		}
-		return $url . '?' . rawurlencode( $key ) . '=' . rawurlencode( $value );
-	}
-}
-
-if ( ! function_exists( 'wp_login_url' ) ) {
-	function wp_login_url( $redirect ) {
-		return 'https://events.example/login/?redirect_to=' . rawurlencode( $redirect );
-	}
-}
-
-if ( ! function_exists( 'home_url' ) ) {
-	function home_url( $path = '/' ) {
-		return 'https://events.example' . $path;
-	}
-}
-
-if ( ! class_exists( 'WP_Term' ) ) {
-	class WP_Term {
-		public int $term_id;
-		public string $name;
-		public string $slug;
-		public function __construct( $term ) {
-			foreach ( get_object_vars( $term ) as $key => $value ) {
-				$this->$key = $value;
-			}
-		}
-	}
-}
-
-if ( ! function_exists( 'get_queried_object' ) ) {
-	function get_queried_object() {
-		return $GLOBALS['test_queried_term'] ?? null;
-	}
-}
-
-if ( ! function_exists( 'get_ancestors' ) ) {
-	function get_ancestors() {
-		return $GLOBALS['test_term_ancestors'] ?? array();
-	}
-}
-
-if ( ! function_exists( 'get_term_link' ) ) {
-	function get_term_link( $term ) {
-		return $GLOBALS['test_term_link'] ?? 'https://events.example/location/' . $term->slug . '/';
-	}
-}
-
-if ( ! function_exists( 'wp_nonce_field' ) ) {
-	function wp_nonce_field( $action, $name ) {
-		echo '<input type="hidden" name="' . esc_attr( $name ) . '" value="nonce-' . esc_attr( $action ) . '">';
-	}
-}
-
-if ( ! function_exists( 'nocache_headers' ) ) {
-	function nocache_headers() {
-		$GLOBALS['test_nocache_headers'] = true;
-	}
-}
-
-if ( ! function_exists( 'wp_verify_nonce' ) ) {
-	function wp_verify_nonce( $nonce, $action ) {
-		return $nonce === 'nonce-' . $action;
-	}
-}
+require_once __DIR__ . '/Stubs/wp-stubs.php';
+require_once __DIR__ . '/Stubs/class-wpterm.php';
 
 require_once dirname( __DIR__, 3 ) . '/inc/core/router-pages.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/discovery-pages.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/account-market.php';
+require_once dirname( __DIR__, 3 ) . '/inc/core/local-scene-digest.php';
 require_once dirname( __DIR__, 3 ) . '/inc/core/my-shows-map-filter.php';
 
 /**
@@ -373,7 +61,7 @@ final class AccountMarketTest extends TestCase {
 		) {
 			unset( $GLOBALS[ $key ] );
 		}
-		$_GET                       = array();
+		$_GET                        = array();
 		$this->original_current_user = $GLOBALS['current_user'] ?? null;
 		$this->original_wp_query     = $GLOBALS['wp_query'] ?? null;
 		$this->original_blog_id      = $GLOBALS['blog_id'] ?? null;
@@ -382,7 +70,7 @@ final class AccountMarketTest extends TestCase {
 			if ( ! taxonomy_exists( 'location' ) ) {
 				register_taxonomy( 'location', 'post', array( 'hierarchical' => true ) );
 			}
-			$this->ancestor_filter = static function ( $ancestors, $object_id, $object_type ) {
+			$this->ancestor_filter  = static function ( $ancestors, $object_id, $object_type ) {
 				unset( $object_id );
 				return 'location' === $object_type && isset( $GLOBALS['test_term_ancestors'] ) ? $GLOBALS['test_term_ancestors'] : $ancestors;
 			};
@@ -472,8 +160,8 @@ final class AccountMarketTest extends TestCase {
 	private function use_logged_in_user(): void {
 		$GLOBALS['test_current_user_id'] = ++self::$managed_user_id;
 		if ( class_exists( 'WP_User' ) ) {
-			$user     = new WP_User();
-			$user->ID = $GLOBALS['test_current_user_id'];
+			$user                    = new WP_User();
+			$user->ID                = $GLOBALS['test_current_user_id'];
 			$GLOBALS['current_user'] = $user;
 		}
 	}
@@ -585,13 +273,18 @@ final class AccountMarketTest extends TestCase {
 			return null;
 		}
 		if ( ! taxonomy_exists( 'location' ) ) {
-			register_taxonomy( 'location', 'post' );
+			// hierarchical => true matches the real production registration
+			// and this class's own setUp() registration (#890) — leaving it
+			// off here would silently poison any test that runs later in
+			// the same managed PHPUnit process and relies on 'location'
+			// behaving hierarchically.
+			register_taxonomy( 'location', 'post', array( 'hierarchical' => true ) );
 		}
 
-		$original                         = $GLOBALS['wp_query'];
-		$GLOBALS['wp_query']              = clone $original;
-		$GLOBALS['wp_query']->is_tax      = true;
-		$GLOBALS['wp_query']->query_vars  = array(
+		$original                               = $GLOBALS['wp_query'];
+		$GLOBALS['wp_query']                    = clone $original;
+		$GLOBALS['wp_query']->is_tax            = true;
+		$GLOBALS['wp_query']->query_vars        = array(
 			'event_scope' => $scope,
 			'paged'       => $paged,
 		);
@@ -805,8 +498,8 @@ final class AccountMarketTest extends TestCase {
 	public function test_supported_surfaces_are_limited_to_primary_discovery_pages(): void {
 		if ( isset( $GLOBALS['wp_query'] ) && $GLOBALS['wp_query'] instanceof WP_Query ) {
 			$this->use_events_blog();
-			$original_query              = $GLOBALS['wp_query'];
-			$GLOBALS['wp_query']         = clone $original_query;
+			$original_query               = $GLOBALS['wp_query'];
+			$GLOBALS['wp_query']          = clone $original_query;
 			$GLOBALS['wp_query']->is_home = true;
 			$GLOBALS['wp_query']->is_page = false;
 			$this->assertTrue( extrachill_events_supports_account_market() );
@@ -815,8 +508,8 @@ final class AccountMarketTest extends TestCase {
 			$GLOBALS['wp_query']->query_vars = array( 'ec_events_router' => 'all' );
 			$this->assertTrue( extrachill_events_supports_account_market() );
 
-			$GLOBALS['wp_query']->query_vars    = array();
-			$GLOBALS['wp_query']->is_page       = true;
+			$GLOBALS['wp_query']->query_vars     = array();
+			$GLOBALS['wp_query']->is_page        = true;
 			$GLOBALS['wp_query']->queried_object = new WP_Post(
 				(object) array(
 					'ID'        => 77,
@@ -1252,9 +945,46 @@ final class AccountMarketTest extends TestCase {
 		ob_start();
 		extrachill_events_render_archive_scene_cta();
 		$output = (string) ob_get_clean();
-		$this->assertStringContainsString( 'Is Charleston your local scene?', $output );
-		$this->assertStringContainsString( 'Sign in to save', $output );
+		$this->assertStringContainsString( 'Get Charleston shows in your inbox', $output );
 		$this->assertStringContainsString( rawurlencode( 'https://events.example/location/charleston/' ), $output );
+	}
+
+	/**
+	 */
+	public function test_archive_cta_prompts_logged_out_once_with_both_affordances(): void {
+		$GLOBALS['test_is_tax']         = true;
+		$GLOBALS['test_queried_term']   = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_ancestors'] = array( 22, 1 );
+		$GLOBALS['test_term_link']      = 'https://events.example/location/charleston/';
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
+
+		ob_start();
+		extrachill_events_render_archive_scene_cta();
+		$output = (string) ob_get_clean();
+
+		// One compact panel, one sign-in ask — never two stacked prompts.
+		$this->assertSame( 1, substr_count( $output, '<aside class="events-market-context' ) );
+		$this->assertSame( 1, substr_count( $output, 'Sign in' ) );
+		$this->assertStringContainsString( 'Sign in for the weekly email', $output );
+		$this->assertStringContainsString( 'Save this city', $output );
+
+		// Both underlying capabilities survive the merge as distinct intents.
+		$digest_url = $this->intent_redirect_from_output( $output, 'Sign in for the weekly email' );
+		$save_url   = $this->intent_redirect_from_output( $output, 'Save this city' );
+		$this->assertStringContainsString( 'ec_events_intent=subscribe_digest', $digest_url );
+		$this->assertStringContainsString( 'ec_events_intent=save_scene', $save_url );
+	}
+
+	/** Extract and decode the signed redirect carried by one prompt action. */
+	private function intent_redirect_from_output( string $output, string $anchor ): string {
+		$this->assertStringContainsString( $anchor, $output );
+		$this->assertSame(
+			1,
+			preg_match( '/href="([^"]+)">[^<]*' . preg_quote( $anchor, '/' ) . '/', $output, $matches ),
+			"No anchor link found for: $anchor"
+		);
+		parse_str( (string) parse_url( $matches[1], PHP_URL_QUERY ), $login_query );
+		return (string) ( $login_query['redirect_to'] ?? '' );
 	}
 
 	/**
@@ -1271,7 +1001,7 @@ final class AccountMarketTest extends TestCase {
 		ob_start();
 		extrachill_events_render_archive_scene_cta();
 		$output = (string) ob_get_clean();
-		$this->assertStringContainsString( 'Make this my Local Scene', $output );
+		$this->assertStringContainsString( 'Make this my city', $output );
 		$this->assertStringContainsString( 'extrachill_events_scene_nonce', $output );
 		$this->assertTrue( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE );
 	}
@@ -1280,11 +1010,11 @@ final class AccountMarketTest extends TestCase {
 	 */
 	public function test_archive_cta_confirms_current_scene_without_save_form(): void {
 		$this->use_logged_in_user();
-		$GLOBALS['test_is_tax']                 = true;
-		$GLOBALS['test_is_user_logged_in']      = true;
-		$GLOBALS['test_queried_term']           = $this->term( 1618, 'Charleston', 'charleston' );
-		$GLOBALS['test_term_ancestors']         = array( 22, 1 );
-		$GLOBALS['test_term_link']              = 'https://events.example/location/charleston/';
+		$GLOBALS['test_is_user_logged_in'] = true;
+		$GLOBALS['test_is_tax']            = true;
+		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_ancestors']    = array( 22, 1 );
+		$GLOBALS['test_term_link']         = 'https://events.example/location/charleston/';
 		$this->use_archive_query( $GLOBALS['test_queried_term'] );
 		$GLOBALS['test_account_market_ability'] = new class() {
 			public function execute(): array {
@@ -1300,8 +1030,81 @@ final class AccountMarketTest extends TestCase {
 		ob_start();
 		extrachill_events_render_archive_scene_cta();
 		$output = (string) ob_get_clean();
-		$this->assertStringContainsString( 'This is your Local Scene.', $output );
-		$this->assertStringNotContainsString( 'Make this my Local Scene', $output );
+		$this->assertStringContainsString( 'This city is saved to your account.', $output );
+		$this->assertStringContainsString( 'data-local-scene-digest-control', $output );
+		$this->assertStringContainsString( 'data-local-scene-digest', $output );
+		$this->assertStringContainsString( 'Checking your subscription', $output );
+		$this->assertStringNotContainsString( 'Make this my city', $output );
+	}
+
+	/** Outcome flashes stay inside the single merged panel with the live toggle. */
+	public function test_archive_flash_statuses_render_outcome_inside_single_panel(): void {
+		$this->use_logged_in_user();
+		$GLOBALS['test_is_user_logged_in'] = true;
+		$GLOBALS['test_is_tax']            = true;
+		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_ancestors']    = array( 22, 1 );
+		$GLOBALS['test_term_link']         = 'https://events.example/location/charleston/';
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
+		$GLOBALS['test_account_market_ability'] = new class() {
+			public function execute(): array {
+				return array(
+					'local_scene' => array(
+						'slug'    => 'charleston',
+						'term_id' => 1618,
+					),
+				);
+			}
+		};
+
+		$_GET['scene_status'] = 'subscribed';
+		ob_start();
+		extrachill_events_render_archive_scene_cta();
+		$output = (string) ob_get_clean();
+		$this->assertSame( 1, substr_count( $output, '<aside class="events-market-context' ) );
+		$this->assertStringContainsString( 'Weekly email and in-app updates are on for this city.', $output );
+
+		$_GET['scene_status'] = 'scene_saved';
+		ob_start();
+		extrachill_events_render_archive_scene_cta();
+		$output = (string) ob_get_clean();
+		$this->assertStringContainsString( 'The weekly email could not be turned on. Please try subscribing again.', $output );
+
+		$_GET['scene_status'] = 'failed';
+		ob_start();
+		extrachill_events_render_archive_scene_cta();
+		$output = (string) ob_get_clean();
+		$this->assertStringContainsString( 'We could not complete that update. Nothing was changed. Please try again.', $output );
+		$this->assertStringContainsString( 'data-local-scene-digest-control', $output );
+		unset( $_GET['scene_status'] );
+	}
+
+	/** A valid post-auth subscribe continuation renders one explicit confirmation. */
+	public function test_archive_subscribe_intent_renders_accessible_confirmation(): void {
+		$this->use_logged_in_user();
+		$GLOBALS['test_is_user_logged_in'] = true;
+		$GLOBALS['test_is_tax']            = true;
+		$GLOBALS['test_queried_term']      = $this->term( 1618, 'Charleston', 'charleston' );
+		$GLOBALS['test_term_ancestors']    = array( 22, 1 );
+		$GLOBALS['test_term_link']         = 'https://events.example/location/charleston/';
+		$this->use_archive_query( $GLOBALS['test_queried_term'] );
+
+		$url = extrachill_events_archive_intent_login_url( $GLOBALS['test_queried_term'], 'subscribe_digest' );
+		parse_str( (string) parse_url( $url, PHP_URL_QUERY ), $login_query );
+		parse_str( (string) parse_url( rawurldecode( $login_query['redirect_to'] ), PHP_URL_QUERY ), $_GET );
+
+		ob_start();
+		extrachill_events_render_archive_scene_cta();
+		$output = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'Turn on the weekly email for Charleston?', $output );
+		$this->assertStringContainsString( 'Nothing changes until you confirm.', $output );
+		$this->assertStringContainsString( 'Confirm: save and subscribe', $output );
+		$this->assertStringContainsString( 'autofocus', $output );
+		// The confirm affordance posts the digest intent through the merged scene form.
+		$this->assertStringContainsString( 'name="extrachill_events_scene_action" value="subscribe_digest"', $output );
+		$this->assertStringContainsString( 'name="extrachill_events_scene_nonce"', $output );
+		$this->assertSame( 1, substr_count( $output, '<aside class="events-market-context' ) );
 	}
 
 	/**
@@ -1374,10 +1177,10 @@ final class AccountMarketTest extends TestCase {
 		extrachill_events_render_archive_scene_cta();
 		$output = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'You asked to save this Local Scene before signing in.', $output );
-		$this->assertStringContainsString( 'Confirm: save this Local Scene', $output );
+		$this->assertStringContainsString( 'You asked to save this city before signing in.', $output );
+		$this->assertStringContainsString( 'Confirm: save this city', $output );
 		$this->assertStringContainsString( 'autofocus', $output );
 		$this->assertStringContainsString( 'role="status"', $output );
-		$this->assertStringNotContainsString( 'Make this my Local Scene', $output );
+		$this->assertStringNotContainsString( 'Make this my city', $output );
 	}
 }

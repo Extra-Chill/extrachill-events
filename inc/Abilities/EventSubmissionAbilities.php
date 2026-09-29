@@ -10,6 +10,13 @@
  * not exposed by the generic Abilities REST endpoint so that route remains
  * the canonical public write boundary.
  *
+ * Because authorization for a submission happens upstream (Turnstile at the
+ * REST boundary, `show_in_rest => false` on this ability), executeDirect()
+ * runs the `datamachine/execute-workflow` call through
+ * `\DataMachine\Abilities\PermissionHelper::run_as_authenticated()` so
+ * anonymous and non-admin submitters aren't blocked by that ability's
+ * `manage_options`-class permission_callback. See executeDirect() for detail.
+ *
  * @package ExtraChillEvents\Abilities
  */
 
@@ -250,9 +257,10 @@ class EventSubmissionAbilities {
 			);
 		}
 
-		$username = function_exists( 'ec_generate_username_from_email' )
+		$local_part = strstr( $email, '@', true );
+		$username   = function_exists( 'ec_generate_username_from_email' )
 			? ec_generate_username_from_email( $email )
-			: sanitize_title( substr( strstr( $email, '@', true ) ? strstr( $email, '@', true ) : 'user', 0, 50 ) );
+			: sanitize_title( substr( false !== $local_part && '' !== $local_part ? $local_part : 'user', 0, 50 ) );
 
 		$result = $create->execute(
 			array(
@@ -309,6 +317,33 @@ class EventSubmissionAbilities {
 	/**
 	 * Execute submission via an ephemeral Data Machine workflow.
 	 *
+	 * `datamachine/execute-workflow`'s permission_callback is
+	 * `PermissionHelper::can_manage()` (requires a `datamachine_manage_*`
+	 * capability or `manage_options`), because that ability is normally
+	 * invoked by logged-in operators through the generic Abilities REST
+	 * endpoint. The public event-submission form is deliberately reachable
+	 * by anonymous visitors, so calling `$execute->execute()` directly here
+	 * always failed permission checks for anyone but an admin (issue #910).
+	 *
+	 * Authorization for this specific call has already happened one layer
+	 * up: extrachill-api's `/extrachill/v1/event-submissions` REST route
+	 * verifies Cloudflare Turnstile before it ever reaches this method, this
+	 * ability (`extrachill/submit-event`) is registered with
+	 * `show_in_rest => false` so it is not independently reachable, and the
+	 * workflow executed below is fully server-built (fixed steps, hardcoded
+	 * `post_status => pending`) — none of it is attacker-controlled. Given
+	 * that, we run the workflow execution inside
+	 * `PermissionHelper::run_as_authenticated()`, Data Machine's canonical
+	 * seam for callers that authorized the action at their own layer.
+	 *
+	 * Data Machine also requires every direct job to have an owner (an
+	 * acting user or an agent; issue #914). The job is owned by the
+	 * install's system agent, resolved through the same substrate helper
+	 * ArtistUrlImportAbilities uses, and runs as that agent's owner. The
+	 * submitter's own account is a bare subscriber and can own neither the
+	 * permission nor the job; the event itself is still attributed to the
+	 * submitter through the submission payload.
+	 *
 	 * @param array      $submission    Sanitized submission data.
 	 * @param array|null $flyer         File data from $_FILES, or null.
 	 * @param string     $account_claim One-time account claim URL, if applicable.
@@ -320,30 +355,60 @@ class EventSubmissionAbilities {
 			return new \WP_Error( 'dm_unavailable', __( 'Data Machine is unavailable.', 'extrachill-events' ), array( 'status' => 500 ) );
 		}
 
+		if ( ! class_exists( '\\DataMachine\\Abilities\\PermissionHelper' ) ) {
+			return new \WP_Error( 'dm_unavailable', __( 'Data Machine is unavailable.', 'extrachill-events' ), array( 'status' => 500 ) );
+		}
+
 		$stored_flyer = $this->storeFlyer( $flyer, 'direct', 'direct' );
 		if ( is_wp_error( $stored_flyer ) ) {
 			return $stored_flyer;
 		}
 
-		if ( ! class_exists( '\\DataMachine\\Core\\PluginSettings' ) ) {
-			return new \WP_Error( 'dm_settings_unavailable', __( 'Data Machine settings unavailable.', 'extrachill-events' ), array( 'status' => 500 ) );
+		$workflow = $this->buildWorkflow( $submission, $stored_flyer );
+
+		$owner = $this->resolveWorkflowOwner();
+		if ( $owner['agent_id'] <= 0 || $owner['user_id'] <= 0 ) {
+			do_action( 'datamachine_log', 'error', 'EventSubmission: no system agent available to own the submission workflow', array( 'owner' => $owner ) );
+			return new \WP_Error( 'workflow_owner_unavailable', __( 'Event submissions are temporarily unavailable. Please try again later.', 'extrachill-events' ), array( 'status' => 500 ) );
 		}
 
-		$provider = \DataMachine\Core\PluginSettings::get( 'default_provider', 'anthropic' );
-		$model    = \DataMachine\Core\PluginSettings::get( 'default_model', 'claude-sonnet-4-20250514' );
-		$workflow = $this->buildWorkflow( $submission, $stored_flyer, $provider, $model );
-
-		$initial_data = array( 'submission' => $submission );
+		$initial_data = array(
+			'submission' => $submission,
+			'agent_id'   => $owner['agent_id'],
+			'job_source' => 'event_submission',
+			'job_label'  => 'Event Submission',
+		);
 		if ( $stored_flyer && ! empty( $stored_flyer['stored_path'] ) ) {
 			$initial_data['image_file_path'] = $stored_flyer['stored_path'];
 		}
 
-		$result = $execute->execute(
-			array(
-				'workflow'     => $workflow,
-				'initial_data' => $initial_data,
-			)
+		// Elevate for this single call only — see method docblock for why
+		// this is safe. run_as_authenticated() resets context in a finally
+		// block, so the elevation never leaks past this closure.
+		$result = \DataMachine\Abilities\PermissionHelper::run_as_authenticated(
+			function () use ( $execute, $workflow, $initial_data ) {
+				return $execute->execute(
+					array(
+						'workflow'     => $workflow,
+						'initial_data' => $initial_data,
+					)
+				);
+			},
+			$owner['user_id']
 		);
+
+		if ( is_wp_error( $result ) ) {
+			do_action(
+				'datamachine_log',
+				'error',
+				'EventSubmission: workflow execution failed',
+				array(
+					'code'    => $result->get_error_code(),
+					'message' => $result->get_error_message(),
+					'title'   => $submission['event_title'] ?? '',
+				)
+			);
+		}
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
@@ -371,6 +436,38 @@ class EventSubmissionAbilities {
 	}
 
 	/**
+	 * Resolve the system agent that owns submission workflows.
+	 *
+	 * Uses Data Machine's `datamachine_resolve_system_agent_context()`, falling
+	 * back to the default agent user, the same resolution
+	 * ArtistUrlImportAbilities::resolveSystemAgentContext() performs.
+	 *
+	 * @return array{agent_id:int,user_id:int}
+	 */
+	private function resolveWorkflowOwner(): array {
+		$owner = array(
+			'agent_id' => 0,
+			'user_id'  => 0,
+		);
+
+		if ( function_exists( 'datamachine_resolve_system_agent_context' ) ) {
+			$resolved          = datamachine_resolve_system_agent_context();
+			$owner['agent_id'] = (int) $resolved['agent_id'];
+			$owner['user_id']  = (int) $resolved['user_id'];
+		}
+
+		if ( ( $owner['agent_id'] <= 0 || $owner['user_id'] <= 0 ) && class_exists( '\\DataMachine\\Core\\FilesRepository\\DirectoryManager' ) ) {
+			$default_user_id = (int) \DataMachine\Core\FilesRepository\DirectoryManager::get_default_agent_user_id();
+			if ( $default_user_id > 0 && function_exists( 'datamachine_resolve_or_create_agent_id' ) ) {
+				$owner['user_id']  = $default_user_id;
+				$owner['agent_id'] = (int) datamachine_resolve_or_create_agent_id( $default_user_id );
+			}
+		}
+
+		return $owner;
+	}
+
+	/**
 	 * Store uploaded flyer to Data Machine file storage.
 	 *
 	 * @param array|null $flyer       File data from $_FILES.
@@ -383,6 +480,11 @@ class EventSubmissionAbilities {
 			return null;
 		}
 
+		$flyer_name = (string) ( $flyer['name'] ?? '' );
+		if ( '' === $flyer_name ) {
+			return new \WP_Error( 'upload_failed', __( 'The flyer upload is missing a file name.', 'extrachill-events' ), array( 'status' => 400 ) );
+		}
+
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		$upload = wp_handle_upload( $flyer, array( 'test_form' => false ) );
 		if ( isset( $upload['error'] ) ) {
@@ -392,7 +494,7 @@ class EventSubmissionAbilities {
 		$storage = new \DataMachine\Core\FilesRepository\FileStorage();
 		$stored  = $storage->store_file(
 			$upload['file'],
-			$flyer['name'],
+			$flyer_name,
 			array(
 				'pipeline_id' => $pipeline_id,
 				'flow_id'     => $flow_id,
@@ -407,10 +509,10 @@ class EventSubmissionAbilities {
 			return new \WP_Error( 'storage_failed', __( 'Could not save the flyer.', 'extrachill-events' ), array( 'status' => 500 ) );
 		}
 
-		$file_info = wp_check_filetype( $flyer['name'] );
+		$file_info = wp_check_filetype( $flyer_name );
 
 		return array(
-			'filename'    => sanitize_file_name( $flyer['name'] ),
+			'filename'    => sanitize_file_name( $flyer_name ),
 			'stored_path' => $stored,
 			'mime_type'   => $file_info['type'] ? $file_info['type'] : 'application/octet-stream',
 		);
@@ -419,13 +521,18 @@ class EventSubmissionAbilities {
 	/**
 	 * Build an ephemeral workflow for event submission.
 	 *
+	 * Step shape follows Data Machine's `WorkflowSpecValidator` contract:
+	 * `step_type` (not `type`), plural `handler_slugs`/`handler_configs`
+	 * keyed by handler slug (not the singular `handler_slug`/`handler_config`
+	 * legacy fields, which the validator rejects), and the `upsert` step
+	 * type (renamed from `update` — see issue #211, which made the same fix
+	 * for tour imports). See issue #912.
+	 *
 	 * @param array      $submission    Submission data.
 	 * @param array|null $stored_flyer  Stored flyer data.
-	 * @param string     $provider      AI provider slug.
-	 * @param string     $model         AI model identifier.
 	 * @return array Workflow config for DM execute endpoint.
 	 */
-	private function buildWorkflow( array $submission, ?array $stored_flyer, string $provider, string $model ): array {
+	private function buildWorkflow( array $submission, ?array $stored_flyer ): array {
 		$steps = array();
 
 		$handler_config = array(
@@ -440,9 +547,9 @@ class EventSubmissionAbilities {
 
 		if ( $stored_flyer ) {
 			$steps[] = array(
-				'type'           => 'event_import',
-				'handler_slug'   => 'event_flyer',
-				'handler_config' => $handler_config,
+				'step_type'       => 'event_import',
+				'handler_slugs'   => array( 'event_flyer' ),
+				'handler_configs' => array( 'event_flyer' => $handler_config ),
 			);
 		}
 
@@ -474,20 +581,20 @@ class EventSubmissionAbilities {
 		}
 
 		$steps[] = array(
-			'type'          => 'ai',
-			'provider'      => $provider,
-			'model'         => $model,
+			'step_type'     => 'ai',
 			'system_prompt' => $default_prompt,
 			'user_message'  => $user_message,
 			'enabled_tools' => array( 'upsert_event' ),
 		);
 
 		$steps[] = array(
-			'type'           => 'update',
-			'handler_slug'   => 'upsert_event',
-			'handler_config' => array(
-				'post_status'    => 'pending',
-				'include_images' => ! empty( $stored_flyer ),
+			'step_type'       => 'upsert',
+			'handler_slugs'   => array( 'upsert_event' ),
+			'handler_configs' => array(
+				'upsert_event' => array(
+					'post_status'    => 'pending',
+					'include_images' => ! empty( $stored_flyer ),
+				),
 			),
 		);
 
@@ -687,13 +794,9 @@ class EventSubmissionAbilities {
 	/**
 	 * Dispatch an outgoing notification through the EC mail layer.
 	 *
-	 * Event submissions run in an unprivileged context (an anonymous visitor),
-	 * so a bare `ec_send_email()` call hits the `datamachine/send-email`
-	 * ability's capability gate and silently fails with a permissions error.
-	 * `extrachill_send_registration_email()` (extrachill-users) wraps the call in
-	 * PermissionHelper::run_as_authenticated() — the canonical seam for callers
-	 * that have authorized a send at their own layer. We prefer it when present;
-	 * otherwise we fall back to `ec_send_email()` / the raw ability. Failures are
+	 * Uses `ec_send_email()`, which sends as the system (extrachill-network#318),
+	 * so the anonymous submitter's request context does not matter. Falls back
+	 * to the raw ability when the network mail layer is absent. Failures are
 	 * logged (never thrown) so a transient send error does not break submission.
 	 *
 	 * @param array  $args  Arguments forwarded to the ability.
@@ -702,15 +805,23 @@ class EventSubmissionAbilities {
 	private function dispatchEmail( array $args, string $audience ): void {
 		$result = null;
 
-		if ( function_exists( 'extrachill_send_registration_email' ) ) {
-			$result = extrachill_send_registration_email( $args );
-		} elseif ( function_exists( 'ec_send_email' ) ) {
-			$result = ec_send_email( $args );
-		} elseif ( function_exists( 'wp_get_ability' ) ) {
-			$send_ability = wp_get_ability( 'datamachine/send-email' );
-			if ( $send_ability ) {
-				$result = $send_ability->execute( $args );
+		// The workflow job already exists when this runs. A notification
+		// failure in any lower layer must never turn an accepted submission
+		// into an error for the visitor (extrachill-network#316).
+		try {
+			if ( function_exists( 'ec_send_email' ) ) {
+				$result = ec_send_email( $args );
+			} elseif ( function_exists( 'wp_get_ability' ) ) {
+				$send_ability = wp_get_ability( 'datamachine/send-email' );
+				if ( $send_ability ) {
+					$result = $send_ability->execute( $args );
+				}
 			}
+		} catch ( \Throwable $e ) {
+			$result = array(
+				'success' => false,
+				'error'   => get_class( $e ) . ': ' . $e->getMessage(),
+			);
 		}
 
 		$sent = is_array( $result ) ? (bool) ( $result['success'] ?? false ) : false;

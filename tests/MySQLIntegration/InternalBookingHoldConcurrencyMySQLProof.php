@@ -1,16 +1,18 @@
 <?php
 /** Native two-process hold contention proof for the internal calendar alpha. */
 
-require_once __DIR__ . '/BookingAttachmentMySQLIntegrationTest.php';
+require_once __DIR__ . '/BookingMySQLIntegrationTestCase.php';
 
 use ExtraChillEvents\Core\BookingHoldRepository;
 use ExtraChillEvents\Core\BookingRepository;
 
 /** Prove overlapping public Ability calls converge to one active hold. */
-final class InternalBookingHoldConcurrencyMySQLProof extends BookingAttachmentMySQLIntegrationTest {
+final class InternalBookingHoldConcurrencyMySQLProof extends BookingMySQLIntegrationTestCase {
 	/** Run two native contenders against one venue-space interval. */
 	public function test_overlapping_public_hold_abilities_allow_one_winner(): void {
-		$this->assertTrue( function_exists( 'pcntl_fork' ), 'The native hold proof requires pcntl_fork().' );
+		if ( ! function_exists( 'pcntl_fork' ) ) {
+			$this->markTestSkipped( 'This proof requires pcntl_fork(), which is unavailable in the managed sandbox (PHP-WASM cannot fork real OS processes). It executes against real MySQL and real pcntl in .github/workflows/booking-hold-concurrency-host-proof.yml — see extrachill-events#881.' );
+		}
 		$this->register_booking_abilities();
 		wp_set_current_user( $this->actor_id );
 		$this->assertNotFalse( update_term_meta( $this->venue_id, '_venue_timezone', 'America/New_York' ) );

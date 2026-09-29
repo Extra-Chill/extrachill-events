@@ -27,16 +27,24 @@
 			<file>tests/Unit/Abilities/ArtistUrlImportNotificationTest.php</file>
 			<file>tests/Unit/Abilities/ArtistUrlImportConfigurationContractTest.php</file>
 			<file>tests/Unit/Abilities/EventSourceIntakeTest.php</file>
+			<file>tests/Unit/Abilities/EventSubmissionExecuteDirectAuthContextTest.php</file>
+		<file>tests/Unit/Abilities/EventSubmissionWorkflowStepShapeTest.php</file>
 			<file>tests/Unit/Abilities/PriorityBoostAbilityTest.php</file>
 			<file>tests/Unit/Abilities/EventsUpcomingCountsTest.php</file>
 			<file>tests/Unit/Core/VenueExpansionPlanTest.php</file>
 			<file>tests/Unit/Core/VenueExpansionRunnerTest.php</file>
 			<file>tests/Unit/Core/VenueExpansionSystemTaskTest.php</file>
+			<file>tests/Unit/Core/GenreSyncTest.php</file>
+			<file>tests/Unit/Cli/BackfillEventTypeClassifyTest.php</file>
+			<file>tests/Unit/Cli/ClassifyVenueTierScoreTest.php</file>
+			<file>tests/Unit/Cli/ClassifyGenreDeterministicTest.php</file>
 			<file>tests/Unit/SingleEventNetworkBridgeTest.php</file>
 			<file>tests/Unit/ConcertStatsPublicProfileRenderTest.php</file>
 			<file>tests/Unit/VenueBookingInquiryRenderTest.php</file>
 			<file>tests/AbilityRegistrationLifecycleTest.php</file>
 			<file>tests/VenueLinkPagesCoordinatedRuntimeTest.php</file>
+			<file>tests/VenueLinkPagesRuntimeVersionContractTest.php</file>
+			<file>tests/VenueSettingsRenderLinkPagesDegradationTest.php</file>
 			<file>tests/PromoterLinkPagesCoordinatedRuntimeTest.php</file>
 		</testsuite>
 		<testsuite name="venue-membership-authorization">

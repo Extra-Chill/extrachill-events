@@ -62,7 +62,8 @@ function extrachill_events_prevent_dynamic_location_creation( $value, string $ta
 		(string) get_term_meta( $venue->term_id, '_venue_city', true ),
 		(string) get_term_meta( $venue->term_id, '_venue_state', true ),
 		(string) get_term_meta( $venue->term_id, '_venue_zip', true ),
-		(string) get_term_meta( $venue->term_id, '_venue_country', true )
+		(string) get_term_meta( $venue->term_id, '_venue_country', true ),
+		true
 	);
 
 	return $resolved instanceof \WP_Term ? (string) $resolved->term_id : '';
@@ -96,7 +97,7 @@ function extrachill_events_normalize_location( $post_id ) {
 	$zip         = (string) get_term_meta( $venue->term_id, '_venue_zip', true );
 	$country     = (string) get_term_meta( $venue->term_id, '_venue_country', true );
 
-	$correct_term = extrachill_events_resolve_location_term_for_venue_city( $venue_city, $venue_state, $zip, $country );
+	$correct_term = extrachill_events_resolve_location_term_for_venue_city( $venue_city, $venue_state, $zip, $country, true );
 	if ( ! $correct_term ) {
 		return;
 	}
@@ -146,9 +147,11 @@ function extrachill_events_has_canonical_location( array $current_location_ids, 
  * @param string $venue_state Venue state (abbreviation like "SC" or full name).
  * @param string $venue_zip   Venue zip.
  * @param string $country     Venue country name or code.
+ * @param bool   $create      Create the missing Continent > Country > City
+ *                            chain from venue metadata when nothing matches.
  * @return \WP_Term|null Resolved location term, or null when unresolved.
  */
-function extrachill_events_resolve_location_term_for_venue_city( $venue_city, $venue_state = '', $venue_zip = '', $country = '' ): ?\WP_Term {
+function extrachill_events_resolve_location_term_for_venue_city( $venue_city, $venue_state = '', $venue_zip = '', $country = '', bool $create = false ): ?\WP_Term {
 	$venue_city = trim( (string) $venue_city );
 	if ( '' === $venue_city ) {
 		return null;
@@ -176,15 +179,324 @@ function extrachill_events_resolve_location_term_for_venue_city( $venue_city, $v
 		return reset( $matches );
 	}
 
+	// 3. No existing term. When permitted, build the missing rungs of the
+	// canonical hierarchy from the venue's own normalized metadata. See #820.
+	if ( $create && 0 === count( $matches ) ) {
+		return extrachill_events_create_location_term_from_venue( $venue_city, (string) $venue_state, (string) $country );
+	}
+
 	return null;
+}
+
+/**
+ * Continent parent for a canonical country display name.
+ *
+ * Only continents that already exist as root location terms are useful
+ * here; a country without a mapping is created at the root.
+ *
+ * @return array<string, string> Country display name => continent term name.
+ */
+function extrachill_events_get_country_continent_map(): array {
+	return array(
+		'Sweden'         => 'Europe',
+		'Norway'         => 'Europe',
+		'Denmark'        => 'Europe',
+		'Finland'        => 'Europe',
+		'Iceland'        => 'Europe',
+		'Germany'        => 'Europe',
+		'France'         => 'Europe',
+		'Spain'          => 'Europe',
+		'Portugal'       => 'Europe',
+		'Italy'          => 'Europe',
+		'Netherlands'    => 'Europe',
+		'Belgium'        => 'Europe',
+		'Austria'        => 'Europe',
+		'Switzerland'    => 'Europe',
+		'Poland'         => 'Europe',
+		'Czech Republic' => 'Europe',
+		'Ireland'        => 'Europe',
+		'United Kingdom' => 'Europe',
+		'Greece'         => 'Europe',
+		'Hungary'        => 'Europe',
+	);
+}
+
+/**
+ * Country name/code → canonical display name for term creation.
+ *
+ * Keys are lowercase identities as produced by
+ * extrachill_events_normalize_country_name(). Unrecognised countries return
+ * '' so nothing is created for them.
+ *
+ * @param string $country Normalized (lowercase) country identity.
+ * @return string Display name, or '' when the country is not recognised.
+ */
+function extrachill_events_get_country_display_name( string $country ): string {
+	$names = array(
+		'united states'  => 'United States',
+		'canada'         => 'Canada',
+		'mexico'         => 'Mexico',
+		'united kingdom' => 'United Kingdom',
+		'sweden'         => 'Sweden',
+		'se'             => 'Sweden',
+		'swe'            => 'Sweden',
+		'norway'         => 'Norway',
+		'no'             => 'Norway',
+		'nor'            => 'Norway',
+		'denmark'        => 'Denmark',
+		'dk'             => 'Denmark',
+		'dnk'            => 'Denmark',
+		'finland'        => 'Finland',
+		'fi'             => 'Finland',
+		'fin'            => 'Finland',
+		'iceland'        => 'Iceland',
+		'is'             => 'Iceland',
+		'germany'        => 'Germany',
+		'de'             => 'Germany',
+		'deu'            => 'Germany',
+		'france'         => 'France',
+		'fr'             => 'France',
+		'fra'            => 'France',
+		'spain'          => 'Spain',
+		'es'             => 'Spain',
+		'esp'            => 'Spain',
+		'portugal'       => 'Portugal',
+		'pt'             => 'Portugal',
+		'prt'            => 'Portugal',
+		'italy'          => 'Italy',
+		'it'             => 'Italy',
+		'ita'            => 'Italy',
+		'netherlands'    => 'Netherlands',
+		'nl'             => 'Netherlands',
+		'nld'            => 'Netherlands',
+		'belgium'        => 'Belgium',
+		'be'             => 'Belgium',
+		'bel'            => 'Belgium',
+		'austria'        => 'Austria',
+		'at'             => 'Austria',
+		'aut'            => 'Austria',
+		'switzerland'    => 'Switzerland',
+		'ch'             => 'Switzerland',
+		'che'            => 'Switzerland',
+		'poland'         => 'Poland',
+		'pl'             => 'Poland',
+		'pol'            => 'Poland',
+		'czech republic' => 'Czech Republic',
+		'czechia'        => 'Czech Republic',
+		'cz'             => 'Czech Republic',
+		'ireland'        => 'Ireland',
+		'ie'             => 'Ireland',
+		'irl'            => 'Ireland',
+		'greece'         => 'Greece',
+		'gr'             => 'Greece',
+		'hungary'        => 'Hungary',
+		'hu'             => 'Hungary',
+		'australia'      => 'Australia',
+		'au'             => 'Australia',
+		'aus'            => 'Australia',
+		'new zealand'    => 'New Zealand',
+		'nz'             => 'New Zealand',
+		'japan'          => 'Japan',
+		'jp'             => 'Japan',
+		'jpn'            => 'Japan',
+		'brazil'         => 'Brasil',
+		'brasil'         => 'Brasil',
+		'br'             => 'Brasil',
+	);
+
+	return $names[ $country ] ?? '';
+}
+
+/**
+ * Whether a candidate city string looks like a venue or street address.
+ *
+ * Guards term creation against the free-text junk that once populated the
+ * location taxonomy ("211 Avenue Jean Jaurès, Paris", "The Baby G - Toronto").
+ *
+ * @param string $city Candidate city.
+ * @return bool
+ */
+function extrachill_events_city_looks_like_venue( string $city ): bool {
+	if ( preg_match( '/\d/', $city ) ) {
+		return true;
+	}
+	if ( false !== strpos( $city, ',' ) || false !== strpos( $city, ' - ' ) || false !== strpos( $city, '(' ) ) {
+		return true;
+	}
+	if ( preg_match( '/\b(the|club|bar|hall|theatre|theater|arena|records|studio|studios|house|room|lounge)\b/i', $city ) ) {
+		return true;
+	}
+
+	return mb_strlen( $city ) > 40;
+}
+
+/**
+ * Find a child location term by name under a parent, or create it.
+ *
+ * @param string $name      Term name.
+ * @param int    $parent_id Parent term ID (0 for root).
+ * @return \WP_Term|null
+ */
+function extrachill_events_find_or_create_location_child( string $name, int $parent_id ): ?\WP_Term {
+	$existing = get_terms(
+		array(
+			'taxonomy'   => 'location',
+			'hide_empty' => false,
+			'parent'     => $parent_id,
+			'name'       => $name,
+			'number'     => 1,
+			// Deterministic in case duplicate same-name/same-parent terms
+			// already exist (e.g. from before #890's continent-lookup fix,
+			// or any other insertion race) — always reuse the oldest one
+			// rather than an arbitrary match.
+			'orderby'    => 'term_id',
+			'order'      => 'ASC',
+		)
+	);
+	if ( ! is_wp_error( $existing ) && ! empty( $existing ) && $existing[0] instanceof \WP_Term ) { // @phpstan-ignore instanceof.alwaysTrue (get_terms()'s static return type is narrowed to WP_Term[] here, but a 'terms_clauses'/'get_terms' filter could still inject something else at runtime; kept as a genuine runtime guard.)
+		return $existing[0];
+	}
+
+	$inserted = wp_insert_term( $name, 'location', array( 'parent' => $parent_id ) );
+	if ( is_wp_error( $inserted ) ) {
+		if ( 'term_exists' === $inserted->get_error_code() ) {
+			$term = get_term( (int) $inserted->get_error_data( 'term_exists' ), 'location' );
+			return $term instanceof \WP_Term ? $term : null;
+		}
+		return null;
+	}
+
+	$term = get_term( (int) $inserted['term_id'], 'location' );
+	return $term instanceof \WP_Term ? $term : null;
+}
+
+/**
+ * Create the canonical location chain for a venue's city and country.
+ *
+ * Builds `Continent > Country > City` (or `Country > City` when the country
+ * has no known continent parent), and `Country > State > City` for the US.
+ * Only fires when nothing matched, and refuses to create anything for an
+ * unrecognised country or a city that looks like a venue/address. Never
+ * uses AI free text — inputs are the venue term's own normalized metadata.
+ *
+ * @param string $venue_city  Venue city (trimmed).
+ * @param string $venue_state Venue state, used only for US-style hierarchies.
+ * @param string $country     Venue country name or code.
+ * @return \WP_Term|null The city term, or null when creation was refused.
+ */
+function extrachill_events_create_location_term_from_venue( string $venue_city, string $venue_state, string $country ): ?\WP_Term {
+	if ( ! taxonomy_exists( 'location' ) || extrachill_events_city_looks_like_venue( $venue_city ) ) {
+		return null;
+	}
+
+	$country_name = extrachill_events_get_country_display_name( extrachill_events_normalize_country_name( $country ) );
+	if ( '' === $country_name ) {
+		return null;
+	}
+
+	$parent_id = 0;
+	$continent = extrachill_events_get_country_continent_map()[ $country_name ] ?? '';
+	if ( '' !== $continent ) {
+		// get_term_by( 'name', ... ) queries with orderby=none, number=1 — if
+		// more than one term shares this name (term names are not unique;
+		// only slugs are, via auto-suffixing), which of them it returns is
+		// undefined. A non-root duplicate picked over the real root
+		// continent fails the parent===0 check below, silently leaving
+		// $parent_id at 0 and creating the country (and everything under it)
+		// as a duplicate root instead of reusing the existing continent
+		// branch (#890). Query directly for a root-level match by name so
+		// the result is deterministic regardless of how many same-named
+		// terms exist elsewhere in the tree, and consistently pick the
+		// oldest (lowest term_id) if more than one genuine root duplicate
+		// exists.
+		$continent_terms = get_terms(
+			array(
+				'taxonomy'   => 'location',
+				'name'       => $continent,
+				'parent'     => 0,
+				'hide_empty' => false,
+				'orderby'    => 'term_id',
+				'order'      => 'ASC',
+				'number'     => 1,
+			)
+		);
+		if ( ! is_wp_error( $continent_terms ) && ! empty( $continent_terms ) && $continent_terms[0] instanceof \WP_Term ) { // @phpstan-ignore instanceof.alwaysTrue (same runtime guard as extrachill_events_find_or_create_location_child() above — a 'get_terms' filter could still inject something else at runtime.)
+			$parent_id = (int) $continent_terms[0]->term_id;
+		}
+	}
+
+	$country_term = extrachill_events_find_or_create_location_child( $country_name, $parent_id );
+	if ( ! $country_term instanceof \WP_Term ) {
+		return null;
+	}
+	$parent_id = (int) $country_term->term_id;
+
+	// The US hierarchy carries a state tier; keep it.
+	$state_name = '';
+	if ( 'United States' === $country_name && '' !== trim( $venue_state ) ) {
+		$abbr       = strtoupper( trim( $venue_state ) );
+		$state_name = extrachill_events_get_state_abbreviation_map()[ $abbr ] ?? ucwords( strtolower( trim( $venue_state ) ) );
+	}
+	if ( '' !== $state_name ) {
+		$state_term = extrachill_events_find_or_create_location_child( $state_name, $parent_id );
+		if ( ! $state_term instanceof \WP_Term ) {
+			return null;
+		}
+		$parent_id = (int) $state_term->term_id;
+	}
+
+	$city_term = extrachill_events_find_or_create_location_child( $venue_city, $parent_id );
+	if ( ! $city_term instanceof \WP_Term ) {
+		return null;
+	}
+
+	// Drop the per-request name cache so the new term resolves immediately.
+	extrachill_events_get_location_terms_by_name( true );
+
+	do_action(
+		'datamachine_log',
+		'info',
+		'Location term created from venue metadata',
+		array(
+			'city'    => $venue_city,
+			'state'   => $state_name,
+			'country' => $country_name,
+			'term_id' => (int) $city_term->term_id,
+		)
+	);
+
+	return $city_term;
+}
+
+/**
+ * Canonical key for comparing a venue's country input with a country term.
+ *
+ * Create mode names country terms with
+ * extrachill_events_get_country_display_name( normalize( $input ) ), which
+ * knows ISO-2/ISO-3 codes ("DK", "DNK", "SE", "JP", ...). The hierarchy filter
+ * compared with normalize() alone, whose alias list only covers US/CA/MX/GB,
+ * so "DK" stayed "dk" and never matched the "Denmark" term it had created:
+ * every re-resolve by country code inserted a duplicate city (#890).
+ * Resolve both sides through the same canonical name. Unknown countries fall
+ * back to the normalized string, preserving previous behaviour for them.
+ *
+ * @param string $country Country name, alias, or ISO code.
+ * @return string Comparison key.
+ */
+function extrachill_events_location_country_match_key( string $country ): string {
+	$normalized = extrachill_events_normalize_country_name( $country );
+	$display    = extrachill_events_get_country_display_name( $normalized );
+	return '' !== $display ? extrachill_events_location_identity_key( $display ) : $normalized;
 }
 
 /**
  * Filter same-named location terms using canonical state/country ancestry.
  *
- * Location terms are hierarchical (Country > State > City). Compares the
- * venue's state (abbreviation or full name) against each candidate's parent
- * (state-level) term name.
+ * Location terms are hierarchical: Country > State > City where a state tier
+ * exists (US, Canada), and Continent > Country > City where it does not.
+ * Compares the venue's state (abbreviation or full name) against each
+ * candidate's parent term name, and the venue's country against the parent
+ * (no state supplied) or grandparent.
  *
  * @param array<int, \WP_Term> $matches     Location terms sharing a city name.
  * @param string               $venue_state Venue state ("SC" or "South Carolina").
@@ -199,8 +511,8 @@ function extrachill_events_filter_locations_by_hierarchy( array $matches, string
 	if ( $full_name ) {
 		$state_names[] = extrachill_events_location_identity_key( $full_name );
 	}
-	$country_name = extrachill_events_normalize_country_name( $country );
-	$filtered     = array();
+	$country_key = extrachill_events_location_country_match_key( $country );
+	$filtered    = array();
 
 	foreach ( $matches as $match ) {
 		if ( $match->parent <= 0 ) {
@@ -217,8 +529,33 @@ function extrachill_events_filter_locations_by_hierarchy( array $matches, string
 		}
 
 		if ( '' !== $country ) {
-			$country_term = $parent->parent > 0 ? get_term( $parent->parent, 'location' ) : null;
-			if ( ! $country_term instanceof \WP_Term || extrachill_events_normalize_country_name( $country_term->name ) !== $country_name ) {
+			// The country sits at a different depth depending on whether the
+			// branch has a state tier: City > State > Country (US, Canada)
+			// versus City > Country (Continent) as created by
+			// extrachill_events_create_location_term_from_venue() for
+			// international venues. Checking only the grandparent made every
+			// stateless city fail its own country check, so a second resolve
+			// found no match and created a duplicate city term (#890).
+			// When a state was supplied, the parent was just confirmed to be
+			// that state, so the country must be the grandparent.
+			$country_candidates = array();
+			if ( '' === $venue_state ) {
+				$country_candidates[] = $parent;
+			}
+			if ( $parent->parent > 0 ) {
+				$grandparent = get_term( $parent->parent, 'location' );
+				if ( $grandparent instanceof \WP_Term ) {
+					$country_candidates[] = $grandparent;
+				}
+			}
+			$country_matches = false;
+			foreach ( $country_candidates as $country_term ) {
+				if ( extrachill_events_location_country_match_key( $country_term->name ) === $country_key ) {
+					$country_matches = true;
+					break;
+				}
+			}
+			if ( ! $country_matches ) {
 				continue;
 			}
 		}
@@ -270,10 +607,16 @@ function extrachill_events_normalize_country_name( string $country ): string {
  * Cached per-request via a static to avoid re-querying when resolving many
  * events in one pass (e.g. a concert-import batch).
  *
+ * @param bool $reset Drop the cache (after a term is created) and return empty.
  * @return array<string, array<int, \WP_Term>>
  */
-function extrachill_events_get_location_terms_by_name(): array {
+function extrachill_events_get_location_terms_by_name( bool $reset = false ): array {
 	static $by_name = null;
+
+	if ( $reset ) {
+		$by_name = null;
+		return array();
+	}
 
 	if ( null !== $by_name ) {
 		return $by_name;

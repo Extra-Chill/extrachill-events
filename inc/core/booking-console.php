@@ -264,7 +264,21 @@ function ec_events_get_venue_archive_workspace_action( int $venue_term_id, int $
 	return ec_events_get_venue_workspace_action_for_state( $venue_term_id, 'non_member' );
 }
 
-/** Render contextual venue management acquisition on canonical archives. */
+/**
+ * Render contextual venue management acquisition on canonical archives.
+ *
+ * Renders ABOVE the calendar on venue archives. #847 moved this below the
+ * calendar alongside the map and the sign-in prompts, on the reasoning that
+ * operator acquisition is not audience content. That reasoning holds for
+ * location archives, where the reader wants shows — but a venue archive has a
+ * second audience, and this disclosure is the claim entry point on all ~5,775
+ * venue archives (the booking CTA beside it is gated to opted-in venues and is
+ * currently live on one).
+ *
+ * The cost is small: it renders as a collapsed <details>, so it adds roughly a
+ * heading's height rather than the ~600px map and stacked prompts that #847 was
+ * actually built to move.
+ */
 function ec_events_render_venue_archive_workspace_action(): void {
 	$term = is_tax( 'venue' ) ? get_queried_object() : null;
 	if ( ! $term instanceof WP_Term ) {

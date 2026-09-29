@@ -3,9 +3,10 @@
   "changelog_target": "docs/CHANGELOG.md",
   "extensions": {
     "wordpress": {
-      "php": "8.3",
+      "php": "8.4",
       "database_type": "mysql",
       "settings": {
+        "wordpress_runtime_php_version": "8.4",
         "wp_codebox_database_service": {
           "provider": "external",
           "engine": "mysql",
@@ -90,6 +91,26 @@
           {
             "name": "local-scene-unit",
             "config": "phpunit-local-scene-unit.xml.dist",
+            "runtime": "host"
+          },
+          {
+            "name": "near-me-unit",
+            "config": "phpunit-near-me-unit.xml.dist",
+            "runtime": "host"
+          },
+          {
+            "name": "rsvp-perks-unit",
+            "config": "phpunit-rsvp-perks-unit.xml.dist",
+            "runtime": "host"
+          },
+          {
+            "name": "archive-layout-unit",
+            "config": "phpunit-archive-layout-unit.xml.dist",
+            "runtime": "host"
+          },
+          {
+            "name": "promoted-events-unit",
+            "config": "phpunit-promoted-events-unit.xml.dist",
             "runtime": "host"
           },
           {

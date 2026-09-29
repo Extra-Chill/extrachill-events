@@ -5,6 +5,267 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [0.71.8] - 2026-09-29
+
+### Changed
+- drop redundant mail authorization wrappers
+
+## [0.71.7] - 2026-09-29
+
+### Fixed
+- issue RSVP passes to existing Going attendees when a perk is enabled
+- decode event title in RSVP pass email and log refused sends
+
+## [0.71.6] - 2026-09-29
+
+### Fixed
+- render RSVP pass QR for attendees via a scoped ability permission grant
+
+## [0.71.5] - 2026-09-27
+
+### Changed
+- Legacy event submission tests run as an anonymous visitor
+
+## [0.71.4] - 2026-09-27
+
+### Fixed
+- never let a notification failure fail an accepted event submission
+
+## [0.71.3] - 2026-09-27
+
+### Fixed
+- own event submission workflows with the system agent
+
+## [0.71.2] - 2026-09-27
+
+### Changed
+- Event submission workflow uses the current Data Machine step shape and passes WorkflowSpecValidator
+
+## [0.71.1] - 2026-09-27
+
+### Fixed
+- cook extrachill-events
+
+## [0.71.0] - 2026-09-27
+
+### Added
+- plain-language venue claim with no accidental default and a 'not listed' path
+
+## [0.70.4] - 2026-09-27
+
+### Changed
+- restore the runtime $wpdb in tearDown (fixes managed PHPUnit on main)
+
+## [0.70.3] - 2026-09-27
+
+### Fixed
+- accept Link Pages runtime API version 4, degrade venue-settings instead of fatalling
+
+## [0.70.2] - 2026-09-27
+
+### Fixed
+- accept same-date overnight end times in the publication guard
+
+## [0.70.1] - 2026-09-26
+
+### Fixed
+- let the weekly qualify digest run and send as a system task
+
+## [0.70.0] - 2026-09-26
+
+### Added
+- RSVP perk pass slice 2 — QR scan-to-redeem and the pass in My Shows
+
+## [0.69.9] - 2026-09-26
+
+### Changed
+- register the location taxonomy hierarchically everywhere tests touch it
+
+## [0.69.8] - 2026-09-26
+
+### Fixed
+- unslash direct-insert input before the publication guard parses event details
+
+## [0.69.7] - 2026-09-26
+
+### Fixed
+- resolve continent terms deterministically when a duplicate name exists
+
+## [0.69.6] - 2026-09-25
+
+### Fixed
+- compare location country codes against country terms by canonical name
+
+## [0.69.5] - 2026-09-25
+
+### Fixed
+- match a stateless city's country at its parent, not only its grandparent
+
+## [0.69.4] - 2026-09-25
+
+### Changed
+- execute booking-mysql/booking-concurrency proofs for real, stop hiding them behind Total: 0
+
+## [0.69.3] - 2026-09-25
+
+### Changed
+- bump wp-codebox and homeboy-extensions pins to the changed-scope fixes
+
+## [0.69.2] - 2026-09-24
+
+### Fixed
+- skip the pcntl_fork hold proof in the sandbox, prove it on a real host
+
+## [0.69.1] - 2026-09-24
+
+### Fixed
+- pass card listens for ec:attendance-changed instead of guessing timing
+
+## [0.69.0] - 2026-09-24
+
+### Added
+- RSVP perk pass — issue, show, email, and redeem at the door (slice 1)
+
+### Changed
+- Gardner event-RSVP persona journey against the real Oct 21 2026 Lo-Fi Brewing meetup
+
+## [0.68.3] - 2026-09-22
+
+### Fixed
+- grant id-token so the shared release workflow can start
+
+## [0.68.2] - 2026-09-22
+
+### Fixed
+- state the PHP version this plugin actually requires
+
+## [0.68.1] - 2026-09-21
+
+### Fixed
+- stop InternalBookingHoldConcurrencyMySQLProof inheriting another suite's declared tests
+
+## [0.68.0] - 2026-09-21
+
+### Added
+- render surfaces for promoted events — location archive callout + Local Scene homepage card
+
+### Changed
+- skip automatic term classification for event posts
+
+### Fixed
+- default unresolvable event types to Other, not Concert
+
+## [0.67.8] - 2026-09-21
+
+### Fixed
+- register real abilities instead of a hand-rolled wp_get_ability() stub
+
+## [0.67.7] - 2026-09-21
+
+### Changed
+- render related events through the theme shared grid renderer
+
+## [0.67.6] - 2026-09-21
+
+### Changed
+- bump homeboy-extensions pin to v3.48.5 for suite-scoped test selection
+
+## [0.67.5] - 2026-09-21
+
+### Changed
+- add continuous release pipeline
+- fix three failing tests from #848 and clear release lint errors
+
+### Fixed
+- restore venue operator disclosure above the calendar on venue archives
+
+## [0.67.4] - 2026-09-19
+
+### Fixed
+- make --no-ai actually invokable on classify-genre
+
+## [0.67.3] - 2026-09-18
+
+### Fixed
+- render archive map and sign-in prompts below the event listings
+
+## [0.67.2] - 2026-09-18
+
+### Fixed
+- Near Me city grid uses upcoming counts and home ordering
+
+## [0.67.1] - 2026-09-18
+
+### Fixed
+- degrade near-me to city grid when scoped results never arrive
+- re-pin DME calendar contract and refresh CLI command inventory
+
+## [0.67.0] - 2026-09-17
+
+### Added
+- quick-add upcoming shows from My Shows search
+
+### Fixed
+- center and evenly space My Shows stats bar tiles
+
+## [0.66.0] - 2026-09-08
+
+### Added
+- classify-genre CLI for unclaimed events-site artist terms
+- bind genre to events, materialize from artist genres, lock out import, sync-genres CLI
+- heuristic venue tier classification CLI with priority reconciliation
+
+### Fixed
+- clear release preflight findings (php 7.4 catch, phpstan, bootstrap sniffs)
+- hide event_type badge on cards, expose event_type in filter modal
+
+## [0.65.0] - 2026-09-08
+
+### Added
+- supply EC event_type vocabulary and dry-run backfill CLI
+- create missing Country/City location terms from venue metadata
+- import bound venue calendar feeds on a schedule
+- bind venues to public calendar feeds
+- open the booking inquiry form in a modal
+- send venue operators a dedicated booking inquiry email
+- reduce booking intake to the questions that qualify a show
+- add promoter managed workspace
+- add promoter-owned Link Pages
+- add venue-owned Link Pages
+- add scoped promoter venue grants
+- add verified promoter organizations
+
+### Changed
+- run on PHP 8.4 and advance the homeboy-extensions pin
+- use the shared service account provider for venue discovery
+- retire venue booking intake presentation overrides
+- remove vendor requests from the booking platform
+- remove Local Support from the booking platform
+- share Link Page editor across Events
+- isolate concert stats registration URLs
+
+### Fixed
+- guard the remaining Data Machine ability stubs
+- preload the shared test bootstrap for every sandbox suite
+- restore the promoter Link Page anchor the management URL targets
+- classify membership and promoter-authority as host suites, guard DM stub
+- restore each folded suite's own bootstrap as a per-suite preload
+- guard the Agents API principal fixture against redeclaration
+- stop declaring validation dependencies in two places
+- advance homeboy-extensions ref to restore the test phase
+- stop link-page providers flooding debug.log on every request
+- never publish private or unconfirmed calendar entries
+- advance WP Codebox pin past the typed-recipe refactor
+- advance the coupled homeboy-extensions and WP Codebox runtime pins
+- unpin CI from stale homeboy 0.319.2 binary
+- align intake answer shapes with the editor contract
+- stop coloring needs_info bookings as terminal on the venue calendar
+- make booking operations legible to a nontechnical venue manager
+- default venue booking console to calendar view
+- discover promoter Events workspaces
+- scope organizer event queries before limiting
+- lock organizer authority during mutations
+
 ## [0.64.1] - 2026-08-22
 
 ### Fixed

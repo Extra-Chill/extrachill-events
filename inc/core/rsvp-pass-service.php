@@ -85,7 +85,7 @@ function extrachill_events_backfill_rsvp_passes( int $event_id ): int {
 
 	$issued = 0;
 	foreach ( (array) $attendees as $attendee ) {
-		$user_id = (int) ( $attendee['user_id'] ?? 0 );
+		$user_id = (int) $attendee['user_id'];
 		if ( $user_id <= 0 ) {
 			continue;
 		}

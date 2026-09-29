@@ -33,7 +33,7 @@ if ( ! function_exists( 'get_post_meta' ) ) {
 
 if ( ! function_exists( 'get_userdata' ) ) {
 	function get_userdata( $user_id ) {
-		return $GLOBALS['rsvp_pass_email_test']['users'][ $user_id ] ?? false;
+		return $GLOBALS['rsvp_pass_mail_test']['users'][ $user_id ] ?? false;
 	}
 }
 
@@ -77,8 +77,8 @@ if ( ! function_exists( 'esc_url' ) ) {
 
 if ( ! function_exists( 'ec_send_email_queued' ) ) {
 	function ec_send_email_queued( array $args ) {
-		$GLOBALS['rsvp_pass_email_test']['sent'][] = $args;
-		return $GLOBALS['rsvp_pass_email_test']['result'] ?? array( 'success' => true );
+		$GLOBALS['rsvp_pass_mail_test']['sent'][] = $args;
+		return $GLOBALS['rsvp_pass_mail_test']['result'] ?? array( 'success' => true );
 	}
 }
 
@@ -91,7 +91,7 @@ final class RsvpPassEmailTest extends PHPUnit\Framework\TestCase {
 	private const USER_ID  = 708;
 
 	protected function setUp(): void {
-		$GLOBALS['rsvp_pass_email_test'] = array(
+		$GLOBALS['rsvp_pass_mail_test'] = array(
 			'sent'   => array(),
 			'result' => array( 'success' => true ),
 			'users'  => array(
@@ -119,7 +119,7 @@ final class RsvpPassEmailTest extends PHPUnit\Framework\TestCase {
 
 	protected function tearDown(): void {
 		unset(
-			$GLOBALS['rsvp_pass_email_test'],
+			$GLOBALS['rsvp_pass_mail_test'],
 			$GLOBALS['event_management_test']['posts'][ self::EVENT_ID ],
 			$GLOBALS['event_perk_test']['meta'][ self::EVENT_ID ],
 			$GLOBALS['ec_artist_test']['fired_actions']
@@ -138,7 +138,7 @@ final class RsvpPassEmailTest extends PHPUnit\Framework\TestCase {
 	public function test_subject_uses_the_decoded_title(): void {
 		$this->send();
 
-		$sent = $GLOBALS['rsvp_pass_email_test']['sent'];
+		$sent = $GLOBALS['rsvp_pass_mail_test']['sent'];
 		$this->assertCount( 1, $sent );
 		$this->assertSame( 'Your RSVP pass for Extra Chill & WordPress Meetup: Building Your Online Presence', $sent[0]['subject'] );
 		$this->assertStringNotContainsString( '&amp;', $sent[0]['subject'] );
@@ -147,7 +147,7 @@ final class RsvpPassEmailTest extends PHPUnit\Framework\TestCase {
 	public function test_body_escapes_the_title_exactly_once(): void {
 		$this->send();
 
-		$body = $GLOBALS['rsvp_pass_email_test']['sent'][0]['context']['body_html'];
+		$body = $GLOBALS['rsvp_pass_mail_test']['sent'][0]['context']['body_html'];
 		$this->assertStringContainsString( 'Extra Chill &amp; WordPress Meetup', $body );
 		$this->assertStringNotContainsString( '&amp;amp;', $body );
 		$this->assertStringContainsString( 'DL4QD-754DX-UMMEH', $body );
@@ -161,7 +161,7 @@ final class RsvpPassEmailTest extends PHPUnit\Framework\TestCase {
 	}
 
 	public function test_refused_send_is_logged_without_the_address(): void {
-		$GLOBALS['rsvp_pass_email_test']['result'] = array(
+		$GLOBALS['rsvp_pass_mail_test']['result'] = array(
 			'success'    => false,
 			'error'      => 'An authorized mailbox ref is required to queue email.',
 			'error_code' => 'email_queue_mailbox_required',

@@ -28,7 +28,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class EventRoundupAbilities {
 
+	/**
+	 * Capability shared by every roundup ability.
+	 *
+	 * Build composes query + render, so the three abilities must agree;
+	 * otherwise the composable query -> render path is stricter than the
+	 * one-shot build that calls the same query internally (#932). The query
+	 * reads public event data and render writes an image, so the image-upload
+	 * capability is the gate for all three.
+	 */
+	public const ROUNDUP_CAPABILITY = 'upload_files';
+
 	private static bool $registered = false;
+
+	/**
+	 * Shared permission callback for the query, render, and build abilities.
+	 */
+	public static function canRunRoundup(): bool {
+		return current_user_can( self::ROUNDUP_CAPABILITY );
+	}
 
 	public function __construct() {
 		if ( ! self::$registered ) {
@@ -103,9 +121,7 @@ class EventRoundupAbilities {
 					),
 				),
 				'execute_callback'    => array( $this, 'executeQuery' ),
-				'permission_callback' => function () {
-					return current_user_can( 'manage_options' );
-				},
+				'permission_callback' => array( self::class, 'canRunRoundup' ),
 				'meta'                => array( 'show_in_rest' => true ),
 			)
 		);
@@ -154,9 +170,7 @@ class EventRoundupAbilities {
 					),
 				),
 				'execute_callback'    => array( $this, 'executeRender' ),
-				'permission_callback' => function () {
-					return current_user_can( 'upload_files' );
-				},
+				'permission_callback' => array( self::class, 'canRunRoundup' ),
 				'meta'                => array( 'show_in_rest' => true ),
 			)
 		);
@@ -217,9 +231,7 @@ class EventRoundupAbilities {
 					),
 				),
 				'execute_callback'    => array( $this, 'executeBuild' ),
-				'permission_callback' => function () {
-					return current_user_can( 'upload_files' );
-				},
+				'permission_callback' => array( self::class, 'canRunRoundup' ),
 				'meta'                => array( 'show_in_rest' => true ),
 			)
 		);

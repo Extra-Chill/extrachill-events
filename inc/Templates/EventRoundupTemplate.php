@@ -164,7 +164,7 @@ class EventRoundupTemplate implements TemplateInterface {
 
 		$image_paths = array();
 
-		foreach ( $slides_distribution as $index => $slide_days ) {
+		foreach ( array_values( $slides_distribution ) as $index => $slide_days ) {
 			$slide_title = ( 0 === $index ) ? $title : '';
 
 			$path = $this->render_slide(

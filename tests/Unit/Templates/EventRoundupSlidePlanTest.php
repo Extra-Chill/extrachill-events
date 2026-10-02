@@ -71,7 +71,8 @@ final class EventRoundupSlidePlanTest extends BookingTestCase {
 	private function content_extents( array $slides, int $title ): array {
 		$extents = array();
 		foreach ( $slides as $index => $slide ) {
-			$y = self::TOP + ( 0 === $index ? $title : 0 );
+			$y   = self::TOP + ( 0 === $index ? $title : 0 );
+			$max = $y;
 			foreach ( $slide as $day ) {
 				$y  += self::HEADER + count( $day['events'] ) * self::EVENT;
 				$max = $y;

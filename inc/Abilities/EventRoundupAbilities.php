@@ -438,7 +438,7 @@ class EventRoundupAbilities {
 		if ( '' !== $scope && class_exists( ScopeResolver::class ) ) {
 			$scope_range = ScopeResolver::resolve( $scope );
 			if ( $scope_range ) {
-				$range = array(
+				$range      = array(
 					'date_start' => (string) $scope_range['date_start'],
 					'date_end'   => (string) $scope_range['date_end'],
 				);

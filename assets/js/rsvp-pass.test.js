@@ -83,6 +83,22 @@ describe( 'RSVP pass watcher', () => {
 		).toBe( 'First beer on Extra Chill' );
 	} );
 
+	it( 'reveals the pass when wp_localize_script delivers eventId as a string', async () => {
+		mockApiFetch( () =>
+			Promise.resolve( { issued: true, code: 'ABCDE-FGH2J-K3LMN' } )
+		);
+		// wp_localize_script() stringifies scalars: production sends "42".
+		loadRsvpPass( { eventId: '42' } );
+
+		fireAttendanceChanged( { eventId: 42, marked: true } );
+		await flushPromises();
+
+		expect( global.wp.apiFetch ).toHaveBeenCalled();
+		expect( document.getElementById( 'ec-rsvp-pass-42' ).hidden ).toBe(
+			false
+		);
+	} );
+
 	it( 'sets the QR image src from qrBaseUrl + the pass code (slice 2)', async () => {
 		mockApiFetch( () =>
 			Promise.resolve( { issued: true, code: 'AB CD/EF' } )
@@ -208,9 +224,28 @@ describe( 'RSVP pass watcher', () => {
 
 		expect( global.wp.apiFetch ).toHaveBeenCalledWith(
 			expect.objectContaining( {
-				path: '/wp-abilities/v1/abilities/extrachill/get-my-event-pass/run',
-				data: { input: { event_id: 999 } },
+				path: '/wp-abilities/v1/abilities/extrachill/get-my-event-pass/run?input[event_id]=999',
+				method: 'GET',
 			} )
+		);
+	} );
+
+	it( 'warns when the pass ability returns an HTTP error', async () => {
+		const error = Object.assign( new Error( 'Method not allowed' ), {
+			data: { status: 405 },
+		} );
+		mockApiFetch( () => Promise.reject( error ) );
+		const warn = jest
+			.spyOn( console, 'warn' )
+			.mockImplementation( () => {} );
+		loadRsvpPass( { eventId: 42 } );
+
+		fireAttendanceChanged( { eventId: 42, marked: true } );
+		await flushPromises();
+
+		expect( warn ).toHaveBeenCalledWith(
+			'Unable to refresh RSVP pass.',
+			error
 		);
 	} );
 } );
@@ -252,6 +287,7 @@ describe( 'RSVP door list redeem', () => {
 		expect( global.wp.apiFetch ).toHaveBeenCalledWith(
 			expect.objectContaining( {
 				path: '/wp-abilities/v1/abilities/extrachill/redeem-event-pass/run',
+				method: 'POST',
 				data: { input: { event_id: 42, user_id: 7 } },
 			} )
 		);

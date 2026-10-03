@@ -104,9 +104,9 @@
 	 */
 	function refreshPass( eventId ) {
 		apiFetch(
-			'/wp-abilities/v1/abilities/extrachill/get-my-event-pass/run',
-			'POST',
-			{ input: { event_id: eventId } }
+			'/wp-abilities/v1/abilities/extrachill/get-my-event-pass/run?input[event_id]=' +
+				encodeURIComponent( eventId ),
+			'GET'
 		)
 			.then( function ( response ) {
 				const container = document.getElementById(
@@ -114,9 +114,17 @@
 				);
 				renderPass( container, response );
 			} )
-			.catch( function () {
+			.catch( function ( error ) {
 				// Network hiccups are non-fatal: the pass stays as it was
 				// server-rendered on load, or from the previous refresh.
+				if (
+					error &&
+					( typeof error.status === 'number' ||
+						( error.data &&
+							typeof error.data.status === 'number' ) )
+				) {
+					console.warn( 'Unable to refresh RSVP pass.', error );
+				}
 			} );
 	}
 
@@ -133,7 +141,12 @@
 			return;
 		}
 
-		const eventId = window.ecRsvpPass.eventId;
+		// wp_localize_script() stringifies values, so the localized eventId
+		// arrives as "486727"; normalize it before comparing to the number.
+		const eventId = parseInt( window.ecRsvpPass.eventId, 10 );
+		if ( ! eventId ) {
+			return;
+		}
 
 		document.addEventListener( 'ec:attendance-changed', function ( event ) {
 			const detail = event.detail || {};

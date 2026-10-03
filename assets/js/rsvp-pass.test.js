@@ -229,7 +229,6 @@ describe( 'RSVP pass watcher', () => {
 			} )
 		);
 	} );
-
 } );
 
 describe( 'RSVP door list redeem', () => {

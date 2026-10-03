@@ -230,24 +230,6 @@ describe( 'RSVP pass watcher', () => {
 		);
 	} );
 
-	it( 'warns when the pass ability returns an HTTP error', async () => {
-		const error = Object.assign( new Error( 'Method not allowed' ), {
-			data: { status: 405 },
-		} );
-		mockApiFetch( () => Promise.reject( error ) );
-		const warn = jest
-			.spyOn( console, 'warn' )
-			.mockImplementation( () => {} );
-		loadRsvpPass( { eventId: 42 } );
-
-		fireAttendanceChanged( { eventId: 42, marked: true } );
-		await flushPromises();
-
-		expect( warn ).toHaveBeenCalledWith(
-			'Unable to refresh RSVP pass.',
-			error
-		);
-	} );
 } );
 
 describe( 'RSVP door list redeem', () => {

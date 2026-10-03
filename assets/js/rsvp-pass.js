@@ -114,17 +114,9 @@
 				);
 				renderPass( container, response );
 			} )
-			.catch( function ( error ) {
+			.catch( function () {
 				// Network hiccups are non-fatal: the pass stays as it was
 				// server-rendered on load, or from the previous refresh.
-				if (
-					error &&
-					( typeof error.status === 'number' ||
-						( error.data &&
-							typeof error.data.status === 'number' ) )
-				) {
-					console.warn( 'Unable to refresh RSVP pass.', error );
-				}
 			} );
 	}
 

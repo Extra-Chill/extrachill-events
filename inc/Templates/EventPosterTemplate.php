@@ -69,6 +69,9 @@ class EventPosterTemplate implements TemplateInterface {
 	private const BANNER_TEXT_SIZE = 34;
 	private const MIN_BANNER_GAP   = 40;
 
+	/** GD alpha (0 opaque .. 127 transparent) for the background stripes. */
+	private const STRIPE_ALPHA = 122;
+
 	/** Share of spare vertical space placed above the content block. */
 	private const SLACK_ABOVE = 0.4;
 
@@ -213,6 +216,7 @@ class EventPosterTemplate implements TemplateInterface {
 		$accent = $r->color_hex( 'accent', (string) ( $c['dark_accent'] ?? $c['accent'] ?? '#53940b' ) );
 		$ink    = $r->color_hex( 'ink', $bg_hex );
 		$r->fill( $bg );
+		self::draw_stripes( $r, $width, $height, $u );
 
 		$margin = $px( self::MARGIN );
 		$max_w  = $width - 2 * $margin;
@@ -311,6 +315,26 @@ class EventPosterTemplate implements TemplateInterface {
 		}
 		if ( '' !== $note ) {
 			$r->draw_text_wrapped( $note, $px( self::NOTE_SIZE ), $nx, $fy + (int) ( ( $cb_h - $px( self::NOTE_SIZE ) ) / 2 ) - $px( 4 ), $muted, 'body', $foot_w - ( $nx - $margin ), 1.3 );
+		}
+	}
+
+	/**
+	 * Subtle diagonal stripes for texture, as on the approved prototype.
+	 *
+	 * Near-transparent white lines at a 45-degree angle, spaced 1/18 of
+	 * the canvas width, so the background reads as textured, not flat.
+	 *
+	 * @param GDRenderer $r      Renderer with a filled canvas.
+	 * @param int        $width  Canvas width.
+	 * @param int        $height Canvas height.
+	 * @param float      $u      Scale unit (width / 1080).
+	 */
+	private static function draw_stripes( GDRenderer $r, int $width, int $height, float $u ): void {
+		$stripe = $r->color( 'stripe', 255, 255, 255, self::STRIPE_ALPHA );
+		$step   = max( 1, (int) ( $width / 18 ) );
+		$weight = max( 2, (int) round( 4 * $u ) );
+		for ( $x = -$height; $x < $width; $x += $step ) {
+			$r->draw_line( $x, $height, $x + $height, 0, $stripe, $weight );
 		}
 	}
 

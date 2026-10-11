@@ -488,7 +488,7 @@ class EventPosterTemplate implements TemplateInterface {
 	public static function event_details_attrs( string $content ): array {
 		foreach ( parse_blocks( $content ) as $block ) {
 			if ( 'data-machine-events/event-details' === ( $block['blockName'] ?? '' ) ) {
-				return (array) ( $block['attrs'] ?? array() );
+				return (array) $block['attrs'];
 			}
 		}
 		return array();

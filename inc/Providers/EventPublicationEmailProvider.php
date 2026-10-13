@@ -30,11 +30,11 @@ final class EventPublicationEmailProvider {
 			return $context;
 		}
 
-		$title      = get_the_title( $post );
-		$event_url  = get_permalink( $post );
-		$name       = (string) get_post_meta( $post->ID, '_datamachine_submitter_name', true );
-		$user_id    = (int) get_post_meta( $post->ID, '_datamachine_submitted_by', true );
-		$subject    = sprintf(
+		$title     = get_the_title( $post );
+		$event_url = get_permalink( $post );
+		$name      = (string) get_post_meta( $post->ID, '_datamachine_submitter_name', true );
+		$user_id   = (int) get_post_meta( $post->ID, '_datamachine_submitted_by', true );
+		$subject   = sprintf(
 			/* translators: %s: event title. */
 			__( 'Your event is live on Extra Chill: %s', 'extrachill-events' ),
 			$title

@@ -31,8 +31,8 @@ function extrachill_events_submit_landing_reach(): string {
 		return '';
 	}
 	$stats  = extrachill_events_get_calendar_stats();
-	$events = (int) ( $stats['events'] ?? 0 );
-	$cities = (int) ( $stats['locations'] ?? 0 );
+	$events = $stats['events'];
+	$cities = $stats['locations'];
 	if ( $events <= 0 || $cities <= 0 ) {
 		return '';
 	}

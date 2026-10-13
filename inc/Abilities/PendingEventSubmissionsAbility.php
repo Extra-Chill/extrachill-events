@@ -75,7 +75,7 @@ class PendingEventSubmissionsAbility {
 				? new \DateTimeImmutable( substr( (string) $event->start_datetime, 0, 10 ), wp_timezone() )
 				: null;
 			$days_until   = $event_date ? (int) $today->diff( $event_date )->format( '%r%a' ) : null;
-			$days_waiting = max( 0, (int) ( new \DateTimeImmutable( substr( get_post_time( 'Y-m-d', true, $post ), 0, 10 ), wp_timezone() ) )->diff( $today )->format( '%r%a' ) );
+			$days_waiting = max( 0, (int) ( new \DateTimeImmutable( substr( (string) get_post_time( 'Y-m-d', true, $post ), 0, 10 ), wp_timezone() ) )->diff( $today )->format( '%r%a' ) );
 			$rows[]       = array(
 				'id'               => (int) $post->ID,
 				'title'            => get_the_title( $post ),

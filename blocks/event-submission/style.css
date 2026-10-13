@@ -251,28 +251,8 @@
 }
 
 .ec-submit-landing__lede {
-	margin-bottom: 24px;
+	margin-bottom: 20px;
 	font-size: var(--font-size-lg, 1.125rem);
-	color: var(--muted-text);
-}
-
-.ec-submit-landing__subtitle {
-	margin-bottom: 8px;
-	font-size: var(--font-size-lg, 1.125rem);
-}
-
-.ec-submit-landing__steps {
-	margin: 0 0 8px;
-	padding-left: 1.25rem;
-}
-
-.ec-submit-landing__steps li {
-	margin-bottom: 4px;
-}
-
-.ec-submit-landing__note {
-	margin-bottom: 24px;
-	font-size: 0.95rem;
 	color: var(--muted-text);
 }
 
@@ -304,7 +284,45 @@
 	font-size: 0.95rem;
 }
 
+.ec-submit-landing__how-link {
+	white-space: nowrap;
+	font-size: 0.95rem;
+}
+
+.ec-event-submission__field-hint {
+	margin: 0;
+	font-size: 0.85rem;
+	color: var(--muted-text);
+}
+
+/* "How it works" below the form: reference material, not a gate. */
+.ec-submit-how {
+	max-width: 760px;
+	margin: 40px auto 0;
+	color: var(--text-color);
+}
+
+.ec-submit-how__title {
+	margin-top: 0;
+	margin-bottom: 16px;
+	font-size: var(--font-size-2xl, 1.5rem);
+}
+
+.ec-submit-how__list {
+	margin: 0;
+}
+
+.ec-submit-how__list dt {
+	font-weight: 600;
+}
+
+.ec-submit-how__list dd {
+	margin: 2px 0 16px;
+	color: var(--muted-text);
+}
+
 .ec-event-submission__url-import,
-.ec-event-submission__form {
+.ec-event-submission__form,
+.ec-submit-how {
 	scroll-margin-top: 96px;
 }

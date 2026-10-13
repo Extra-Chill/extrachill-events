@@ -45,19 +45,22 @@ function extrachill_events_submit_landing_reach(): string {
 	);
 }
 
+/** Anchor for the "How it works" section rendered below the form. */
+const EXTRACHILL_EVENTS_SUBMIT_HOW_ANCHOR = 'ec-submit-how';
+
 /**
- * Render the landing section markup.
+ * Render the short intro shown above the form.
+ *
+ * Deliberately brief: most visitors arrive ready to submit (from the header
+ * link or a venue/city CTA with the form prefilled), so the form must stay
+ * near the top. The explanation lives below the form; see
+ * extrachill_events_render_submit_how_it_works().
  *
  * @param string $form_id DOM id of the manual submission form, for the in-page link.
  * @return string
  */
 function extrachill_events_render_submit_landing( string $form_id ): string {
 	$reach = extrachill_events_submit_landing_reach();
-	$steps = array(
-		__( 'We check the details.', 'extrachill-events' ),
-		__( 'Your show goes live on the calendar and on its venue and city pages.', 'extrachill-events' ),
-		__( 'We email you the link so you can share it.', 'extrachill-events' ),
-	);
 
 	ob_start();
 	?>
@@ -68,26 +71,73 @@ function extrachill_events_render_submit_landing( string $form_id ): string {
 			<?php if ( '' !== $reach ) : ?>
 				<?php echo esc_html( $reach ); ?>
 			<?php endif; ?>
+			<a class="ec-submit-landing__how-link" href="<?php echo esc_url( '#' . EXTRACHILL_EVENTS_SUBMIT_HOW_ANCHOR ); ?>" data-ec-track="<?php echo esc_attr( EXTRACHILL_EVENTS_SUBMIT_LANDING_TRACK ); ?>" data-ec-track-placement="how_it_works"><?php esc_html_e( 'How it works ↓', 'extrachill-events' ); ?></a>
 		</p>
-
-		<h3 class="ec-submit-landing__subtitle"><?php esc_html_e( 'What happens next', 'extrachill-events' ); ?></h3>
-		<ol class="ec-submit-landing__steps">
-			<?php foreach ( $steps as $step ) : ?>
-				<li><?php echo esc_html( $step ); ?></li>
-			<?php endforeach; ?>
-		</ol>
-		<p class="ec-submit-landing__note"><?php esc_html_e( 'Once you’ve had a show published, the next ones you add while signed in go live right away.', 'extrachill-events' ); ?></p>
 
 		<div class="ec-submit-landing__paths">
 			<a class="ec-submit-landing__path" href="<?php echo esc_url( '#' . EXTRACHILL_EVENTS_SUBMIT_IMPORT_ANCHOR ); ?>" data-ec-track="<?php echo esc_attr( EXTRACHILL_EVENTS_SUBMIT_LANDING_TRACK ); ?>" data-ec-track-placement="import">
 				<strong><?php esc_html_e( 'Have a whole calendar or tour?', 'extrachill-events' ); ?></strong>
-				<span><?php esc_html_e( 'Import a venue calendar, tour page or festival schedule at once.', 'extrachill-events' ); ?></span>
+				<span><?php esc_html_e( 'Give us the URL and new shows import automatically.', 'extrachill-events' ); ?></span>
 			</a>
 			<a class="ec-submit-landing__path" href="<?php echo esc_url( '#' . $form_id ); ?>" data-ec-track="<?php echo esc_attr( EXTRACHILL_EVENTS_SUBMIT_LANDING_TRACK ); ?>" data-ec-track-placement="manual">
 				<strong><?php esc_html_e( 'Just one show?', 'extrachill-events' ); ?></strong>
-				<span><?php esc_html_e( 'Fill in the form below. Add a flyer and we’ll pull in the details it shows.', 'extrachill-events' ); ?></span>
+				<span><?php esc_html_e( 'Fill in the form below.', 'extrachill-events' ); ?></span>
 			</a>
 		</div>
+	</section>
+	<?php
+	return (string) ob_get_clean();
+}
+
+/**
+ * Render the "How it works" section shown below the form.
+ *
+ * Every line describes shipped behavior: automated import (data-machine-events
+ * flows), required vs optional fields and flyer extraction (event-submission
+ * block), human review, venue/city/Near Me placement and the weekly city email
+ * (local scene digest), the publish email (#952), account creation with a
+ * set-password link, trusted auto-publish (#953), and recurring source import.
+ *
+ * @return string
+ */
+function extrachill_events_render_submit_how_it_works(): string {
+	$items = array(
+		array(
+			__( 'Most of the calendar fills itself.', 'extrachill-events' ),
+			__( 'We import shows automatically from venue websites and ticketing calendars. Submissions cover what that misses: new venues, DIY and house shows, anything not listed online.', 'extrachill-events' ),
+		),
+		array(
+			__( 'What we need.', 'extrachill-events' ),
+			__( 'A title, a date and how to reach you. Venue, lineup, ticket link and a flyer are optional. If you add a flyer, we read it and fill in the details it shows.', 'extrachill-events' ),
+		),
+		array(
+			__( 'A person checks it.', 'extrachill-events' ),
+			__( 'Once it’s approved, your show gets its own page and appears on its venue’s page, its city’s page and Near Me. It can also go out in that city’s weekly email to subscribers.', 'extrachill-events' ),
+		),
+		array(
+			__( 'You get the link.', 'extrachill-events' ),
+			__( 'We email it when the show is live, so you can share it.', 'extrachill-events' ),
+		),
+		array(
+			__( 'Your account.', 'extrachill-events' ),
+			__( 'Submitting connects your show to a free Extra Chill account, and we email you a link to set a password. Once you’ve had a show published, the next ones you add while signed in skip review.', 'extrachill-events' ),
+		),
+		array(
+			__( 'Whole calendars and tours.', 'extrachill-events' ),
+			__( 'Give us the URL. We test it, review it once, and new shows from it import automatically after that.', 'extrachill-events' ),
+		),
+	);
+
+	ob_start();
+	?>
+	<section id="<?php echo esc_attr( EXTRACHILL_EVENTS_SUBMIT_HOW_ANCHOR ); ?>" class="ec-submit-how" aria-labelledby="ec-submit-how-title">
+		<h2 id="ec-submit-how-title" class="ec-submit-how__title"><?php esc_html_e( 'How it works', 'extrachill-events' ); ?></h2>
+		<dl class="ec-submit-how__list">
+			<?php foreach ( $items as $item ) : ?>
+				<dt><?php echo esc_html( $item[0] ); ?></dt>
+				<dd><?php echo esc_html( $item[1] ); ?></dd>
+			<?php endforeach; ?>
+		</dl>
 	</section>
 	<?php
 	return (string) ob_get_clean();

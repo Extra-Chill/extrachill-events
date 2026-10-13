@@ -171,7 +171,8 @@ if ( $show_landing ) {
 							<?php esc_html_e( 'Contact Email', 'extrachill-events' ); ?>
 							<span aria-hidden="true">*</span>
 						</label>
-						<input type="email" name="contact_email" id="<?php echo esc_attr( $form_id ); ?>-contact-email" required />
+						<input type="email" name="contact_email" id="<?php echo esc_attr( $form_id ); ?>-contact-email" aria-describedby="<?php echo esc_attr( $form_id ); ?>-contact-email-hint" required />
+						<p class="ec-event-submission__field-hint" id="<?php echo esc_attr( $form_id ); ?>-contact-email-hint"><?php esc_html_e( 'We’ll connect your show to a free Extra Chill account for this email and send you a link to set a password.', 'extrachill-events' ); ?></p>
 					</div>
 				<?php endif; ?>
 
@@ -238,7 +239,8 @@ if ( $show_landing ) {
 				<label for="<?php echo esc_attr( $form_id ); ?>-flyer">
 					<?php esc_html_e( 'Flyer Upload (JPG, PNG, WebP, PDF)', 'extrachill-events' ); ?>
 				</label>
-				<input type="file" name="flyer" id="<?php echo esc_attr( $form_id ); ?>-flyer" accept="image/*,.pdf" />
+				<input type="file" name="flyer" id="<?php echo esc_attr( $form_id ); ?>-flyer" accept="image/*,.pdf" aria-describedby="<?php echo esc_attr( $form_id ); ?>-flyer-hint" />
+				<p class="ec-event-submission__field-hint" id="<?php echo esc_attr( $form_id ); ?>-flyer-hint"><?php esc_html_e( 'Optional. We read the flyer and fill in the details it shows.', 'extrachill-events' ); ?></p>
 			</div>
 
 			<div class="ec-event-submission__turnstile">
@@ -260,3 +262,8 @@ if ( $show_landing ) {
 		</form>
 	</div>
 </div>
+
+<?php
+if ( $show_landing && function_exists( 'extrachill_events_render_submit_how_it_works' ) ) {
+	echo extrachill_events_render_submit_how_it_works(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped inside the renderer.
+}

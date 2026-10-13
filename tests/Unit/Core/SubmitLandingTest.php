@@ -34,16 +34,29 @@ final class SubmitLandingTest extends TestCase {
 		);
 	}
 
-	public function test_landing_states_value_steps_and_paths(): void {
+	public function test_intro_is_short_and_points_to_paths(): void {
 		$html = extrachill_events_render_submit_landing( 'ec-event-form-1' );
 
 		$this->assertStringContainsString( 'Get your show on the calendar', $html );
 		$this->assertStringContainsString( 'Adding a show is free.', $html );
-		$this->assertStringContainsString( 'What happens next', $html );
-		$this->assertSame( 3, substr_count( $html, '<li>' ) );
-		$this->assertStringContainsString( 'go live right away', $html );
+		$this->assertStringContainsString( 'href="#' . EXTRACHILL_EVENTS_SUBMIT_HOW_ANCHOR . '"', $html );
 		$this->assertStringContainsString( 'Have a whole calendar or tour?', $html );
 		$this->assertStringContainsString( 'Just one show?', $html );
+		// The explanation lives below the form, not in the intro.
+		$this->assertStringNotContainsString( 'Most of the calendar fills itself', $html );
+		$this->assertStringNotContainsString( '<dl', $html );
+	}
+
+	public function test_how_it_works_explains_the_mechanics(): void {
+		$html = extrachill_events_render_submit_how_it_works();
+
+		$this->assertStringContainsString( 'id="' . EXTRACHILL_EVENTS_SUBMIT_HOW_ANCHOR . '"', $html );
+		$this->assertSame( 6, substr_count( $html, '<dt>' ) );
+		foreach ( array( 'Most of the calendar fills itself.', 'What we need.', 'A person checks it.', 'You get the link.', 'Your account.', 'Whole calendars and tours.' ) as $heading ) {
+			$this->assertStringContainsString( $heading, $html );
+		}
+		$this->assertStringContainsString( 'skip review', $html );
+		$this->assertStringContainsString( 'weekly email', $html );
 	}
 
 	public function test_reach_line_uses_calendar_stats(): void {
@@ -67,7 +80,8 @@ final class SubmitLandingTest extends TestCase {
 
 		$this->assertStringContainsString( 'href="#' . EXTRACHILL_EVENTS_SUBMIT_IMPORT_ANCHOR . '"', $html );
 		$this->assertStringContainsString( 'href="#ec-event-form-7"', $html );
-		$this->assertSame( 2, substr_count( $html, 'data-ec-track="events_submit_landing"' ) );
+		$this->assertSame( 3, substr_count( $html, 'data-ec-track="events_submit_landing"' ) );
+		$this->assertStringContainsString( 'data-ec-track-placement="how_it_works"', $html );
 		$this->assertStringContainsString( 'data-ec-track-placement="import"', $html );
 		$this->assertStringContainsString( 'data-ec-track-placement="manual"', $html );
 	}
@@ -78,6 +92,14 @@ final class SubmitLandingTest extends TestCase {
 
 		$this->assertTrue( $block['attributes']['landing']['default'] );
 		$this->assertStringContainsString( 'extrachill_events_render_submit_landing( $form_id )', $render );
+		$this->assertStringContainsString( 'extrachill_events_render_submit_how_it_works()', $render );
+		$this->assertLessThan(
+			strpos( $render, 'extrachill_events_render_submit_how_it_works()' ),
+			strpos( $render, '</form>' ),
+			'How it works must render after the form.'
+		);
+		$this->assertStringContainsString( '-contact-email-hint', $render );
+		$this->assertStringContainsString( '-flyer-hint', $render );
 		$this->assertSame( 2, substr_count( $render, 'id="<?php echo esc_attr( $import_anchor ); ?>"' ), 'Both import panels (signed in and signed out) need the anchor id.' );
 	}
 }

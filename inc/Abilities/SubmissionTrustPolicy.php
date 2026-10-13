@@ -24,7 +24,7 @@ final class SubmissionTrustPolicy {
 				'posts_per_page' => 1,
 				'fields'         => 'ids',
 				'meta_key'       => '_datamachine_submitted_by',
-				'meta_value'     => $user_id,
+				'meta_value'     => (string) $user_id,
 			)
 		);
 	}

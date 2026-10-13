@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 $defaults   = array(
+	'landing'        => true,
 	'headline'       => '',
 	'description'    => '',
 	'successMessage' => '',
@@ -40,7 +41,16 @@ $prefill = function_exists( 'extrachill_events_submit_prefill' )
 		'city'  => '',
 	);
 
+$show_landing  = ! empty( $attributes['landing'] ) && function_exists( 'extrachill_events_render_submit_landing' );
+$import_anchor = defined( 'EXTRACHILL_EVENTS_SUBMIT_IMPORT_ANCHOR' ) ? EXTRACHILL_EVENTS_SUBMIT_IMPORT_ANCHOR : 'ec-event-source-import';
+
 $success_attr = $success_message ? wp_strip_all_tags( $success_message ) : __( 'Thanks! We received your submission.', 'extrachill-events' );
+?>
+
+<?php
+if ( $show_landing ) {
+	echo extrachill_events_render_submit_landing( $form_id ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped inside the renderer.
+}
 ?>
 
 <div
@@ -62,7 +72,7 @@ $success_attr = $success_message ? wp_strip_all_tags( $success_message ) : __( '
 		<?php endif; ?>
 
 		<?php if ( is_user_logged_in() ) : ?>
-		<div class="ec-event-submission__url-import" data-state="idle">
+		<div class="ec-event-submission__url-import" id="<?php echo esc_attr( $import_anchor ); ?>" data-state="idle">
 			<div class="ec-event-submission__url-import-intro">
 				<label for="<?php echo esc_attr( $form_id ); ?>-event-source-url">
 					<strong><?php esc_html_e( 'Have a reliable event source?', 'extrachill-events' ); ?></strong>
@@ -113,7 +123,7 @@ $success_attr = $success_message ? wp_strip_all_tags( $success_message ) : __( '
 				? trailingslashit( ec_get_site_url( 'events' ) ) . 'login/?redirect_to=' . rawurlencode( $submit_url )
 				: wp_login_url( $submit_url );
 			?>
-			<div class="ec-event-submission__url-import">
+			<div class="ec-event-submission__url-import" id="<?php echo esc_attr( $import_anchor ); ?>">
 				<strong><?php esc_html_e( 'Have a reliable event source?', 'extrachill-events' ); ?></strong>
 				<p class="ec-event-submission__url-import-hint">
 					<?php esc_html_e( "Import a whole artist tour, venue calendar, or festival schedule at once — free with an Extra Chill account. We'll let you know when it's approved and live.", 'extrachill-events' ); ?>

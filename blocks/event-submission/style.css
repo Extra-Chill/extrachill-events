@@ -233,3 +233,78 @@
 	align-items: center;
 	flex-wrap: wrap;
 }
+
+/*
+ * Landing section above the form (#959). Uses the same design tokens as the
+ * form card so the page reads as one surface.
+ */
+.ec-submit-landing {
+	max-width: 760px;
+	margin: 0 auto 32px;
+	color: var(--text-color);
+}
+
+.ec-submit-landing__title {
+	margin-top: 0;
+	margin-bottom: 8px;
+	font-size: var(--font-size-3xl, 2rem);
+}
+
+.ec-submit-landing__lede {
+	margin-bottom: 24px;
+	font-size: var(--font-size-lg, 1.125rem);
+	color: var(--muted-text);
+}
+
+.ec-submit-landing__subtitle {
+	margin-bottom: 8px;
+	font-size: var(--font-size-lg, 1.125rem);
+}
+
+.ec-submit-landing__steps {
+	margin: 0 0 8px;
+	padding-left: 1.25rem;
+}
+
+.ec-submit-landing__steps li {
+	margin-bottom: 4px;
+}
+
+.ec-submit-landing__note {
+	margin-bottom: 24px;
+	font-size: 0.95rem;
+	color: var(--muted-text);
+}
+
+.ec-submit-landing__paths {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+	gap: 16px;
+}
+
+.ec-submit-landing__path {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 16px 20px;
+	border: 1px solid var(--border-color);
+	border-radius: 12px;
+	background: var(--card-background);
+	color: var(--text-color);
+	text-decoration: none;
+}
+
+.ec-submit-landing__path:hover,
+.ec-submit-landing__path:focus-visible {
+	border-color: var(--link-color, currentColor);
+}
+
+.ec-submit-landing__path span {
+	color: var(--muted-text);
+	font-size: 0.95rem;
+}
+
+.ec-event-submission__url-import,
+.ec-event-submission__form {
+	scroll-margin-top: 96px;
+}

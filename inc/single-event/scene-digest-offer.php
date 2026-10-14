@@ -63,7 +63,7 @@ function extrachill_events_get_event_scene_term( int $post_id ): ?WP_Term {
 	}
 
 	foreach ( $terms as $term ) {
-		if ( $term instanceof WP_Term && count( get_ancestors( $term->term_id, 'location', 'taxonomy' ) ) >= 2 ) {
+		if ( count( get_ancestors( $term->term_id, 'location', 'taxonomy' ) ) >= 2 ) {
 			return $term;
 		}
 	}
@@ -108,7 +108,7 @@ function extrachill_events_digest_subscription_context( ?array $context = null )
  *
  * @hook extrachill_users_entity_subscription_created
  * @param int   $user_id Subscriber.
- * @param array $entity  Normalized entity (entity_type, taxonomy, slug).
+ * @param mixed $entity  Normalized entity (entity_type, taxonomy, slug).
  * @return bool Whether an event was emitted.
  */
 function extrachill_events_record_digest_subscription( $user_id, $entity ): bool {
@@ -162,14 +162,14 @@ function extrachill_events_event_digest_is_subscribed( WP_Term $term ): ?bool {
 		)
 	);
 
-	return is_array( $result ) && ! is_wp_error( $result ) ? ! empty( $result['subscribed'] ) : null;
+	return ! is_wp_error( $result ) && is_array( $result ) ? ! empty( $result['subscribed'] ) : null;
 }
 
 /**
  * Resolve what the offer should render for the current visitor.
  *
  * @param int $post_id Event post ID.
- * @return array{mode:string,term:WP_Term,scene:array|null}|null Null hides the offer.
+ * @return array{mode:string,term:WP_Term,scene:array|null,retry?:bool}|null Null hides the offer.
  */
 function extrachill_events_event_digest_offer_state( int $post_id ): ?array {
 	$term = extrachill_events_get_event_scene_term( $post_id );
@@ -188,7 +188,7 @@ function extrachill_events_event_digest_offer_state( int $post_id ): ?array {
 	$scene  = extrachill_events_get_account_market();
 	$intent = extrachill_events_get_archive_auth_intent( $term );
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only flash set by this module's nonce-protected redirect.
-	$status = isset( $_GET['digest_status'] ) && is_scalar( $_GET['digest_status'] ) ? sanitize_key( wp_unslash( $_GET['digest_status'] ) ) : '';
+	$status = isset( $_GET['digest_status'] ) && is_scalar( $_GET['digest_status'] ) ? sanitize_key( (string) wp_unslash( $_GET['digest_status'] ) ) : '';
 
 	if ( 'subscribe_digest' === $intent ) {
 		return array(
@@ -352,7 +352,7 @@ function extrachill_events_subscribe_to_event_digest( int $post_id, string $surf
 		)
 	);
 
-	return is_array( $result ) && ! is_wp_error( $result ) && ! empty( $result['subscribed'] ) ? 'subscribed' : 'failed';
+	return ! is_wp_error( $result ) && is_array( $result ) && ! empty( $result['subscribed'] ) ? 'subscribed' : 'failed';
 }
 
 /**
@@ -371,7 +371,7 @@ function extrachill_events_handle_event_digest_offer(): void {
 	$status  = 'failed';
 
 	if ( $post_id > 0 && wp_verify_nonce( $nonce, 'extrachill_events_event_digest_' . $post_id ) ) {
-		$surface      = isset( $_POST['extrachill_events_digest_surface'] ) && is_scalar( $_POST['extrachill_events_digest_surface'] ) ? sanitize_key( wp_unslash( $_POST['extrachill_events_digest_surface'] ) ) : 'event_page';
+		$surface      = isset( $_POST['extrachill_events_digest_surface'] ) && is_scalar( $_POST['extrachill_events_digest_surface'] ) ? sanitize_key( (string) wp_unslash( $_POST['extrachill_events_digest_surface'] ) ) : 'event_page';
 		$continuation = isset( $_POST['extrachill_events_digest_continuation'] ) && '1' === $_POST['extrachill_events_digest_continuation'];
 		$status       = extrachill_events_subscribe_to_event_digest( $post_id, $surface, $continuation );
 	}

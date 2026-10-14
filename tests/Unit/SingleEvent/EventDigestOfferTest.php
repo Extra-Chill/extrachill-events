@@ -349,6 +349,16 @@ final class EventDigestOfferTest extends TestCase {
 		$this->assertStringContainsString( 'data-event-digest-mode="subscribe"', $this->render() );
 	}
 
+	public function test_failed_status_keeps_the_offer_with_a_retry_notice(): void {
+		$this->login( 'charleston' );
+		$_GET = array( 'digest_status' => 'failed' );
+
+		$html = $this->render();
+
+		$this->assertStringContainsString( 'data-event-digest-mode="subscribe"', $html );
+		$this->assertStringContainsString( 'We could not turn that on. Nothing was changed.', $html );
+	}
+
 	public function test_member_in_another_city_sees_nothing(): void {
 		$this->login( 'columbia' );
 

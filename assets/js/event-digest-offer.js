@@ -36,7 +36,7 @@
 			} else {
 				window.localStorage.removeItem( key );
 			}
-		} catch ( e ) {
+		} catch {
 			// Storage blocked: the offer simply stays visible.
 		}
 		return null;

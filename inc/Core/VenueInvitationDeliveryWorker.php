@@ -109,7 +109,7 @@ class VenueInvitationDeliveryWorker {
 				),
 			)
 		);
-		$sent   = is_array( $result ) && ! empty( $result['success'] );
+		$sent   = ! empty( $result['success'] );
 		$saved  = $this->repository->finish_delivery( $delivery_id, $sent );
 		if ( is_wp_error( $saved ) ) {
 			return $saved;

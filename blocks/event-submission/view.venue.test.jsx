@@ -111,7 +111,7 @@ describe( 'venue typeahead', () => {
 
 		const option = ui.list.querySelector( 'li[data-venue-id="104506"]' );
 		option.dispatchEvent(
-			new MouseEvent( 'mousedown', { bubbles: true } )
+			new window.MouseEvent( 'mousedown', { bubbles: true } )
 		);
 
 		expect( ui.id.value ).toBe( '104506' );
@@ -125,13 +125,13 @@ describe( 'venue typeahead', () => {
 		await type( ui.input, 'Recov' );
 
 		ui.input.dispatchEvent(
-			new KeyboardEvent( 'keydown', { key: 'ArrowDown' } )
+			new window.KeyboardEvent( 'keydown', { key: 'ArrowDown' } )
 		);
 		ui.input.dispatchEvent(
-			new KeyboardEvent( 'keydown', { key: 'ArrowDown' } )
+			new window.KeyboardEvent( 'keydown', { key: 'ArrowDown' } )
 		);
 		ui.input.dispatchEvent(
-			new KeyboardEvent( 'keydown', { key: 'Enter' } )
+			new window.KeyboardEvent( 'keydown', { key: 'Enter' } )
 		);
 
 		expect( ui.id.value ).toBe( '104506' );
@@ -142,7 +142,9 @@ describe( 'venue typeahead', () => {
 		await type( ui.input, 'Recov' );
 		ui.list
 			.querySelector( 'li[data-venue-id="104506"]' )
-			.dispatchEvent( new MouseEvent( 'mousedown', { bubbles: true } ) );
+			.dispatchEvent(
+				new window.MouseEvent( 'mousedown', { bubbles: true } )
+			);
 		expect( ui.id.value ).toBe( '104506' );
 
 		await type( ui.input, 'Recovery Room Tavern Upstairs' );
@@ -170,7 +172,9 @@ describe( 'venue typeahead', () => {
 		await type( ui.input, 'Recov' );
 		ui.list
 			.querySelector( 'li[data-venue-id="104506"]' )
-			.dispatchEvent( new MouseEvent( 'mousedown', { bubbles: true } ) );
+			.dispatchEvent(
+				new window.MouseEvent( 'mousedown', { bubbles: true } )
+			);
 
 		ui.form.reset();
 

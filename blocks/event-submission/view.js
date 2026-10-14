@@ -466,10 +466,10 @@
 		const list = container.querySelector(
 			'.ec-event-submission__venue-suggestions'
 		);
-		const cityInput = container.querySelector( 'input[name="event_city"]' );
 		if ( ! searchUrl || ! input || ! idInput || ! list ) {
 			return;
 		}
+		const cityInput = container.querySelector( 'input[name="event_city"]' );
 
 		let venues = [];
 		let activeIndex = -1;

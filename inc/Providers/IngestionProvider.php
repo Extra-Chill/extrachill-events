@@ -143,7 +143,6 @@ final class IngestionProvider {
 		if ( file_exists( EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Templates/EventPosterTemplate.php' ) ) {
 			require_once EXTRACHILL_EVENTS_PLUGIN_DIR . 'inc/Templates/EventPosterTemplate.php';
 			add_filter( 'datamachine/image_generation/templates', array( self::class, 'register_poster_template' ) );
-			add_filter( 'datamachine/image_generation/platform_presets', array( \ExtraChillEvents\Templates\EventPosterTemplate::class, 'register_print_preset' ) );
 		}
 	}
 
@@ -154,6 +153,10 @@ final class IngestionProvider {
 	 * @return array
 	 */
 	public static function register_poster_template( array $templates ): array {
+		// event_poster composes Data Machine's core poster template.
+		if ( ! class_exists( \DataMachine\Abilities\Media\Templates\PosterTemplate::class ) ) {
+			return $templates;
+		}
 		$templates['event_poster'] = \ExtraChillEvents\Templates\EventPosterTemplate::class;
 		return $templates;
 	}

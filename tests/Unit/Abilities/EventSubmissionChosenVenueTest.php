@@ -237,6 +237,13 @@ namespace ExtraChillEvents\Tests\Unit\Abilities {
 			$this->assertSame( 'Recoery Room Tavern', $call['initial_data']['submission']['venue_name'] );
 		}
 
+		/** The form time is the show start, not doors (data-machine-events#922). */
+		public function test_ai_message_labels_form_time_as_show_start(): void {
+			$call = $this->submit_with_venue( $this->submission(), 0 );
+
+			$this->assertStringContainsString( 'Show time (start): 21:00', self::ai_message( $call ) );
+		}
+
 		public function test_flyer_handler_config_gets_the_canonical_venue_name(): void {
 			$submission = $this->invoke( 'applyChosenVenue', $this->submission(), self::VENUE_ID );
 			$workflow   = $this->invoke( 'buildWorkflow', $submission, array( 'stored_path' => '/dm-files/flyer.png' ) );

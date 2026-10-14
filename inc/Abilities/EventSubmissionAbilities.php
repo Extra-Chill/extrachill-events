@@ -61,7 +61,7 @@ class EventSubmissionAbilities {
 							),
 							'event_time'    => array(
 								'type'        => 'string',
-								'description' => 'Event start time (HH:MM). Optional.',
+								'description' => 'Show start time (HH:MM), when the music starts, not doors. Optional.',
 							),
 							'venue_name'    => array(
 								'type'        => 'string',
@@ -615,7 +615,7 @@ class EventSubmissionAbilities {
 			. "Date: {$submission['event_date']}\n";
 
 		if ( ! empty( $submission['event_time'] ) ) {
-			$user_message .= "Time: {$submission['event_time']}\n";
+			$user_message .= "Show time (start): {$submission['event_time']}\n";
 		}
 		if ( ! empty( $submission['venue_name'] ) ) {
 			$user_message .= "Venue: {$submission['venue_name']}\n";

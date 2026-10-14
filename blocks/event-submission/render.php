@@ -196,9 +196,10 @@ if ( $show_landing ) {
 
 				<div class="ec-event-submission__field">
 					<label for="<?php echo esc_attr( $form_id ); ?>-event-time">
-						<?php esc_html_e( 'Event Time', 'extrachill-events' ); ?>
+						<?php esc_html_e( 'Show Time', 'extrachill-events' ); ?>
 					</label>
-					<input type="time" name="event_time" id="<?php echo esc_attr( $form_id ); ?>-event-time" />
+					<input type="time" name="event_time" id="<?php echo esc_attr( $form_id ); ?>-event-time" aria-describedby="<?php echo esc_attr( $form_id ); ?>-event-time-hint" />
+					<p class="ec-event-submission__field-hint" id="<?php echo esc_attr( $form_id ); ?>-event-time-hint"><?php esc_html_e( 'When the music starts, not when doors open.', 'extrachill-events' ); ?></p>
 				</div>
 
 				<div class="ec-event-submission__field">

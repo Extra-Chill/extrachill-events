@@ -392,12 +392,18 @@ function extrachill_events_update_archive_scene( WP_Term $term, string $nonce ):
  * stored by Events. It is deliberately short-lived and scoped to one term and
  * one action.
  *
- * @param WP_Term $term   Location term.
- * @param string  $intent Either save_scene or subscribe_digest.
+ * The same envelope also serves single event pages (extrachill-events#962):
+ * pass the event permalink as `$return_url` and the continuation lands back
+ * on that event instead of the city archive. The signature binds term, intent
+ * and expiry only, so verification is identical on either surface.
+ *
+ * @param WP_Term $term       Location term.
+ * @param string  $intent     Either save_scene or subscribe_digest.
+ * @param string  $return_url Optional same-site page to return to. Defaults to the term archive.
  * @return string Login URL.
  */
-function extrachill_events_archive_intent_login_url( WP_Term $term, string $intent ): string {
-	$archive_url = get_term_link( $term );
+function extrachill_events_archive_intent_login_url( WP_Term $term, string $intent, string $return_url = '' ): string {
+	$archive_url = '' !== $return_url ? $return_url : get_term_link( $term );
 	if ( is_wp_error( $archive_url ) || ! in_array( $intent, array( 'save_scene', 'subscribe_digest' ), true ) ) {
 		return wp_login_url( home_url( '/' ) );
 	}
@@ -444,10 +450,11 @@ function extrachill_events_get_archive_auth_intent( WP_Term $term ): ?string {
  * Return the archive URL without continuation parameters.
  *
  * @param WP_Term $term Location term.
+ * @param string  $url  Optional page URL to clean instead of the term archive.
  * @return string Clean archive URL.
  */
-function extrachill_events_archive_intent_clean_url( WP_Term $term ): string {
-	$url = get_term_link( $term );
+function extrachill_events_archive_intent_clean_url( WP_Term $term, string $url = '' ): string {
+	$url = '' !== $url ? $url : get_term_link( $term );
 	return is_wp_error( $url ) ? home_url( '/' ) : remove_query_arg( array( 'ec_events_intent', 'ec_events_intent_expires', 'ec_events_intent_signature' ), $url );
 }
 
@@ -475,6 +482,9 @@ function extrachill_events_handle_archive_scene_update(): void {
 
 	$scene_nonce          = 'subscribe_digest' === $scene_action ? wp_create_nonce( 'extrachill_events_save_scene_' . $term->term_id ) : $nonce;
 	$saved                = 'save' === $scene_action || 'subscribe_digest' === $scene_action ? extrachill_events_update_archive_scene( $term, $scene_nonce ) : false;
+	if ( function_exists( 'extrachill_events_digest_subscription_context' ) ) {
+		extrachill_events_digest_subscription_context( array( 'surface' => 'location_archive' ) );
+	}
 	$subscription_ability = 'subscribe_digest' === $scene_action && $saved && function_exists( 'wp_get_ability' ) ? wp_get_ability( 'extrachill/entity-subscribe' ) : null;
 	$subscription_result  = $subscription_ability ? $subscription_ability->execute(
 		array(

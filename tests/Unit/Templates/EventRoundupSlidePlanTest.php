@@ -265,4 +265,14 @@ final class EventRoundupSlidePlanTest extends BookingTestCase {
 		$this->assertSame( '', $picks[0]['note'] );
 		$this->assertSame( '2026-10-16', $picks[0]['date_obj']->format( 'Y-m-d' ) );
 	}
+
+	public function test_content_bottom_reserves_brand_mark_space(): void {
+		$plain     = EventRoundupTemplate::content_bottom( 1350, '' );
+		$with_mark = EventRoundupTemplate::content_bottom( 1350, '', 72 );
+		$both      = EventRoundupTemplate::content_bottom( 1350, 'MORE SHOWS AT EVENTS.EXTRACHILL.COM', 72 );
+
+		$this->assertSame( 1350 - 60, $plain );
+		$this->assertSame( 1350 - 60 - 72 - 24, $with_mark );
+		$this->assertSame( $with_mark, $both, 'The taller of the CTA and the mark sets the limit.' );
+	}
 }

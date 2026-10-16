@@ -47,6 +47,12 @@
  *   - colors['event_roundup_cta']   — footer CTA (falls back to accent)
  *   - day_palette['sunday'..'saturday'] — hex per weekday (falls back to neutral palette)
  *
+ * Brand mark: every slide carries the brand so any single shared slide is
+ * attributable. Uses the standard `logo_path_inverse` token (light ink on
+ * the dark slide), falling back to `brand_text` when no readable logo is
+ * set. Small in the bottom-right corner of list and picks slides, larger
+ * on the cover, and centered above the CTA on the closing slide.
+ *
  * @package ExtraChillEvents\Templates
  * @since 4.5.0
  */
@@ -93,6 +99,25 @@ class EventRoundupTemplate implements TemplateInterface {
 	private const CLOSING_HEADLINE_SIZE  = 80;
 	private const CLOSING_URL_SIZE       = 40;
 	private const CLOSING_TEXT_SIZE      = 28;
+	private const MARK_HEIGHT            = 72;
+	private const COVER_MARK_HEIGHT      = 120;
+	private const CLOSING_MARK_HEIGHT    = 200;
+	private const MARK_CLEARANCE         = 24;
+	private const MARK_TEXT_SIZE         = 22;
+
+	/**
+	 * Inverse logo path for the current render, or '' when unavailable.
+	 *
+	 * @var string
+	 */
+	private $logo_path = '';
+
+	/**
+	 * Brand name drawn when no logo is available.
+	 *
+	 * @var string
+	 */
+	private $brand_text = '';
 
 	/**
 	 * Neutral fallback palette for days of the week.
@@ -186,6 +211,10 @@ class EventRoundupTemplate implements TemplateInterface {
 		}
 
 		$tokens = BrandTokens::get( $this->get_id(), $data );
+
+		$logo             = (string) ( $tokens['logo_path_inverse'] ?? '' );
+		$this->logo_path  = ( '' !== $logo && is_readable( $logo ) && false !== @getimagesize( $logo ) ) ? $logo : ''; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- unreadable images fall back to brand text.
+		$this->brand_text = trim( (string) ( $tokens['brand_text'] ?? '' ) );
 
 		// Build a per-render font lookup. GDRenderer is created fresh for
 		// every slide so register_font() needs to run inside render_slide.
@@ -484,6 +513,7 @@ class EventRoundupTemplate implements TemplateInterface {
 		$renderer->draw_text( $stats_line, self::COVER_STATS_SIZE, self::PADDING, $y + self::COVER_STATS_SIZE, $muted, 'body' );
 
 		$renderer->draw_text( 'SWIPE FOR THE FULL LINEUP →', self::CTA_SIZE + 4, self::PADDING, $height - self::PADDING, $cta, 'body' );
+		$this->draw_brand_mark( $renderer, self::COVER_MARK_HEIGHT, 'corner', 0, $text );
 
 		return $this->finish_canvas( $renderer, $slide_number, $format, $context );
 	}
@@ -535,6 +565,8 @@ class EventRoundupTemplate implements TemplateInterface {
 			$y += self::PICK_GAP;
 		}
 
+		$this->draw_brand_mark( $renderer, self::MARK_HEIGHT, 'corner', 0, $text );
+
 		return $this->finish_canvas( $renderer, $slide_number, $format, $context );
 	}
 
@@ -562,7 +594,10 @@ class EventRoundupTemplate implements TemplateInterface {
 			$url      = $m[2];
 		}
 
-		$y  = (int) ( $height * 0.36 );
+		$y = (int) ( $height * 0.36 );
+		if ( $this->has_brand_mark() ) {
+			$y = $this->draw_brand_mark( $renderer, self::CLOSING_MARK_HEIGHT, 'center', (int) ( $height * 0.3 ), $text ) + 60;
+		}
 		$y  = $renderer->draw_text_wrapped( $headline, self::CLOSING_HEADLINE_SIZE, self::PADDING, $y, $text, 'header', $max_w, 1.15, 'center' );
 		$y += 24;
 
@@ -635,7 +670,7 @@ class EventRoundupTemplate implements TemplateInterface {
 		$slides = self::plan_slides(
 			$day_groups,
 			self::PADDING,
-			self::content_bottom( $height, $cta_text ),
+			self::content_bottom( $height, $cta_text, $this->has_brand_mark() ? self::MARK_HEIGHT : 0 ),
 			$title_height,
 			self::day_header_height(),
 			$event_height
@@ -742,14 +777,63 @@ class EventRoundupTemplate implements TemplateInterface {
 	/**
 	 * Lowest Y content may reach before colliding with the footer CTA.
 	 */
-	public static function content_bottom( int $height, string $cta_text ): int {
+	public static function content_bottom( int $height, string $cta_text, int $mark_height = 0 ): int {
 		$bottom = $height - self::PADDING;
 		if ( '' !== $cta_text ) {
 			// render_cta() draws its rule CTA_SIZE + CTA_LINE_GAP above the
 			// bottom padding; keep clearance above that rule.
 			$bottom -= self::CTA_SIZE + self::CTA_LINE_GAP + self::CTA_CLEARANCE;
 		}
+		if ( $mark_height > 0 ) {
+			// The corner brand mark sits on the bottom padding line.
+			$bottom = min( $bottom, $height - self::PADDING - $mark_height - self::MARK_CLEARANCE );
+		}
 		return $bottom;
+	}
+
+	/**
+	 * Whether this render has a logo or brand text to draw.
+	 */
+	private function has_brand_mark(): bool {
+		return '' !== $this->logo_path || '' !== $this->brand_text;
+	}
+
+	/**
+	 * Draw the brand mark.
+	 *
+	 * @param GDRenderer $renderer Canvas.
+	 * @param int        $height   Logo height in px.
+	 * @param string     $place    'corner' (bottom-right on the padding line) or 'center'.
+	 * @param int        $top      Top Y for 'center' placement.
+	 * @param int        $color    Text color for the brand-text fallback.
+	 * @return int Y just below the mark (for 'center' layouts).
+	 */
+	private function draw_brand_mark( GDRenderer $renderer, int $height, string $place, int $top, int $color ): int {
+		$width  = $renderer->get_width();
+		$bottom = $renderer->get_height() - self::PADDING;
+
+		if ( '' !== $this->logo_path ) {
+			$dims   = getimagesize( $this->logo_path );
+			$mark_w = $dims ? (int) round( $dims[0] * $height / max( 1, $dims[1] ) ) : $height;
+			$x      = 'center' === $place ? (int) ( ( $width - $mark_w ) / 2 ) : $width - self::PADDING - $mark_w;
+			$y      = 'center' === $place ? $top : $bottom - $height;
+			$renderer->overlay_image( $this->logo_path, $x, $y, $mark_w, $height );
+			return $y + $height;
+		}
+
+		if ( '' === $this->brand_text ) {
+			return $top;
+		}
+
+		$size = 'center' === $place ? (int) ( self::MARK_TEXT_SIZE * 2 ) : self::MARK_TEXT_SIZE;
+		$text = strtoupper( $this->brand_text );
+		if ( 'center' === $place ) {
+			$renderer->draw_text_centered( $text, $size, $top + $size, $color, 'header' );
+			return $top + (int) ( $size * 1.4 );
+		}
+		$x = $width - self::PADDING - $renderer->measure_text_width( $text, $size, 'header' );
+		$renderer->draw_text( $text, $size, $x, $bottom, $color, 'header' );
+		return $top;
 	}
 
 	/**
@@ -849,6 +933,7 @@ class EventRoundupTemplate implements TemplateInterface {
 		}
 
 		$this->render_cta( $renderer, $cta_text, $cta_color );
+		$this->draw_brand_mark( $renderer, self::MARK_HEIGHT, 'corner', 0, $text_color );
 
 		$filename = sprintf( 'roundup-slide-%d.%s', $slide_number, 'jpeg' === $format ? 'jpg' : 'png' );
 

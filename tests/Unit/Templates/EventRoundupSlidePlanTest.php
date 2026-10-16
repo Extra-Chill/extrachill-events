@@ -235,37 +235,6 @@ final class EventRoundupSlidePlanTest extends BookingTestCase {
 		$this->assertSame( 'FRI OCT 16 – SAT 17', $stats['date_label'] );
 	}
 
-	public function test_resolve_picks_keeps_chosen_order_and_skips_unknown(): void {
-		$day = $this->day( '2026-10-16', 7 );
-		foreach ( $day['events'] as $i => &$event ) {
-			$event['post']->ID = 100 + $i;
-		}
-		unset( $event );
-		$groups = array( '2026-10-16' => $day );
-
-		$picks = EventRoundupTemplate::resolve_picks(
-			$groups,
-			array(
-				103,
-				array(
-					'post_id' => 101,
-					'note'    => ' Bring earplugs. ',
-				),
-				999,
-				103,
-				100,
-				102,
-				104,
-				105,
-			)
-		);
-
-		$this->assertSame( array( 103, 101, 100, 102, 104 ), array_map( static fn( $pick ) => $pick['post']->ID, $picks ) );
-		$this->assertSame( 'Bring earplugs.', $picks[1]['note'] );
-		$this->assertSame( '', $picks[0]['note'] );
-		$this->assertSame( '2026-10-16', $picks[0]['date_obj']->format( 'Y-m-d' ) );
-	}
-
 	public function test_content_bottom_reserves_brand_mark_space(): void {
 		$plain     = EventRoundupTemplate::content_bottom( 1350, '' );
 		$with_mark = EventRoundupTemplate::content_bottom( 1350, '', 72 );

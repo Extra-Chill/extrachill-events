@@ -331,17 +331,6 @@ class EventRoundupTemplate implements TemplateInterface {
 	}
 
 	/**
-	 * Format an H:i:s start time as "7:30 PM".
-	 */
-	private static function format_time( string $start_time ): string {
-		if ( '' === $start_time ) {
-			return '';
-		}
-		$time_obj = \DateTime::createFromFormat( 'H:i:s', $start_time );
-		return $time_obj ? $time_obj->format( 'g:i A' ) : '';
-	}
-
-	/**
 	 * Create a slide canvas with fonts and the background fill.
 	 */
 	private function start_canvas( string $preset, string $heading_path, string $body_path, string $bg_hex ): ?GDRenderer {

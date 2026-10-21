@@ -1111,17 +1111,17 @@ class ArtistUrlImportAbilities {
 
 		// 2. Create the flow with universal_web_scraper handler and the
 		// SelectionMode-driven taxonomy bindings on the shared pipeline.
+		// Only fields upsert_event declares: Data Machine rejects unknown
+		// handler_config keys, and the venue is resolved from each event.
 		$upsert_handler_config = array(
 			'post_status'                 => 'publish',
 			'include_images'              => false,
 			'post_author'                 => self::DEFAULT_POST_AUTHOR,
 			'taxonomy_artist_selection'   => (string) $artist_term_id,
-			'taxonomy_venue_selection'    => SelectionMode::AI_DECIDES,
 			'taxonomy_location_selection' => SelectionMode::AI_DECIDES,
 			'taxonomy_festival_selection' => SelectionMode::AI_DECIDES,
+			'taxonomy_genre_selection'    => SelectionMode::SKIP,
 			'taxonomy_promoter_selection' => SelectionMode::SKIP,
-			'taxonomy_category_selection' => SelectionMode::SKIP,
-			'taxonomy_post_tag_selection' => SelectionMode::SKIP,
 		);
 
 		$import_handler_config = array(

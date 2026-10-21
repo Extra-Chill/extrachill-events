@@ -100,7 +100,7 @@ function extrachill_events_home_search_resolve( string $query, array $cities, ar
 	);
 	usort(
 		$terms,
-		static fn( array $a, array $b ): int => array( $order[ $a['taxonomy'] ], -(int) ( $a['count'] ?? 0 ) ) <=> array( $order[ $b['taxonomy'] ], -(int) ( $b['count'] ?? 0 ) )
+		static fn( array $a, array $b ): int => array( $order[ $a['taxonomy'] ], -1 * (int) ( $a['count'] ?? 0 ) ) <=> array( $order[ $b['taxonomy'] ], -1 * (int) ( $b['count'] ?? 0 ) )
 	);
 
 	foreach ( $terms as $term ) {
@@ -197,12 +197,14 @@ function extrachill_events_home_search_redirect(): void {
 	}
 
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public read-only search.
-	$query = trim( sanitize_text_field( wp_unslash( $_GET[ EXTRACHILL_EVENTS_HOME_SEARCH_PARAM ] ) ) );
-	if ( ! class_exists( '\DataMachineEvents\Core\EventSearchTerms' ) ) {
-		$normalize = static fn( string $text ): string => (string) preg_replace( '/[^a-z0-9]+/', '', strtolower( $text ) );
-	} else {
-		$normalize = array( '\DataMachineEvents\Core\EventSearchTerms', 'needle' );
-	}
+	$query = trim( sanitize_text_field( (string) wp_unslash( $_GET[ EXTRACHILL_EVENTS_HOME_SEARCH_PARAM ] ) ) );
+	$normalize = static function ( string $text ): string {
+		if ( class_exists( '\DataMachineEvents\Core\EventSearchTerms' ) ) {
+			return \DataMachineEvents\Core\EventSearchTerms::needle( $text );
+		}
+
+		return (string) preg_replace( '/[^a-z0-9]+/', '', strtolower( $text ) );
+	};
 
 	$destination = extrachill_events_home_search_resolve(
 		$query,

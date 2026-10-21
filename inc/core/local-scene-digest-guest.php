@@ -291,7 +291,7 @@ function extrachill_events_send_guest_digest_confirm_email( int $user_id, string
 		)
 	);
 
-	$queued = is_array( $result ) && true === ( $result['success'] ?? false );
+	$queued = true === ( $result['success'] ?? false );
 	if ( ! $queued ) {
 		do_action(
 			'datamachine_log',
@@ -299,7 +299,7 @@ function extrachill_events_send_guest_digest_confirm_email( int $user_id, string
 			'Local Scene digest confirmation email was not queued',
 			array(
 				'user_id'    => $user_id,
-				'error_code' => (string) ( is_array( $result ) ? ( $result['error_code'] ?? '' ) : '' ),
+				'error_code' => (string) ( $result['error_code'] ?? '' ),
 			)
 		);
 	}
@@ -367,7 +367,7 @@ add_action( 'template_redirect', 'extrachill_events_handle_guest_digest_confirm'
  * @return string Escaped markup.
  */
 function extrachill_events_build_guest_digest_confirm_form( array $params ): string {
-	$html = '<form method="post" action="">';
+	$html  = '<form method="post" action="">';
 	$html .= '<input type="hidden" name="' . esc_attr( EXTRACHILL_EVENTS_GUEST_DIGEST_QUERY_VAR ) . '" value="1">';
 	foreach ( array( 'user', 'location', 'expires', 'signature' ) as $key ) {
 		$html .= '<input type="hidden" name="' . esc_attr( $key ) . '" value="' . esc_attr( (string) ( $params[ $key ] ?? '' ) ) . '">';
@@ -384,8 +384,8 @@ function extrachill_events_build_guest_digest_confirm_form( array $params ): str
  * visitors; this is the only listener. Signed-in states never call it.
  *
  * @hook extrachill_events_render_guest_digest_form
- * @param WP_Term $term      City.
- * @param string  $placement Analytics placement (event_digest_offer|archive_scene).
+ * @param mixed  $term      City term (anything else renders nothing).
+ * @param string $placement Analytics placement (event_digest_offer|archive_scene).
  */
 function extrachill_events_render_guest_digest_form( $term, string $placement = '' ): void {
 	if ( ! $term instanceof WP_Term || is_user_logged_in() ) {

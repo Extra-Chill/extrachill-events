@@ -132,7 +132,7 @@ function extrachill_events_record_digest_subscription( $user_id, $entity ): bool
 	if ( $context['event_id'] > 0 ) {
 		$event_data['event_id'] = $context['event_id'];
 	}
-	if ( '' !== ( $context['via'] ?? '' ) ) {
+	if ( '' !== $context['via'] ) {
 		// `guest`: confirmed from an email-only signup (#989).
 		$event_data['via'] = $context['via'];
 	}

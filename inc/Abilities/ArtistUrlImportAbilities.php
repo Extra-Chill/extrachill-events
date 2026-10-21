@@ -1161,6 +1161,9 @@ class ArtistUrlImportAbilities {
 		}
 
 		$flow_result = $flow_ability->execute( $flow_input );
+		if ( is_wp_error( $flow_result ) ) {
+			return new \WP_Error( 'flow_creation_failed', 'Failed to create flow: ' . $flow_result->get_error_message(), array( 'status' => 500 ) );
+		}
 
 		if ( empty( $flow_result['success'] ) || empty( $flow_result['flow_id'] ) ) {
 			$err = $flow_result['error'] ?? 'Unknown error';
@@ -1237,7 +1240,7 @@ class ArtistUrlImportAbilities {
 		$run_ability                 = wp_get_ability( 'datamachine/run-flow' );
 		if ( $run_ability ) {
 			$run_result = $run_ability->execute( array( 'flow_id' => $flow_id ) );
-			if ( isset( $run_result['events_imported'] ) && is_numeric( $run_result['events_imported'] ) ) {
+			if ( is_array( $run_result ) && isset( $run_result['events_imported'] ) && is_numeric( $run_result['events_imported'] ) ) {
 				$events_imported_immediately = (int) $run_result['events_imported'];
 			}
 		}

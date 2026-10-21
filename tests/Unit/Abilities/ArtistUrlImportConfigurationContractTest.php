@@ -181,4 +181,17 @@ final class ArtistUrlImportConfigurationContractTest extends BookingTestCase {
 		$this->assertStringNotContainsString( 'pipeline_config', $source );
 		$this->assertStringNotContainsString( 'flow_config', $source );
 	}
+
+	/**
+	 * WP_Ability::execute() returns WP_Error on failure. Reading it as an
+	 * array threw "Cannot use object of type WP_Error as array" and hid the
+	 * real create-flow error behind a generic Approve failure.
+	 */
+	public function test_approve_guards_ability_results_before_array_access(): void {
+		$source = file_get_contents( dirname( __DIR__, 3 ) . '/inc/Abilities/ArtistUrlImportAbilities.php' );
+
+		$this->assertIsString( $source );
+		$this->assertMatchesRegularExpression( '/\$flow_result = \$flow_ability->execute\( \$flow_input \);\s*if \( is_wp_error\( \$flow_result \) \)/', $source );
+		$this->assertStringContainsString( "is_array( \$run_result ) && isset( \$run_result['events_imported'] )", $source );
+	}
 }

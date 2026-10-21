@@ -424,7 +424,7 @@ function extrachill_events_enqueue_guest_digest_assets(): void {
 		'extrachill-events-guest-digest',
 		'ecGuestDigest',
 		array(
-			'path' => '/extrachill/v1/local-scene-digest/guest-subscribe',
+			'path' => '/extrachill/v1/events/local-scene-digest/guest-subscribe',
 			'text' => array(
 				'sending' => __( 'Sending...', 'extrachill-events' ),
 				'success' => __( 'Check your inbox and tap Confirm. That\'s it.', 'extrachill-events' ),

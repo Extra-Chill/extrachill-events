@@ -197,7 +197,7 @@ function extrachill_events_home_search_redirect(): void {
 	}
 
 	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Public read-only search.
-	$query = trim( sanitize_text_field( (string) wp_unslash( $_GET[ EXTRACHILL_EVENTS_HOME_SEARCH_PARAM ] ) ) );
+	$query     = trim( sanitize_text_field( (string) wp_unslash( $_GET[ EXTRACHILL_EVENTS_HOME_SEARCH_PARAM ] ) ) );
 	$normalize = static function ( string $text ): string {
 		if ( class_exists( '\DataMachineEvents\Core\EventSearchTerms' ) ) {
 			return \DataMachineEvents\Core\EventSearchTerms::needle( $text );

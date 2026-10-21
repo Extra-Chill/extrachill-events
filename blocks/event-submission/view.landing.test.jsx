@@ -39,17 +39,17 @@ describe( 'submit landing path cards', () => {
 
 	it( 'focuses the URL field when the calendar card is chosen', () => {
 		initialize();
-		document.querySelector( 'a[href="#ec-event-source-import"]' ).click();
-		expect( document.activeElement ).toBe(
-			document.querySelector( '.ec-event-submission__url-import-input' )
+		const input = document.querySelector(
+			'.ec-event-submission__url-import-input'
 		);
+		document.querySelector( 'a[href="#ec-event-source-import"]' ).click();
+		expect( input.ownerDocument.activeElement ).toBe( input );
 	} );
 
 	it( 'focuses the first visible manual field when the one-show card is chosen', () => {
 		initialize();
+		const input = document.querySelector( 'input[name="contact_name"]' );
 		document.querySelector( 'a[href="#ec-event-form-1"]' ).click();
-		expect( document.activeElement ).toBe(
-			document.querySelector( 'input[name="contact_name"]' )
-		);
+		expect( input.ownerDocument.activeElement ).toBe( input );
 	} );
 } );

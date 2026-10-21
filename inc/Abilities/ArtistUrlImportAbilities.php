@@ -1125,7 +1125,7 @@ class ArtistUrlImportAbilities {
 		);
 
 		$import_handler_config = array(
-			'source_url'       => (string) ( $submission['canonical_url'] ?? $submission['url'] ),
+			'source_url'       => (string) $submission['canonical_url'],
 			'search'           => '',
 			'exclude_keywords' => '',
 		);

@@ -25,16 +25,6 @@ class VenueAddAbilities {
 	private const DEFAULT_INTERVAL = 'daily';
 
 	/**
-	 * Default AI model.
-	 */
-	private const DEFAULT_AI_MODEL = 'gpt-5-mini';
-
-	/**
-	 * Default AI provider.
-	 */
-	private const DEFAULT_AI_PROVIDER = 'openai';
-
-	/**
 	 * Default post author.
 	 */
 	private const DEFAULT_POST_AUTHOR = 32;
@@ -131,9 +121,9 @@ class VenueAddAbilities {
 	 * Execute add-venue.
 	 *
 	 * @param array $input Venue parameters.
-	 * @return array Result.
+	 * @return array|\WP_Error Result.
 	 */
-	public function executeAddVenue( array $input ): array|\WP_Error {
+	public function executeAddVenue( array $input ) {
 		$pipeline_id   = (int) ( $input['pipeline_id'] ?? 0 );
 		$name          = sanitize_text_field( $input['name'] ?? '' );
 		$url           = esc_url_raw( $input['url'] ?? '' );
@@ -474,7 +464,7 @@ class VenueAddAbilities {
 			return null;
 		}
 
-		return $terms[0] instanceof \WP_Term ? $terms[0] : null;
+		return $terms[0];
 	}
 
 	/**

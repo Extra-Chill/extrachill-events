@@ -269,7 +269,7 @@ class ArtistUrlSubmissionsAdmin {
 
 			<label style="display: block; margin: 2px 0;">
 				<?php esc_html_e( 'Entity term ID:', 'extrachill-events' ); ?>
-				<input type="number" name="entity_term_id" min="0" value="<?php echo esc_attr( $entity_term_id ? $entity_term_id : '' ); ?>" style="width: 100px;" />
+				<input type="number" name="entity_term_id" min="0" value="<?php echo esc_attr( $entity_term_id ? (string) $entity_term_id : '' ); ?>" style="width: 100px;" />
 			</label>
 			<label style="display: block; margin: 2px 0;">
 				<?php esc_html_e( 'Entity name:', 'extrachill-events' ); ?>

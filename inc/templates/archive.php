@@ -19,6 +19,7 @@ extrachill_breadcrumbs();
 	<div class="page-content">
 	<?php
 	if ( is_tax( 'venue' ) ) :
+		/** @var \WP_Term $queried_term Venue archives always query a term. */
 		$queried_term      = get_queried_object();
 		$venue_data        = function_exists( 'data_machine_events_get_venue_data' ) ? data_machine_events_get_venue_data( (int) $queried_term->term_id ) : null;
 		$formatted_address = function_exists( 'data_machine_events_get_venue_address' ) ? data_machine_events_get_venue_address( (int) $queried_term->term_id, $venue_data ) : '';
@@ -57,7 +58,7 @@ extrachill_breadcrumbs();
 					
 					<?php if ( ! empty( $venue_data['website'] ) ) : ?>
 						<a class="taxonomy-website" href="<?php echo esc_url( $venue_data['website'] ); ?>" target="_blank" rel="noopener">
-							<?php echo esc_html( wp_parse_url( $venue_data['website'], PHP_URL_HOST ) ); ?>
+							<?php echo esc_html( (string) wp_parse_url( $venue_data['website'], PHP_URL_HOST ) ); ?>
 						</a>
 					<?php endif; ?>
 				</div>
@@ -65,6 +66,7 @@ extrachill_breadcrumbs();
 		</header>
 		<?php
 	elseif ( is_tax( 'promoter' ) ) :
+		/** @var \WP_Term $queried_term */
 		$queried_term  = get_queried_object();
 		$promoter_data = function_exists( 'data_machine_events_get_promoter_data' ) ? data_machine_events_get_promoter_data( (int) $queried_term->term_id ) : null;
 		?>
@@ -78,13 +80,14 @@ extrachill_breadcrumbs();
 			<?php if ( ! empty( $promoter_data['url'] ) ) : ?>
 				<div class="taxonomy-meta">
 					<a class="taxonomy-website" href="<?php echo esc_url( $promoter_data['url'] ); ?>" target="_blank" rel="noopener">
-						<?php echo esc_html( wp_parse_url( $promoter_data['url'], PHP_URL_HOST ) ); ?>
+						<?php echo esc_html( (string) wp_parse_url( $promoter_data['url'], PHP_URL_HOST ) ); ?>
 					</a>
 				</div>
 			<?php endif; ?>
 		</header>
 		<?php
 	elseif ( is_tax( 'location' ) ) :
+		/** @var \WP_Term $queried_term */
 		$queried_term = get_queried_object();
 		?>
 		<header class="taxonomy-archive-header location-archive-header">
@@ -96,6 +99,7 @@ extrachill_breadcrumbs();
 		</header>
 		<?php
 	elseif ( is_tax( 'artist' ) ) :
+		/** @var \WP_Term $queried_term */
 		$queried_term = get_queried_object();
 		?>
 		<header class="taxonomy-archive-header artist-archive-header">
@@ -156,6 +160,7 @@ extrachill_breadcrumbs();
 	<?php if ( is_tax( 'venue' ) ) : ?>
 		<div class="page-content">
 			<?php
+			/** @var \WP_Term $booking_venue */
 			$booking_venue = get_queried_object();
 			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- do_blocks() renders a hardcoded block with an integer term identifier.
 			echo do_blocks( '<!-- wp:extrachill/venue-booking-inquiry {"venueId":' . absint( $booking_venue->term_id ) . '} /-->' );

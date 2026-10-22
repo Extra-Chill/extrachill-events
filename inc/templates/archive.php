@@ -32,7 +32,11 @@ extrachill_breadcrumbs();
 					$booking_url = \ExtraChillEvents\Core\VenueBookingEmbed::booking_url( $queried_term );
 					if ( $booking_url ) :
 						?>
-						<p class="venue-booking-cta"><a class="button-1 button-medium" href="<?php echo esc_url( $booking_url ); ?>"><?php esc_html_e( 'Submit a booking inquiry', 'extrachill-events' ); ?></a></p>
+						<p class="venue-booking-cta"><a class="button-1 button-medium" href="<?php echo esc_url( $booking_url ); ?>"><?php esc_html_e( 'Submit a booking inquiry', 'extrachill-events' ); ?></a>
+						<?php if ( function_exists( 'extrachill_events_docs_url' ) ) : ?>
+							<a href="<?php echo esc_url( extrachill_events_docs_url( 'venue-booking-inquiries' ) ); ?>"><?php esc_html_e( 'How booking inquiries work', 'extrachill-events' ); ?></a>
+						<?php endif; ?>
+						</p>
 						<?php
 					endif;
 				endif;

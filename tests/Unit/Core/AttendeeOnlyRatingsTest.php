@@ -62,6 +62,20 @@ class AttendeeOnlyRatingsTest extends TestCase {
 		$this->assertStringContainsString( 'I Was There', ec_events_rating_gate_message( 'default' ) );
 	}
 
+	public function test_attendee_reviews_skip_the_moderation_queue(): void {
+		$review = array(
+			'comment_type'    => 'event_review',
+			'user_id'         => 5,
+			'comment_post_ID' => 100,
+		);
+
+		$this->assertSame( 1, ec_events_approve_attendee_reviews( 0, $review ) );
+		$this->assertSame( 1, ec_events_approve_attendee_reviews( '0', $review ) );
+		$this->assertSame( 'spam', ec_events_approve_attendee_reviews( 'spam', $review ) );
+		$this->assertSame( 0, ec_events_approve_attendee_reviews( 0, array_merge( $review, array( 'user_id' => 6 ) ) ) );
+		$this->assertSame( 0, ec_events_approve_attendee_reviews( 0, array_merge( $review, array( 'comment_type' => 'comment' ) ) ) );
+	}
+
 	public function test_hooks_are_registered(): void {
 		$registered = static function ( string $hook, string $callback ): bool {
 			foreach ( $GLOBALS['ec_test_filters'][ $hook ] ?? array() as $callbacks ) {
@@ -76,5 +90,6 @@ class AttendeeOnlyRatingsTest extends TestCase {
 
 		$this->assertTrue( $registered( 'data_machine_events_can_rate_event', 'ec_events_require_attendance_to_rate' ) );
 		$this->assertTrue( $registered( 'data_machine_events_rating_gate_message', 'ec_events_rating_gate_message' ) );
+		$this->assertTrue( $registered( 'pre_comment_approved', 'ec_events_approve_attendee_reviews' ) );
 	}
 }

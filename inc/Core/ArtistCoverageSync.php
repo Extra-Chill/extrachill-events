@@ -130,7 +130,7 @@ class ArtistCoverageSync {
 	/**
 	 * Stored lookup results keyed by main-site artist term ID.
 	 *
-	 * @return array<int,array{name: string, id: string, attraction_name: string, upcoming: int, checked: int}>
+	 * @return array<int,array<string,mixed>> Untrusted stored rows: name, id, attraction_name, upcoming, checked.
 	 */
 	public static function matches(): array {
 		$stored = get_option( self::MATCHES_OPTION, array() );

@@ -3,10 +3,20 @@
  */
 /* global afterAll, beforeAll, beforeEach, describe, expect, it, jest */
 
+/**
+ * WordPress dependencies
+ */
 import apiFetch from '@wordpress/api-fetch';
 import { createRoot } from '@wordpress/element';
+
+/**
+ * External dependencies
+ */
 import { act } from 'react';
 
+/**
+ * Internal dependencies
+ */
 import useMyRatings from './useMyRatings';
 
 jest.mock( '@wordpress/api-fetch', () => ( {

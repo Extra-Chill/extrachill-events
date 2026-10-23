@@ -130,8 +130,8 @@ function extrachill_events_build_venue_description( string $venue_name, string $
 /**
  * Upcoming show count and the next show for a venue.
  *
- * Fetches IDs only and counts them: the query ability's `total` is the page
- * size, not the match count.
+ * The count comes from venue-map.php's canonical count helper; the next show
+ * is the first upcoming event ID.
  *
  * @param int $term_id Venue term ID.
  * @return array{total:int,next_id:int}
@@ -142,7 +142,12 @@ function extrachill_events_get_venue_upcoming( int $term_id ): array {
 		'next_id' => 0,
 	);
 
-	if ( ! function_exists( 'data_machine_events_query_events' ) ) {
+	if ( ! function_exists( 'data_machine_events_query_events' ) || ! function_exists( 'extrachill_events_get_upcoming_venue_event_count' ) ) {
+		return $empty;
+	}
+
+	$total = extrachill_events_get_upcoming_venue_event_count( $term_id );
+	if ( $total < 1 ) {
 		return $empty;
 	}
 
@@ -150,21 +155,16 @@ function extrachill_events_get_venue_upcoming( int $term_id ): array {
 		array(
 			'scope'       => 'upcoming',
 			'tax_filters' => array( 'venue' => array( $term_id ) ),
-			'per_page'    => -1,
+			'per_page'    => 1,
 			'fields'      => 'ids',
 			'order'       => 'ASC',
 		)
 	);
 
-	$ids = array_values( (array) ( $result['posts'] ?? array() ) );
-	if ( empty( $ids ) ) {
-		return $empty;
-	}
-
-	$first = $ids[0];
+	$first = ( (array) ( $result['posts'] ?? array() ) )[0] ?? 0;
 
 	return array(
-		'total'   => count( $ids ),
+		'total'   => $total,
 		'next_id' => $first instanceof WP_Post ? $first->ID : (int) $first,
 	);
 }

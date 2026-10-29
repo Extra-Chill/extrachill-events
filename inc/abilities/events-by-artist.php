@@ -193,7 +193,7 @@ function extrachill_events_resolve_artist_term( int $artist_term_id ) {
  * @return int|WP_Error Events term ID or a closed failure.
  */
 function extrachill_events_maybe_map_artist_term( $canonical, int $events_blog_id ) {
-	$missing = new WP_Error( 'artist_mapping_missing', __( 'No Events artist mapping exists.', 'extrachill-events' ), array( 'status' => 404 ) );
+	$missing      = new WP_Error( 'artist_mapping_missing', __( 'No Events artist mapping exists.', 'extrachill-events' ), array( 'status' => 404 ) );
 	$canonical_id = (int) $canonical->term_id;
 	if ( absint( get_term_meta( $canonical_id, '_artist_profile_id', true ) ) < 1 ) {
 		return $missing;
@@ -221,7 +221,7 @@ function extrachill_events_maybe_map_artist_term( $canonical, int $events_blog_i
 	}
 
 	$local_id = (int) $local_matches[0]->term_id;
-	$lock = \ExtraChillEvents\Core\ArtistMappingLock::acquire( $local_id );
+	$lock     = \ExtraChillEvents\Core\ArtistMappingLock::acquire( $local_id );
 	if ( is_wp_error( $lock ) ) {
 		return $lock;
 	}
@@ -239,7 +239,10 @@ function extrachill_events_maybe_map_artist_term( $canonical, int $events_blog_i
 			if ( is_wp_error( $matches ) ) {
 				return $matches;
 			}
-			if ( count( $matches ) !== 1 || (int) $matches[0]->term_id !== $canonical_id || absint( get_term_meta( $canonical_id, '_artist_profile_id', true ) ) < 1 ) {
+			// Re-read the binding after the cache flush: it may have been removed while we waited.
+			$bound_profile = absint( get_term_meta( $canonical_id, '_artist_profile_id', true ) );
+			// @phpstan-ignore smaller.alwaysFalse (PHPStan narrows the pre-lock read; this is a deliberate post-lock re-check.)
+			if ( count( $matches ) !== 1 || (int) $matches[0]->term_id !== $canonical_id || $bound_profile < 1 ) {
 				return $missing;
 			}
 			switch_to_blog( $events_blog_id );
@@ -295,10 +298,16 @@ function extrachill_events_read_artist_slug_matches( string $slug ) {
 			'cache_results' => false,
 		)
 	);
-	if ( '' !== (string) $wpdb->last_error || is_wp_error( $terms ) ) {
+	if ( '' !== (string) $wpdb->last_error || ! is_array( $terms ) ) {
 		return new WP_Error( 'artist_term_query_failed', __( 'Artist taxonomy data could not be read.', 'extrachill-events' ), array( 'status' => 503 ) );
 	}
-	return array_values( array_filter( (array) $terms, static fn( $term ) => (string) $term->slug === $slug ) );
+	$matches = array();
+	foreach ( $terms as $term ) {
+		if ( $term instanceof WP_Term && $slug === (string) $term->slug ) {
+			$matches[] = $term;
+		}
+	}
+	return $matches;
 }
 
 /**

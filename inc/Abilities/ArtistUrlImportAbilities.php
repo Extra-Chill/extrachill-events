@@ -593,7 +593,7 @@ class ArtistUrlImportAbilities {
 			if ( is_string( $venue ) && '' !== trim( $venue ) ) {
 				$venues[ strtolower( trim( $venue ) ) ] = trim( $venue );
 			}
-			if ( is_string( $performer ) && '' !== trim( $performer ) ) {
+			if ( '' !== $performer ) {
 				$performers[ $this->normalizeArtistName( $performer ) ] = trim( $performer );
 			}
 		}

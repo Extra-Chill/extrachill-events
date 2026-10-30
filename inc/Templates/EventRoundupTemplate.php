@@ -237,8 +237,8 @@ class EventRoundupTemplate implements TemplateInterface {
 		imagealphablending( $canvas, true );
 		for ( $y = 0; $y < $h; ++$y ) {
 			$brightness = 'day' === $this->slide_kind ? 0.30 - 0.18 * $y / max( 1, $h - 1 ) : 0.45;
-			$alpha = max( 0, min( 127, (int) round( 127 * $brightness ) ) );
-			$shade = imagecolorallocatealpha( $canvas, 0, 0, 0, $alpha );
+			$alpha      = max( 0, min( 127, (int) round( 127 * $brightness ) ) );
+			$shade      = imagecolorallocatealpha( $canvas, 0, 0, 0, $alpha );
 			if ( false !== $shade ) {
 				imageline( $canvas, 0, $y, $w - 1, $y, $shade );
 			}

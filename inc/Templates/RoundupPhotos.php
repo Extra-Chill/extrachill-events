@@ -4,7 +4,7 @@ namespace ExtraChillEvents\Templates;
 
 class RoundupPhotos {
 	public static function credit( string $content, array $meta, string $author ): array {
-		$text   = html_entity_decode( strip_tags( preg_replace( '/<\/(?:p|div)>|<br\s*\/?\s*>/i', "\n", $content ) ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		$text   = html_entity_decode( wp_strip_all_tags( (string) preg_replace( '/<\/(?:p|div)>|<br\s*\/?\s*>/i', "\n", $content ) ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 		$name   = '';
 		$handle = '';
 		if ( preg_match( '/photos?\s+by\s+([^\n(@]+?)(?:\s*\(@([\w.]+)\)|\s+@([\w.]+)|[\n]|$)/iu', $text, $m ) ) {
@@ -12,10 +12,10 @@ class RoundupPhotos {
 			$handle = $m[2] ?? ( $m[3] ?? '' );
 		}
 		if ( '' === $name ) {
-			$name = trim( (string) ( ( $meta['copyright'] ?? '' ) ?: ( $meta['credit'] ?? '' ) ) );
+			$name = trim( (string) ( ! empty( $meta['copyright'] ) ? $meta['copyright'] : ( $meta['credit'] ?? '' ) ) );
 		}
 		return array(
-			'photographer_name'      => $name ?: $author,
+			'photographer_name'      => '' !== $name ? $name : $author,
 			'photographer_instagram' => $handle,
 		);
 	}
@@ -71,7 +71,7 @@ class RoundupPhotos {
 						continue;
 					}
 					$meta   = (array) wp_get_attachment_metadata( $id );
-					$credit = self::credit( $post->post_content, (array) ( $meta['image_meta'] ?? array() ), (string) get_the_author_meta( 'display_name', $post->post_author ) );
+					$credit = self::credit( $post->post_content, (array) ( $meta['image_meta'] ?? array() ), (string) get_the_author_meta( 'display_name', (int) $post->post_author ) );
 					$path   = get_attached_file( $id );
 					if ( '' === $credit['photographer_name'] || ! $path || ! is_readable( $path ) ) {
 						continue;

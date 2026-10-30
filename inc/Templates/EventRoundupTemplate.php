@@ -213,7 +213,11 @@ class EventRoundupTemplate implements TemplateInterface {
 		if ( ! $photo ) {
 			return;
 		}
-		$source = @imagecreatefromstring( file_get_contents( $photo['path'] ) );
+		$data = is_readable( $photo['path'] ) ? file_get_contents( $photo['path'] ) : false; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- local attachment file.
+		if ( false === $data || '' === $data ) {
+			return;
+		}
+		$source = imagecreatefromstring( $data );
 		if ( ! $source ) {
 			return;
 		}
@@ -233,7 +237,11 @@ class EventRoundupTemplate implements TemplateInterface {
 		imagealphablending( $canvas, true );
 		for ( $y = 0; $y < $h; ++$y ) {
 			$brightness = 'day' === $this->slide_kind ? 0.30 - 0.18 * $y / max( 1, $h - 1 ) : 0.45;
-			imageline( $canvas, 0, $y, $w - 1, $y, imagecolorallocatealpha( $canvas, 0, 0, 0, (int) round( 127 * $brightness ) ) );
+			$alpha = max( 0, min( 127, (int) round( 127 * $brightness ) ) );
+			$shade = imagecolorallocatealpha( $canvas, 0, 0, 0, $alpha );
+			if ( false !== $shade ) {
+				imageline( $canvas, 0, $y, $w - 1, $y, $shade );
+			}
 		}
 		$this->used_photos[] = $photo['attachment_id'];
 		unset( $photo['path'], $photo['score'] );
@@ -645,9 +653,7 @@ class EventRoundupTemplate implements TemplateInterface {
 		$y  = $renderer->draw_text_wrapped( $headline, self::CLOSING_HEADLINE_SIZE, self::PADDING, $y, $text, 'header', $max_w, 1.15, 'center' );
 		$y += 24;
 
-		if ( '' !== $url ) {
-			$y = $renderer->draw_text_wrapped( $url, self::CLOSING_URL_SIZE, self::PADDING, $y, $cta, 'header', $max_w, 1.3, 'center' );
-		}
+		$y = $renderer->draw_text_wrapped( $url, self::CLOSING_URL_SIZE, self::PADDING, $y, $cta, 'header', $max_w, 1.3, 'center' );
 
 		if ( '' !== $closing_text ) {
 			$renderer->draw_text_wrapped( $closing_text, self::CLOSING_TEXT_SIZE, self::PADDING, $y + 40, $muted, 'body', $max_w, 1.4, 'center' );

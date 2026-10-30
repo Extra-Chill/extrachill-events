@@ -22,7 +22,7 @@ class EventRoundupCommand {
 				$input[ str_replace( '-', '_', $key ) ] = $assoc[ $key ];
 			}
 		}
-		$input['cover'] = isset( $assoc['cover'] );
+		$input['cover']   = isset( $assoc['cover'] );
 		$input['closing'] = isset( $assoc['closing'] );
 		if ( isset( $assoc['event-type'] ) ) {
 			$input['tax_filters']['event_type'] = explode( ',', $assoc['event-type'] );

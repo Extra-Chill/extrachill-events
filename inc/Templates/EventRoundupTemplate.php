@@ -84,10 +84,10 @@ class EventRoundupTemplate implements TemplateInterface {
 
 	/** Metadata captured by the actual drawing pass, consumed by the build ability. */
 	public static array $last_slides = array();
-	private array $photo_options = array();
-	private array $used_photos = array();
-	private array $slide_meta = array();
-	private string $slide_kind = 'day';
+	private array $photo_options     = array();
+	private array $used_photos       = array();
+	private array $slide_meta        = array();
+	private string $slide_kind       = 'day';
 
 	private const PADDING                = 60;
 	private const TITLE_SIZE             = 36;
@@ -182,7 +182,11 @@ class EventRoundupTemplate implements TemplateInterface {
 
 	private function begin_slide( string $kind ): void {
 		$this->slide_kind = $kind;
-		$this->slide_meta = array( 'kind' => $kind, 'events' => array(), 'user_tags' => array() );
+		$this->slide_meta = array(
+			'kind'      => $kind,
+			'events'    => array(),
+			'user_tags' => array(),
+		);
 	}
 
 	private function record_slide( $path ): void {
@@ -200,7 +204,7 @@ class EventRoundupTemplate implements TemplateInterface {
 				}
 			}
 			$this->slide_meta['image_path'] = $path;
-			self::$last_slides[] = $this->slide_meta;
+			self::$last_slides[]            = $this->slide_meta;
 		}
 	}
 
@@ -213,11 +217,11 @@ class EventRoundupTemplate implements TemplateInterface {
 		if ( ! $source ) {
 			return;
 		}
-		$w = $renderer->get_width();
-		$h = $renderer->get_height();
-		$scale = max( $w / imagesx( $source ), $h / imagesy( $source ) );
-		$sw = (int) round( $w / $scale );
-		$sh = (int) round( $h / $scale );
+		$w      = $renderer->get_width();
+		$h      = $renderer->get_height();
+		$scale  = max( $w / imagesx( $source ), $h / imagesy( $source ) );
+		$sw     = (int) round( $w / $scale );
+		$sh     = (int) round( $h / $scale );
 		$canvas = $renderer->get_image();
 		imagecopyresampled( $canvas, $source, 0, 0, (int) ( ( imagesx( $source ) - $sw ) / 2 ), (int) ( ( imagesy( $source ) - $sh ) / 2 ), $w, $h, $sw, $sh );
 		imagedestroy( $source );
@@ -252,15 +256,20 @@ class EventRoundupTemplate implements TemplateInterface {
 	}
 
 	private function map_event( GDRenderer $renderer, array $item, int $left, int $top ): void {
-		$id = (int) ( $item['post']->ID ?? 0 );
-		$x = min( 1.0, max( 0.0, $left / $renderer->get_width() ) );
-		$y = min( 1.0, max( 0.0, $top / $renderer->get_height() ) );
-		$venues = wp_get_post_terms( $id, 'venue', array( 'fields' => 'ids' ) );
-		$artists = wp_get_post_terms( $id, 'artist', array( 'fields' => 'ids' ) );
-		$venues = is_wp_error( $venues ) ? array() : $venues;
-		$artists = is_wp_error( $artists ) ? array() : $artists;
-		$this->slide_meta['events'][] = array( 'event_id' => $id, 'x' => $x, 'y' => $y, 'venue_term_id' => (int) ( $venues[0] ?? 0 ), 'artist_term_ids' => $artists );
-
+		$id                           = (int) ( $item['post']->ID ?? 0 );
+		$x                            = min( 1.0, max( 0.0, $left / $renderer->get_width() ) );
+		$y                            = min( 1.0, max( 0.0, $top / $renderer->get_height() ) );
+		$venues                       = wp_get_post_terms( $id, 'venue', array( 'fields' => 'ids' ) );
+		$artists                      = wp_get_post_terms( $id, 'artist', array( 'fields' => 'ids' ) );
+		$venues                       = is_wp_error( $venues ) ? array() : $venues;
+		$artists                      = is_wp_error( $artists ) ? array() : $artists;
+		$this->slide_meta['events'][] = array(
+			'event_id'        => $id,
+			'x'               => $x,
+			'y'               => $y,
+			'venue_term_id'   => (int) ( $venues[0] ?? 0 ),
+			'artist_term_ids' => $artists,
+		);
 	}
 
 	public function get_id(): string {
@@ -325,12 +334,12 @@ class EventRoundupTemplate implements TemplateInterface {
 	}
 
 	public function render( array $data, GDRenderer $renderer, array $options = array() ): array {
-		self::$last_slides = array();
+		self::$last_slides   = array();
 		$this->photo_options = $data;
-		$this->used_photos = array();
-		$preset  = $options['preset'] ?? $this->get_default_preset();
-		$format  = $options['format'] ?? 'png';
-		$context = $options['context'] ?? array();
+		$this->used_photos   = array();
+		$preset              = $options['preset'] ?? $this->get_default_preset();
+		$format              = $options['format'] ?? 'png';
+		$context             = $options['context'] ?? array();
 
 		$day_groups = (array) ( $data['day_groups'] ?? array() );
 		$title      = (string) ( $data['title'] ?? '' );
@@ -628,8 +637,8 @@ class EventRoundupTemplate implements TemplateInterface {
 		}
 
 		$headline = 'Find your next night out →';
-		$url = 'extrachill.com/events';
-		$y = (int) ( $height * 0.36 );
+		$url      = 'extrachill.com/events';
+		$y        = (int) ( $height * 0.36 );
 		if ( $this->has_brand_mark() ) {
 			$y = $this->draw_brand_mark( $renderer, self::CLOSING_MARK_HEIGHT, 'center', (int) ( $height * 0.3 ), $text ) + 60;
 		}
@@ -1299,7 +1308,7 @@ class EventRoundupTemplate implements TemplateInterface {
 			$title      = self::decode_text( $post ? (string) $post->post_title : 'Untitled Event' );
 			$time_label = self::format_times( $event_item );
 			$this->map_event( $renderer, $event_item, $title_x, $y );
-			$baseline   = $y + self::CAL_TITLE_SIZE;
+			$baseline = $y + self::CAL_TITLE_SIZE;
 
 			if ( 0 === $i && '' !== $label ) {
 				$renderer->draw_text( $label, self::CAL_DATE_SIZE, self::PADDING, $baseline, $day_color, 'header' );
